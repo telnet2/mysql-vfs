@@ -1,0 +1,23 @@
+# syntax=docker/dockerfile:1.6
+
+ARG GO_VERSION=1.25.1
+FROM golang:${GO_VERSION} AS builder
+
+WORKDIR /workspace
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+ARG SERVICE
+RUN test -n "${SERVICE}"
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/server ./services/${SERVICE}
+
+FROM gcr.io/distroless/base-debian12
+
+COPY --from=builder /out/server /server
+
+EXPOSE 8080
+
+ENTRYPOINT ["/server"]
