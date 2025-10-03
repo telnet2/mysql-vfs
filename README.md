@@ -4,7 +4,7 @@ A distributed virtual file system (VFS) backed by MySQL with strong consistency 
 
 ## Project Status
 
-**Current Phase**: Phase 1 Complete ✓
+**Current Phase**: Phase 2 Complete ✓
 
 See [docs/planning.md](docs/planning.md) for the complete architectural specification.
 
