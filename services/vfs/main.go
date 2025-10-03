@@ -191,7 +191,13 @@ func (s *VFSServer) createDirectory(ctx context.Context, c *app.RequestContext) 
 		return
 	}
 
-	dir, err := s.dirService.CreateDirectory(req.ParentPath, req.Name, req.OPAPolicyID)
+	// Get request ID and add to context
+	requestID := idempotency.GetRequestID(c)
+	if requestID != "" {
+		ctx = context.WithValue(ctx, "requestID", requestID)
+	}
+
+	dir, err := s.dirService.CreateDirectory(ctx, req.ParentPath, req.Name, req.OPAPolicyID)
 	if err != nil {
 		c.JSON(consts.StatusBadRequest, map[string]string{
 			"error": err.Error(),
@@ -209,7 +215,6 @@ func (s *VFSServer) createDirectory(ctx context.Context, c *app.RequestContext) 
 		"created_at":    dir.CreatedAt,
 	}
 
-	requestID := idempotency.GetRequestID(c)
 	if requestID != "" {
 		s.idempotencyService.CacheResponse(requestID, response)
 	}
@@ -271,7 +276,13 @@ func (s *VFSServer) deleteDirectory(ctx context.Context, c *app.RequestContext) 
 	path := string(c.Param("path"))
 	recursive := c.Query("recursive") == "true"
 
-	if err := s.dirService.DeleteDirectory(path, recursive); err != nil {
+	// Get request ID and add to context
+	requestID := idempotency.GetRequestID(c)
+	if requestID != "" {
+		ctx = context.WithValue(ctx, "requestID", requestID)
+	}
+
+	if err := s.dirService.DeleteDirectory(ctx, path, recursive); err != nil {
 		c.JSON(consts.StatusBadRequest, map[string]string{
 			"error": err.Error(),
 		})
@@ -283,7 +294,6 @@ func (s *VFSServer) deleteDirectory(ctx context.Context, c *app.RequestContext) 
 		"message": fmt.Sprintf("directory %s deleted", path),
 	}
 
-	requestID := idempotency.GetRequestID(c)
 	if requestID != "" {
 		s.idempotencyService.CacheResponse(requestID, response)
 	}
@@ -307,6 +317,12 @@ func (s *VFSServer) createFile(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
+	// Get request ID and add to context
+	requestID := idempotency.GetRequestID(c)
+	if requestID != "" {
+		ctx = context.WithValue(ctx, "requestID", requestID)
+	}
+
 	size := int64(len(req.Content))
 	file, err := s.fileService.CreateFile(ctx, req.DirectoryPath, req.Name, req.ContentType, size, io.NopCloser(strings.NewReader(req.Content)))
 	if err != nil {
@@ -327,7 +343,6 @@ func (s *VFSServer) createFile(ctx context.Context, c *app.RequestContext) {
 		"created_at":   file.CreatedAt,
 	}
 
-	requestID := idempotency.GetRequestID(c)
 	if requestID != "" {
 		s.idempotencyService.CacheResponse(requestID, response)
 	}
@@ -378,6 +393,12 @@ func (s *VFSServer) updateFile(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
+	// Get request ID and add to context
+	requestID := idempotency.GetRequestID(c)
+	if requestID != "" {
+		ctx = context.WithValue(ctx, "requestID", requestID)
+	}
+
 	size := int64(len(req.Content))
 	file, err := s.fileService.UpdateFile(ctx, path, req.ContentType, size, io.NopCloser(strings.NewReader(req.Content)), req.ExpectedVersion)
 	if err != nil {
@@ -396,7 +417,6 @@ func (s *VFSServer) updateFile(ctx context.Context, c *app.RequestContext) {
 		"updated_at":   file.UpdatedAt,
 	}
 
-	requestID := idempotency.GetRequestID(c)
 	if requestID != "" {
 		s.idempotencyService.CacheResponse(requestID, response)
 	}
@@ -407,6 +427,12 @@ func (s *VFSServer) updateFile(ctx context.Context, c *app.RequestContext) {
 // deleteFile deletes a file
 func (s *VFSServer) deleteFile(ctx context.Context, c *app.RequestContext) {
 	path := string(c.Param("path"))
+
+	// Get request ID and add to context
+	requestID := idempotency.GetRequestID(c)
+	if requestID != "" {
+		ctx = context.WithValue(ctx, "requestID", requestID)
+	}
 
 	if err := s.fileService.DeleteFile(ctx, path); err != nil {
 		c.JSON(consts.StatusNotFound, map[string]string{
@@ -420,7 +446,6 @@ func (s *VFSServer) deleteFile(ctx context.Context, c *app.RequestContext) {
 		"message": fmt.Sprintf("file %s deleted", path),
 	}
 
-	requestID := idempotency.GetRequestID(c)
 	if requestID != "" {
 		s.idempotencyService.CacheResponse(requestID, response)
 	}
@@ -442,6 +467,12 @@ func (s *VFSServer) moveFile(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
+	// Get request ID and add to context
+	requestID := idempotency.GetRequestID(c)
+	if requestID != "" {
+		ctx = context.WithValue(ctx, "requestID", requestID)
+	}
+
 	file, err := s.fileService.MoveFile(ctx, req.SourcePath, req.DestinationPath)
 	if err != nil {
 		c.JSON(consts.StatusBadRequest, map[string]string{
@@ -456,7 +487,6 @@ func (s *VFSServer) moveFile(ctx context.Context, c *app.RequestContext) {
 		"updated_at": file.UpdatedAt,
 	}
 
-	requestID := idempotency.GetRequestID(c)
 	if requestID != "" {
 		s.idempotencyService.CacheResponse(requestID, response)
 	}

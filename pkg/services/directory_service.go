@@ -1,6 +1,8 @@
 package services
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"path"
 	"strings"
@@ -21,8 +23,42 @@ func NewDirectoryService(db *gorm.DB) *DirectoryService {
 	return &DirectoryService{db: db}
 }
 
+// emitEvent creates an event in the same transaction
+func (s *DirectoryService) emitEvent(ctx context.Context, tx *gorm.DB, eventType, aggregateID string, payload interface{}) error {
+	// Get request ID from context
+	requestID := ctx.Value("requestID")
+	if requestID == nil {
+		// If no request ID, generate one (for non-API calls)
+		requestID = uuid.New().String()
+	}
+
+	// Marshal payload to JSON
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal event payload: %w", err)
+	}
+
+	// Create event
+	event := &models.Event{
+		ID:          uuid.New().String(),
+		EventType:   eventType,
+		AggregateID: aggregateID,
+		Payload:     string(payloadJSON),
+		RequestID:   requestID.(string),
+		Status:      models.EventStatusPending,
+		CreatedAt:   time.Now(),
+	}
+
+	// Insert event (VisibleAt will be set by BeforeCreate hook)
+	if err := tx.Create(event).Error; err != nil {
+		return fmt.Errorf("failed to create event: %w", err)
+	}
+
+	return nil
+}
+
 // CreateDirectory creates a new directory
-func (s *DirectoryService) CreateDirectory(parentPath, name string, opaPolicyID *string) (*models.Directory, error) {
+func (s *DirectoryService) CreateDirectory(ctx context.Context, parentPath, name string, opaPolicyID *string) (*models.Directory, error) {
 	// Validate name
 	if name == "" || strings.Contains(name, "/") {
 		return nil, fmt.Errorf("invalid directory name")
@@ -84,6 +120,17 @@ func (s *DirectoryService) CreateDirectory(parentPath, name string, opaPolicyID 
 			return fmt.Errorf("failed to create directory: %w", err)
 		}
 
+		// Emit directory.created event
+		if err := s.emitEvent(ctx, tx, "directory.created", dir.ID, map[string]interface{}{
+			"directory_id":   dir.ID,
+			"name":           dir.Name,
+			"path":           dir.Path,
+			"parent_id":      dir.ParentID,
+			"opa_policy_id":  dir.OPAPolicyID,
+		}); err != nil {
+			return err
+		}
+
 		return nil
 	})
 
@@ -138,7 +185,7 @@ func (s *DirectoryService) ListDirectory(dirPath string, limit int, cursor strin
 }
 
 // DeleteDirectory deletes a directory (optionally recursive)
-func (s *DirectoryService) DeleteDirectory(dirPath string, recursive bool) error {
+func (s *DirectoryService) DeleteDirectory(ctx context.Context, dirPath string, recursive bool) error {
 	return s.db.Transaction(func(tx *gorm.DB) error {
 		// Lock directory path (tree lock)
 		pathComponents := s.getPathComponents(dirPath)
@@ -182,6 +229,16 @@ func (s *DirectoryService) DeleteDirectory(dirPath string, recursive bool) error
 		// Soft delete the directory
 		if err := tx.Delete(&dir).Error; err != nil {
 			return fmt.Errorf("failed to delete directory: %w", err)
+		}
+
+		// Emit directory.deleted event
+		if err := s.emitEvent(ctx, tx, "directory.deleted", dir.ID, map[string]interface{}{
+			"directory_id": dir.ID,
+			"name":         dir.Name,
+			"path":         dir.Path,
+			"recursive":    recursive,
+		}); err != nil {
+			return err
 		}
 
 		return nil

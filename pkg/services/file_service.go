@@ -37,6 +37,40 @@ func NewFileService(db *gorm.DB, storage storage.Storage) *FileService {
 	}
 }
 
+// emitEvent creates an event in the same transaction
+func (s *FileService) emitEvent(ctx context.Context, tx *gorm.DB, eventType, aggregateID string, payload interface{}) error {
+	// Get request ID from context
+	requestID := ctx.Value("requestID")
+	if requestID == nil {
+		// If no request ID, generate one (for non-API calls)
+		requestID = uuid.New().String()
+	}
+
+	// Marshal payload to JSON
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal event payload: %w", err)
+	}
+
+	// Create event
+	event := &models.Event{
+		ID:          uuid.New().String(),
+		EventType:   eventType,
+		AggregateID: aggregateID,
+		Payload:     string(payloadJSON),
+		RequestID:   requestID.(string),
+		Status:      models.EventStatusPending,
+		CreatedAt:   time.Now(),
+	}
+
+	// Insert event (VisibleAt will be set by BeforeCreate hook)
+	if err := tx.Create(event).Error; err != nil {
+		return fmt.Errorf("failed to create event: %w", err)
+	}
+
+	return nil
+}
+
 // CreateFile creates a new file
 func (s *FileService) CreateFile(ctx context.Context, directoryPath, name, contentType string, size int64, content io.Reader) (*models.File, error) {
 	// Validate size
@@ -142,6 +176,20 @@ func (s *FileService) CreateFile(ctx context.Context, directoryPath, name, conte
 
 		if err := tx.Create(version).Error; err != nil {
 			return fmt.Errorf("failed to create file version: %w", err)
+		}
+
+		// Emit file.created event
+		if err := s.emitEvent(ctx, tx, "file.created", file.ID, map[string]interface{}{
+			"file_id":       file.ID,
+			"name":          file.Name,
+			"directory_id":  file.DirectoryID,
+			"content_type":  file.ContentType,
+			"size_bytes":    file.SizeBytes,
+			"storage_type":  file.StorageType,
+			"checksum":      file.ChecksumSHA256,
+			"version":       file.Version,
+		}); err != nil {
+			return err
 		}
 
 		return nil
@@ -297,6 +345,21 @@ func (s *FileService) UpdateFile(ctx context.Context, filePath, contentType stri
 			go s.storage.Delete(ctx, *oldS3Key)
 		}
 
+		// Emit file.updated event
+		if err := s.emitEvent(ctx, tx, "file.updated", file.ID, map[string]interface{}{
+			"file_id":           file.ID,
+			"name":              file.Name,
+			"directory_id":      file.DirectoryID,
+			"content_type":      file.ContentType,
+			"size_bytes":        file.SizeBytes,
+			"storage_type":      file.StorageType,
+			"checksum":          file.ChecksumSHA256,
+			"version":           file.Version,
+			"previous_version":  expectedVersion,
+		}); err != nil {
+			return err
+		}
+
 		return nil
 	})
 
@@ -328,6 +391,16 @@ func (s *FileService) DeleteFile(ctx context.Context, filePath string) error {
 		// Soft delete
 		if err := tx.Delete(&file).Error; err != nil {
 			return fmt.Errorf("failed to delete file: %w", err)
+		}
+
+		// Emit file.deleted event
+		if err := s.emitEvent(ctx, tx, "file.deleted", file.ID, map[string]interface{}{
+			"file_id":      file.ID,
+			"name":         file.Name,
+			"directory_id": file.DirectoryID,
+			"size_bytes":   file.SizeBytes,
+		}); err != nil {
+			return err
 		}
 
 		// Schedule S3 cleanup (async in real system)
@@ -377,12 +450,28 @@ func (s *FileService) MoveFile(ctx context.Context, sourcePath, destPath string)
 		}
 
 		// Update file
+		oldDirectoryID := file.DirectoryID
+		oldName := file.Name
+
 		file.DirectoryID = destDir.ID
 		file.Name = dstName
 		file.UpdatedAt = time.Now()
 
 		if err := tx.Save(file).Error; err != nil {
 			return fmt.Errorf("failed to move file: %w", err)
+		}
+
+		// Emit file.moved event
+		if err := s.emitEvent(ctx, tx, "file.moved", file.ID, map[string]interface{}{
+			"file_id":            file.ID,
+			"old_name":           oldName,
+			"new_name":           dstName,
+			"old_directory_id":   oldDirectoryID,
+			"new_directory_id":   destDir.ID,
+			"source_path":        sourcePath,
+			"destination_path":   destPath,
+		}); err != nil {
+			return err
 		}
 
 		return nil
