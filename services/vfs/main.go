@@ -3,20 +3,32 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"github.com/telnet2/mysql-vfs/pkg/db"
+	"github.com/telnet2/mysql-vfs/pkg/idempotency"
 	"github.com/telnet2/mysql-vfs/pkg/models"
+	"github.com/telnet2/mysql-vfs/pkg/services"
+	"github.com/telnet2/mysql-vfs/pkg/storage"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
 
 type VFSServer struct {
-	db *gorm.DB
+	db              *gorm.DB
+	storage         storage.Storage
+	dirService      *services.DirectoryService
+	fileService     *services.FileService
+	opaService      *services.OPAService
+	idempotencyService *idempotency.Service
 }
 
 func main() {
@@ -52,8 +64,33 @@ func main() {
 	}
 	log.Println("Migrations completed successfully")
 
+	// Initialize storage
+	log.Println("Initializing storage...")
+	ctx := context.Background()
+	storageService, err := storage.NewStorageFromEnv(ctx)
+	if err != nil {
+		log.Fatalf("Failed to initialize storage: %v", err)
+	}
+	log.Println("Storage initialized successfully")
+
+	// Initialize services
+	dirService := services.NewDirectoryService(database)
+	fileService := services.NewFileService(database, storageService)
+	opaService := services.NewOPAService(database)
+	idempotencyService := idempotency.NewService(database)
+
+	// Start idempotency cleanup worker
+	go idempotencyService.StartCleanupWorker(ctx, 1*time.Hour)
+
 	// Create server instance
-	vfsServer := &VFSServer{db: database}
+	vfsServer := &VFSServer{
+		db:                 database,
+		storage:            storageService,
+		dirService:         dirService,
+		fileService:        fileService,
+		opaService:         opaService,
+		idempotencyService: idempotencyService,
+	}
 
 	// Initialize Hertz server
 	h := server.Default(server.WithHostPorts(":" + port))
@@ -62,20 +99,21 @@ func main() {
 	h.GET("/health", vfsServer.healthHandler)
 	h.GET("/ready", vfsServer.readyHandler)
 
-	// API v1 routes (stubs for Phase 1)
+	// API v1 routes with idempotency middleware
 	v1 := h.Group("/api/v1")
+	v1.Use(idempotencyService.Middleware())
 	{
 		// Directory routes
-		v1.POST("/directories", vfsServer.createDirectoryStub)
-		v1.GET("/directories/*path", vfsServer.listDirectoryStub)
-		v1.DELETE("/directories/*path", vfsServer.deleteDirectoryStub)
+		v1.POST("/directories", vfsServer.createDirectory)
+		v1.GET("/directories/*path", vfsServer.listDirectory)
+		v1.DELETE("/directories/*path", vfsServer.deleteDirectory)
 
 		// File routes
-		v1.POST("/files", vfsServer.createFileStub)
-		v1.GET("/files/*path", vfsServer.getFileStub)
-		v1.PUT("/files/*path", vfsServer.updateFileStub)
-		v1.DELETE("/files/*path", vfsServer.deleteFileStub)
-		v1.POST("/files/move", vfsServer.moveFileStub)
+		v1.POST("/files", vfsServer.createFile)
+		v1.GET("/files/*path", vfsServer.getFile)
+		v1.PUT("/files/*path", vfsServer.updateFile)
+		v1.DELETE("/files/*path", vfsServer.deleteFile)
+		v1.POST("/files/move", vfsServer.moveFile)
 	}
 
 	log.Printf("VFS Service starting on port %s", port)
@@ -108,6 +146,15 @@ func (s *VFSServer) healthHandler(ctx context.Context, c *app.RequestContext) {
 	}
 	checks["migrations"] = "ok"
 
+	// Check storage
+	exists, err := s.storage.Exists(ctx, ".healthcheck")
+	if err != nil {
+		checks["storage"] = fmt.Sprintf("unhealthy: %v", err)
+	} else {
+		checks["storage"] = "ok"
+		_ = exists // Ignore result, just checking connectivity
+	}
+
 	c.JSON(consts.StatusOK, map[string]interface{}{
 		"status": "ok",
 		"checks": checks,
@@ -129,53 +176,292 @@ func (s *VFSServer) readyHandler(ctx context.Context, c *app.RequestContext) {
 	})
 }
 
-// Stub handlers for Phase 1 (will be implemented in Phase 2)
-func (s *VFSServer) createDirectoryStub(ctx context.Context, c *app.RequestContext) {
-	c.JSON(consts.StatusNotImplemented, map[string]string{
-		"message": "createDirectory will be implemented in Phase 2",
+// createDirectory creates a new directory
+func (s *VFSServer) createDirectory(ctx context.Context, c *app.RequestContext) {
+	var req struct {
+		ParentPath  string  `json:"parent_path"`
+		Name        string  `json:"name"`
+		OPAPolicyID *string `json:"opa_policy_id"`
+	}
+
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(consts.StatusBadRequest, map[string]string{
+			"error": "invalid request body",
+		})
+		return
+	}
+
+	dir, err := s.dirService.CreateDirectory(req.ParentPath, req.Name, req.OPAPolicyID)
+	if err != nil {
+		c.JSON(consts.StatusBadRequest, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	// Cache response for idempotency
+	response := map[string]interface{}{
+		"id":            dir.ID,
+		"name":          dir.Name,
+		"path":          dir.Path,
+		"parent_id":     dir.ParentID,
+		"opa_policy_id": dir.OPAPolicyID,
+		"created_at":    dir.CreatedAt,
+	}
+
+	requestID := idempotency.GetRequestID(c)
+	if requestID != "" {
+		s.idempotencyService.CacheResponse(requestID, response)
+	}
+
+	c.JSON(consts.StatusCreated, response)
+}
+
+// listDirectory lists directory contents
+func (s *VFSServer) listDirectory(ctx context.Context, c *app.RequestContext) {
+	path := string(c.Param("path"))
+	if path == "" {
+		path = "/"
+	}
+
+	limit := 100
+	if l := c.Query("limit"); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil {
+			limit = parsed
+		}
+	}
+
+	cursor := c.Query("cursor")
+
+	directories, files, nextCursor, err := s.dirService.ListDirectory(path, limit, cursor)
+	if err != nil {
+		c.JSON(consts.StatusNotFound, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	// Format response
+	entries := []map[string]interface{}{}
+	for _, dir := range directories {
+		entries = append(entries, map[string]interface{}{
+			"name":        dir.Name,
+			"type":        "directory",
+			"size_bytes":  0,
+			"modified_at": dir.UpdatedAt,
+		})
+	}
+	for _, file := range files {
+		entries = append(entries, map[string]interface{}{
+			"name":        file.Name,
+			"type":        "file",
+			"size_bytes":  file.SizeBytes,
+			"modified_at": file.UpdatedAt,
+		})
+	}
+
+	c.JSON(consts.StatusOK, map[string]interface{}{
+		"entries":     entries,
+		"next_cursor": nextCursor,
 	})
 }
 
-func (s *VFSServer) listDirectoryStub(ctx context.Context, c *app.RequestContext) {
-	c.JSON(consts.StatusNotImplemented, map[string]string{
-		"message": "listDirectory will be implemented in Phase 2",
-	})
+// deleteDirectory deletes a directory
+func (s *VFSServer) deleteDirectory(ctx context.Context, c *app.RequestContext) {
+	path := string(c.Param("path"))
+	recursive := c.Query("recursive") == "true"
+
+	if err := s.dirService.DeleteDirectory(path, recursive); err != nil {
+		c.JSON(consts.StatusBadRequest, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	response := map[string]interface{}{
+		"success": true,
+		"message": fmt.Sprintf("directory %s deleted", path),
+	}
+
+	requestID := idempotency.GetRequestID(c)
+	if requestID != "" {
+		s.idempotencyService.CacheResponse(requestID, response)
+	}
+
+	c.JSON(consts.StatusOK, response)
 }
 
-func (s *VFSServer) deleteDirectoryStub(ctx context.Context, c *app.RequestContext) {
-	c.JSON(consts.StatusNotImplemented, map[string]string{
-		"message": "deleteDirectory will be implemented in Phase 2",
-	})
+// createFile creates a new file
+func (s *VFSServer) createFile(ctx context.Context, c *app.RequestContext) {
+	var req struct {
+		DirectoryPath string `json:"directory_path"`
+		Name          string `json:"name"`
+		ContentType   string `json:"content_type"`
+		Content       string `json:"content"` // Base64 encoded or plain text
+	}
+
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(consts.StatusBadRequest, map[string]string{
+			"error": "invalid request body",
+		})
+		return
+	}
+
+	size := int64(len(req.Content))
+	file, err := s.fileService.CreateFile(ctx, req.DirectoryPath, req.Name, req.ContentType, size, io.NopCloser(strings.NewReader(req.Content)))
+	if err != nil {
+		c.JSON(consts.StatusBadRequest, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	response := map[string]interface{}{
+		"id":           file.ID,
+		"name":         file.Name,
+		"content_type": file.ContentType,
+		"size_bytes":   file.SizeBytes,
+		"storage_type": file.StorageType,
+		"checksum":     file.ChecksumSHA256,
+		"version":      file.Version,
+		"created_at":   file.CreatedAt,
+	}
+
+	requestID := idempotency.GetRequestID(c)
+	if requestID != "" {
+		s.idempotencyService.CacheResponse(requestID, response)
+	}
+
+	c.JSON(consts.StatusCreated, response)
 }
 
-func (s *VFSServer) createFileStub(ctx context.Context, c *app.RequestContext) {
-	c.JSON(consts.StatusNotImplemented, map[string]string{
-		"message": "createFile will be implemented in Phase 2",
-	})
+// getFile retrieves a file
+func (s *VFSServer) getFile(ctx context.Context, c *app.RequestContext) {
+	path := string(c.Param("path"))
+
+	file, reader, err := s.fileService.GetFile(ctx, path)
+	if err != nil {
+		c.JSON(consts.StatusNotFound, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+	defer reader.Close()
+
+	// Set headers
+	c.Response.Header.Set("Content-Type", file.ContentType)
+	c.Response.Header.Set("Content-Length", fmt.Sprintf("%d", file.SizeBytes))
+	c.Response.Header.Set("X-File-Version", fmt.Sprintf("%d", file.Version))
+	c.Response.Header.Set("X-Checksum-SHA256", file.ChecksumSHA256)
+
+	// Stream content
+	c.Response.SetStatusCode(consts.StatusOK)
+	if _, err := io.Copy(c.Response.BodyWriter(), reader); err != nil {
+		log.Printf("Error streaming file: %v", err)
+	}
 }
 
-func (s *VFSServer) getFileStub(ctx context.Context, c *app.RequestContext) {
-	c.JSON(consts.StatusNotImplemented, map[string]string{
-		"message": "getFile will be implemented in Phase 2",
-	})
+// updateFile updates a file
+func (s *VFSServer) updateFile(ctx context.Context, c *app.RequestContext) {
+	path := string(c.Param("path"))
+
+	var req struct {
+		ContentType     string `json:"content_type"`
+		Content         string `json:"content"`
+		ExpectedVersion int64  `json:"expected_version"`
+	}
+
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(consts.StatusBadRequest, map[string]string{
+			"error": "invalid request body",
+		})
+		return
+	}
+
+	size := int64(len(req.Content))
+	file, err := s.fileService.UpdateFile(ctx, path, req.ContentType, size, io.NopCloser(strings.NewReader(req.Content)), req.ExpectedVersion)
+	if err != nil {
+		c.JSON(consts.StatusConflict, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	response := map[string]interface{}{
+		"id":           file.ID,
+		"name":         file.Name,
+		"content_type": file.ContentType,
+		"size_bytes":   file.SizeBytes,
+		"version":      file.Version,
+		"updated_at":   file.UpdatedAt,
+	}
+
+	requestID := idempotency.GetRequestID(c)
+	if requestID != "" {
+		s.idempotencyService.CacheResponse(requestID, response)
+	}
+
+	c.JSON(consts.StatusOK, response)
 }
 
-func (s *VFSServer) updateFileStub(ctx context.Context, c *app.RequestContext) {
-	c.JSON(consts.StatusNotImplemented, map[string]string{
-		"message": "updateFile will be implemented in Phase 2",
-	})
+// deleteFile deletes a file
+func (s *VFSServer) deleteFile(ctx context.Context, c *app.RequestContext) {
+	path := string(c.Param("path"))
+
+	if err := s.fileService.DeleteFile(ctx, path); err != nil {
+		c.JSON(consts.StatusNotFound, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	response := map[string]interface{}{
+		"success": true,
+		"message": fmt.Sprintf("file %s deleted", path),
+	}
+
+	requestID := idempotency.GetRequestID(c)
+	if requestID != "" {
+		s.idempotencyService.CacheResponse(requestID, response)
+	}
+
+	c.JSON(consts.StatusOK, response)
 }
 
-func (s *VFSServer) deleteFileStub(ctx context.Context, c *app.RequestContext) {
-	c.JSON(consts.StatusNotImplemented, map[string]string{
-		"message": "deleteFile will be implemented in Phase 2",
-	})
-}
+// moveFile moves or renames a file
+func (s *VFSServer) moveFile(ctx context.Context, c *app.RequestContext) {
+	var req struct {
+		SourcePath      string `json:"source_path"`
+		DestinationPath string `json:"destination_path"`
+	}
 
-func (s *VFSServer) moveFileStub(ctx context.Context, c *app.RequestContext) {
-	c.JSON(consts.StatusNotImplemented, map[string]string{
-		"message": "moveFile will be implemented in Phase 2",
-	})
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(consts.StatusBadRequest, map[string]string{
+			"error": "invalid request body",
+		})
+		return
+	}
+
+	file, err := s.fileService.MoveFile(ctx, req.SourcePath, req.DestinationPath)
+	if err != nil {
+		c.JSON(consts.StatusBadRequest, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	response := map[string]interface{}{
+		"id":         file.ID,
+		"name":       file.Name,
+		"updated_at": file.UpdatedAt,
+	}
+
+	requestID := idempotency.GetRequestID(c)
+	if requestID != "" {
+		s.idempotencyService.CacheResponse(requestID, response)
+	}
+
+	c.JSON(consts.StatusOK, response)
 }
 
 // getEnv retrieves an environment variable or returns a default value
