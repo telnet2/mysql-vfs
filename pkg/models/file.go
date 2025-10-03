@@ -30,11 +30,11 @@ type File struct {
 	UpdatedAt    time.Time      `gorm:"not null"`
 	DeletedAt    gorm.DeletedAt `gorm:"index"`
 
-	// Relations
-	Directory         *Directory      `gorm:"foreignKey:DirectoryID"`
-	Versions          []FileVersion   `gorm:"foreignKey:FileID"`
-	ParentRelations   []FileRelation  `gorm:"foreignKey:ParentFileID"`
-	DerivativeRelations []FileRelation `gorm:"foreignKey:DerivativeFileID"`
+	// Relations (no DB-level foreign keys - referential integrity managed in application code)
+	Directory         *Directory      `gorm:"-:migration"`
+	Versions          []FileVersion   `gorm:"-:migration"`
+	ParentRelations   []FileRelation  `gorm:"-:migration"`
+	DerivativeRelations []FileRelation `gorm:"-:migration"`
 }
 
 func (File) TableName() string {

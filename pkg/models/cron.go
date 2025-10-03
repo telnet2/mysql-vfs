@@ -20,8 +20,8 @@ type CronJob struct {
 	UpdatedAt       time.Time      `gorm:"not null"`
 	DeletedAt       gorm.DeletedAt `gorm:"index"`
 
-	// Relations
-	Executions []CronExecution `gorm:"foreignKey:CronJobID"`
+	// Relations (no DB-level foreign keys - referential integrity managed in application code)
+	Executions []CronExecution `gorm:"-:migration"`
 }
 
 func (CronJob) TableName() string {
@@ -54,8 +54,8 @@ type CronExecution struct {
 	ErrorMessage   *string             `gorm:"type:text"`
 	CreatedAt      time.Time           `gorm:"not null"`
 
-	// Relations
-	CronJob *CronJob `gorm:"foreignKey:CronJobID"`
+	// Relations (no DB-level foreign keys - referential integrity managed in application code)
+	CronJob *CronJob `gorm:"-:migration"`
 }
 
 func (CronExecution) TableName() string {

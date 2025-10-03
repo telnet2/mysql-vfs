@@ -17,8 +17,8 @@ type FileVersion struct {
 	ChecksumSHA256 string      `gorm:"type:char(64);not null"`
 	CreatedAt      time.Time   `gorm:"not null"`
 
-	// Relations
-	File *File `gorm:"foreignKey:FileID"`
+	// Relations (no DB-level foreign keys - referential integrity managed in application code)
+	File *File `gorm:"-:migration"`
 }
 
 func (FileVersion) TableName() string {

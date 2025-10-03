@@ -19,6 +19,8 @@ type Config struct {
 func Connect(cfg Config) (*gorm.DB, error) {
 	db, err := gorm.Open(mysql.Open(cfg.DSN), &gorm.Config{
 		Logger: logger.Default.LogMode(cfg.LogLevel),
+		// Disable foreign key constraints - we manage referential integrity in application code
+		DisableForeignKeyConstraintWhenMigrating: true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)

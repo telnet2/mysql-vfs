@@ -19,8 +19,8 @@ type OPAPolicy struct {
 	UpdatedAt         time.Time      `gorm:"not null"`
 	DeletedAt         gorm.DeletedAt `gorm:"index"`
 
-	// Relations
-	Directories []Directory `gorm:"foreignKey:OPAPolicyID"`
+	// Relations (no DB-level foreign keys - referential integrity managed in application code)
+	Directories []Directory `gorm:"-:migration"`
 }
 
 func (OPAPolicy) TableName() string {

@@ -13,9 +13,9 @@ type FileRelation struct {
 	MetadataJSON     *string   `gorm:"type:json"`
 	CreatedAt        time.Time `gorm:"not null"`
 
-	// Relations
-	ParentFile     *File `gorm:"foreignKey:ParentFileID"`
-	DerivativeFile *File `gorm:"foreignKey:DerivativeFileID"`
+	// Relations (no DB-level foreign keys - referential integrity managed in application code)
+	ParentFile     *File `gorm:"-:migration"`
+	DerivativeFile *File `gorm:"-:migration"`
 }
 
 func (FileRelation) TableName() string {

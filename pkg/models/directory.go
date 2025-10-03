@@ -18,11 +18,11 @@ type Directory struct {
 	UpdatedAt    time.Time      `gorm:"not null"`
 	DeletedAt    gorm.DeletedAt `gorm:"index"`
 
-	// Relations
-	Parent   *Directory  `gorm:"foreignKey:ParentID"`
-	Children []Directory `gorm:"foreignKey:ParentID"`
-	Files    []File      `gorm:"foreignKey:DirectoryID"`
-	OPAPolicy *OPAPolicy `gorm:"foreignKey:OPAPolicyID"`
+	// Relations (no DB-level foreign keys - referential integrity managed in application code)
+	Parent   *Directory  `gorm:"-:migration"`
+	Children []Directory `gorm:"-:migration"`
+	Files    []File      `gorm:"-:migration"`
+	OPAPolicy *OPAPolicy `gorm:"-:migration"`
 }
 
 func (Directory) TableName() string {

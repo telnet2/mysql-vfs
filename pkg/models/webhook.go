@@ -30,9 +30,9 @@ type WebhookConfig struct {
 	UpdatedAt           time.Time `gorm:"not null"`
 	DeletedAt           gorm.DeletedAt `gorm:"index"`
 
-	// Relations
-	Directory    *Directory   `gorm:"foreignKey:DirectoryID"`
-	WebhookJobs  []WebhookJob `gorm:"foreignKey:WebhookConfigID"`
+	// Relations (no DB-level foreign keys - referential integrity managed in application code)
+	Directory    *Directory   `gorm:"-:migration"`
+	WebhookJobs  []WebhookJob `gorm:"-:migration"`
 }
 
 func (WebhookConfig) TableName() string {
@@ -62,9 +62,9 @@ type WebhookJob struct {
 	CreatedAt       time.Time        `gorm:"not null"`
 	UpdatedAt       time.Time        `gorm:"not null"`
 
-	// Relations
-	Event         *Event         `gorm:"foreignKey:EventID"`
-	WebhookConfig *WebhookConfig `gorm:"foreignKey:WebhookConfigID"`
+	// Relations (no DB-level foreign keys - referential integrity managed in application code)
+	Event         *Event         `gorm:"-:migration"`
+	WebhookConfig *WebhookConfig `gorm:"-:migration"`
 }
 
 func (WebhookJob) TableName() string {
