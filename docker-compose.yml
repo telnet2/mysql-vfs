@@ -1,0 +1,168 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: vfs-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: vfs
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+    networks:
+      - vfs-network
+
+  localstack:
+    image: localstack/localstack:latest
+    container_name: vfs-localstack
+    environment:
+      SERVICES: s3
+      DEBUG: 1
+      DATA_DIR: /tmp/localstack/data
+      DOCKER_HOST: unix:///var/run/docker.sock
+    ports:
+      - "4566:4566"
+    volumes:
+      - localstack-data:/tmp/localstack
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "awslocal", "s3", "ls"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - vfs-network
+
+  vfs-service:
+    build:
+      context: .
+      dockerfile: services/vfs/Dockerfile
+    container_name: vfs-service
+    depends_on:
+      mysql:
+        condition: service_healthy
+      localstack:
+        condition: service_started
+    environment:
+      DB_DSN: root:root@tcp(mysql:3306)/vfs?charset=utf8mb4&parseTime=True&loc=Local
+      S3_ENDPOINT: http://localstack:4566
+      S3_BUCKET: vfs-storage
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_REGION: us-east-1
+      PORT: 8080
+      LOG_LEVEL: debug
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - vfs-network
+    restart: unless-stopped
+
+  webhook-daemon:
+    image: adnanh/webhook:latest
+    container_name: vfs-webhook-daemon
+    volumes:
+      - ./deployments/webhook-configs:/etc/webhook:ro
+    command: ["-verbose", "-hooks", "/etc/webhook/hooks.json", "-hotreload"]
+    ports:
+      - "9000:9000"
+    networks:
+      - vfs-network
+    restart: unless-stopped
+
+  webhook-orchestrator:
+    build:
+      context: .
+      dockerfile: services/webhook-orchestrator/Dockerfile
+    container_name: vfs-webhook-orchestrator
+    depends_on:
+      vfs-service:
+        condition: service_healthy
+      webhook-daemon:
+        condition: service_started
+    environment:
+      DB_DSN: root:root@tcp(mysql:3306)/vfs?charset=utf8mb4&parseTime=True&loc=Local
+      WEBHOOK_DAEMON_URL: http://webhook-daemon:9000
+      LOG_LEVEL: debug
+    networks:
+      - vfs-network
+    restart: unless-stopped
+
+  event-worker:
+    build:
+      context: .
+      dockerfile: services/event-worker/Dockerfile
+    container_name: vfs-event-worker
+    depends_on:
+      vfs-service:
+        condition: service_healthy
+    environment:
+      DB_DSN: root:root@tcp(mysql:3306)/vfs?charset=utf8mb4&parseTime=True&loc=Local
+      WORKER_CONCURRENCY: 10
+      POLL_INTERVAL: 1s
+      LOG_LEVEL: debug
+    networks:
+      - vfs-network
+    restart: unless-stopped
+    deploy:
+      replicas: 1
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: services/scheduler/Dockerfile
+    container_name: vfs-scheduler
+    depends_on:
+      vfs-service:
+        condition: service_healthy
+    environment:
+      DB_DSN: root:root@tcp(mysql:3306)/vfs?charset=utf8mb4&parseTime=True&loc=Local
+      SCHEDULER_ID: ${HOSTNAME:-scheduler-1}
+      POLL_INTERVAL: 10s
+      LOG_LEVEL: debug
+    networks:
+      - vfs-network
+    restart: unless-stopped
+    deploy:
+      replicas: 1
+
+  cli:
+    build:
+      context: .
+      dockerfile: cli/Dockerfile
+    container_name: vfs-cli
+    depends_on:
+      vfs-service:
+        condition: service_healthy
+    environment:
+      VFS_SERVICE_URL: http://vfs-service:8080
+      LOG_LEVEL: info
+    stdin_open: true
+    tty: true
+    networks:
+      - vfs-network
+    profiles:
+      - cli
+
+volumes:
+  mysql-data:
+  localstack-data:
+
+networks:
+  vfs-network:
+    driver: bridge

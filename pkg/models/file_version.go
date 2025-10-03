@@ -1,0 +1,26 @@
+package models
+
+import (
+	"time"
+)
+
+// FileVersion represents an immutable version of a file
+type FileVersion struct {
+	ID             string      `gorm:"type:char(36);primaryKey"`
+	FileID         string      `gorm:"type:char(36);not null;index:idx_file_version"`
+	VersionNumber  int64       `gorm:"not null;index:idx_file_version"`
+	ContentType    string      `gorm:"type:varchar(255);not null"`
+	SizeBytes      int64       `gorm:"not null"`
+	StorageType    StorageType `gorm:"type:varchar(10);not null"`
+	JSONContent    *string     `gorm:"type:json"`
+	S3Key          *string     `gorm:"type:varchar(1024)"`
+	ChecksumSHA256 string      `gorm:"type:char(64);not null"`
+	CreatedAt      time.Time   `gorm:"not null"`
+
+	// Relations
+	File *File `gorm:"foreignKey:FileID"`
+}
+
+func (FileVersion) TableName() string {
+	return "file_versions"
+}

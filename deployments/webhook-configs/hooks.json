@@ -1,0 +1,23 @@
+[
+  {
+    "id": "test-webhook",
+    "execute-command": "/bin/echo",
+    "command-working-directory": "/tmp",
+    "pass-arguments-to-command": [
+      {
+        "source": "payload",
+        "name": "event_type"
+      }
+    ],
+    "trigger-rule": {
+      "match": {
+        "type": "value",
+        "value": "test",
+        "parameter": {
+          "source": "payload",
+          "name": "event_type"
+        }
+      }
+    }
+  }
+]
