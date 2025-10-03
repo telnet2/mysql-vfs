@@ -1,16 +1,16 @@
 ## Project Overview
 
-This document captures the architectural blueprint for a MySQL-based distributed virtual file system (VFS) composed of microservices. The design emphasizes **strong consistency**, **effectively-once idempotent processing**, **horizontal scalability**, and **robust failure handling**.
+This document captures the architectural blueprint for a distributed virtual file system (VFS) composed of microservices. The design emphasizes **strong consistency**, **effectively-once idempotent processing**, **horizontal scalability**, and **robust failure handling**.
 
 ### Goals
-- Provide a MySQL-backed virtual file system capable of tracking directories, files, and derivative relationships.
+- Provide a virtual file system with a pluggable database backend (initially supporting MySQL and SQLite) capable of tracking directories, files, and derivative relationships.
     - Store files up to 100MB in S3-like blob storage using gocloud.dev.
-    - If a file is JSON and less than 14MB, store it as a JSON field in MySQL for efficient querying.
+    - If a file is JSON and less than 14MB, store it as a JSON field in the database for efficient querying.
     - Each file must have a server-validated `content-type` metadata.
 - Ensure every mutating operation triggers webhook notifications with at-least-once delivery guarantees and callback tracking.
 - Support cron-executed tasks across distributed runners while maintaining consistency via lease-based coordination.
 - Offer a REPL-style CLI with import, listing, mutation, and inspection commands, including piping and JSON querying via `jq` semantics.
-- Deliver a production-ready deployment using Docker Compose with full end-to-end integration tests (Ginkgo v2 + httpexpect) backed by real MySQL.
+- Deliver a production-ready deployment using Docker Compose. For local development and testing, provide a simplified setup using SQLite and local file storage for blobs, with end-to-end behavioral tests.
 - Design authorization using OPA/REGO policies assigned per directory with fail-closed semantics.
 
 ### Non-Goals
@@ -36,9 +36,9 @@ This document captures the architectural blueprint for a MySQL-based distributed
 1.  **VFS Service** (Hertz + Thrift)
     - Manages directories, file metadata, file content storage, and lineage tracking.
     - Exposes unified APIs for listing, mutations, uploads, and downloads.
-    - Uses GORM with MySQL (`REPEATABLE READ` isolation) and enforces optimistic versioning.
+    - Uses GORM to abstract database access, supporting both MySQL (for production) and SQLite (for local testing).
     - Implements a robust tree-locking protocol to ensure directory structure integrity during concurrent operations.
-    - Stores small JSON files (<14MB) directly in MySQL JSON columns.
+    - Stores small JSON files (<14MB) directly in database JSON columns.
     - Stores larger files in S3-compatible blob storage via gocloud.dev.
     - Emits mutation events transactionally using the outbox pattern.
     - Enforces idempotency via a client-provided `request_id` and a hash of request parameters.
@@ -53,7 +53,7 @@ This document captures the architectural blueprint for a MySQL-based distributed
     - Provides an endpoint for optional callback acknowledgements.
 
 3.  **Scheduler Service**
-    - Runs cron jobs using `robfig/cron/v3` with MySQL-backed schedules.
+    - Runs cron jobs using `robfig/cron/v3` with database-backed schedules.
     - Multiple instances cooperate via lease-based locking (`SELECT ... FOR UPDATE SKIP LOCKED`) to claim jobs atomically.
     - Writes heartbeat timestamps every 30s for long-running jobs to maintain the lease.
     - A background reaper process recovers stale leases (no heartbeat within 2× lease duration).
@@ -67,9 +67,18 @@ This document captures the architectural blueprint for a MySQL-based distributed
     - Generates a UUIDv4 `request_id` for all mutation commands.
     - Maintains session state (current directory, auth token).
 
+### Database Philosophy
+
+The architecture treats the database primarily as a durable, consistent data store, avoiding complex database-level logic. This philosophy keeps business logic centralized within the application services, making the system more scalable, portable, and easier to test.
+
+-   **No Foreign Keys**: All entity relationships (e.g., parent-child directories, files in directories) are enforced by the application layer within transactions. This provides granular control over consistency checks and simplifies potential future database sharding.
+-   **No Triggers or Stored Procedures**: All business logic, including data validation, referential integrity, and event generation (via the transactional outbox pattern), is implemented exclusively within the microservices. This ensures that logic is version-controlled with the application code and remains database-agnostic.
+
 ---
 
 ## Data Model
+
+The following schema is defined for MySQL. GORM will manage compatibility with SQLite, though some database-specific optimizations (like native JSON columns) may be emulated or handled differently.
 
 ### Core VFS Tables
 
@@ -83,18 +92,18 @@ INDEX (path) -- for tree queries
 
 **files**
 ```sql
-id, directory_id, name, content_type, size_bytes, storage_type (json|s3),
-json_content (nullable JSON), s3_key (nullable), checksum_sha256, version,
+id, directory_id, name, content_type, size_bytes, storage_type (json|blob),
+json_content (nullable JSON), blob_key (nullable), checksum_sha256, version,
 created_at, updated_at, deleted_at
 UNIQUE INDEX (directory_id, name) WHERE deleted_at IS NULL
 CHECK (size_bytes <= 104857600) -- 100MB limit
-CHECK ((storage_type='json' AND json_content IS NOT NULL AND size_bytes <= 14680064) OR (storage_type='s3' AND s3_key IS NOT NULL)) -- 14MB limit for JSON
+CHECK ((storage_type='json' AND json_content IS NOT NULL AND size_bytes <= 14680064) OR (storage_type='blob' AND blob_key IS NOT NULL)) -- 14MB limit for JSON
 ```
 
 **file_versions**
 ```sql
 id, file_id, version_number, content_type, size_bytes, storage_type,
-json_content, s3_key, checksum_sha256, created_at
+json_content, blob_key, checksum_sha256, created_at
 -- immutable audit trail
 ```
 
@@ -164,9 +173,9 @@ INDEX (status, lease_expires_at) -- for reaper
 
 ### Strong Consistency Guarantees
 
-1.  **Single-Service Transactions**: All VFS mutations (directory + file + event outbox) occur in a single GORM transaction with `REPEATABLE READ` isolation.
+1.  **Single-Service Transactions**: All VFS mutations (directory + file + event outbox) occur in a single GORM transaction. Isolation levels (e.g., `REPEATABLE READ` for MySQL) are configured per driver.
 2.  **Optimistic Concurrency**: `version` columns are used to prevent lost updates on high-contention resources.
-3.  **Tree Lock Protocol**: To prevent parent-child race conditions (e.g., deleting a parent while creating a child), mutations acquire locks on the entire directory ancestry path (`SELECT ... FOR UPDATE`).
+3.  **Tree Lock Protocol**: To prevent parent-child race conditions (e.g., deleting a parent while creating a child), mutations acquire locks on the entire directory ancestry path (`SELECT ... FOR UPDATE`). This is driver-specific and will be implemented for MySQL.
 
 ### Idempotency Protocol
 
@@ -197,10 +206,10 @@ INDEX (status, lease_expires_at) -- for reaper
 
 ### Distributed Operation Safety
 
--   **External API Calls (e.g., S3 Upload)**: These cannot be part of a DB transaction. The pattern is:
-    1.  Perform the external action first (e.g., upload file to S3).
-    2.  If successful, start the database transaction to commit the result (e.g., the `s3_key`).
-    3.  If the database commit fails, schedule a compensating action (e.g., an async job to delete the orphaned S3 object).
+-   **External API Calls (e.g., Blob Storage Upload)**: These cannot be part of a DB transaction. The pattern is:
+    1.  Perform the external action first (e.g., upload file to blob storage).
+    2.  If successful, start the database transaction to commit the result (e.g., the `blob_key`).
+    3.  If the database commit fails, schedule a compensating action (e.g., an async job to delete the orphaned blob object).
 
 ---
 
@@ -237,7 +246,7 @@ INDEX (status, lease_expires_at) -- for reaper
 
 ### Command Implementations
 
--   **`import <local_path> <vfs_path>`**: Validates local file size, generates a `request_id`, and streams the upload to the VFS Service.
+-   **`import <local_path> <vfs_path>`**: Streams a local file to the VFS. If `vfs_path` does not exist, it creates a new file. If it exists, this command creates a new version of the file, effectively modifying it. The operation is idempotent and safe under concurrency.
 -   **`ls [-r] [path]`**: For the `-r` flag, it makes a single API call to a dedicated server-side endpoint that performs an efficient recursive query (e.g., using a Recursive CTE).
 -   **`cat <vfs_path>`**: Streams file content directly from the VFS service to `stdout`. Warns the user before printing binary content.
 -   **`jq <vfs_path> <expression>`**: Checks if the file's `content-type` is JSON. If the file is stored in-database (`storage_type='json'`), it uses a specialized API endpoint to apply the `jq` expression on the server side. Otherwise, it streams the file content to a local `jq` process.
@@ -250,14 +259,15 @@ INDEX (status, lease_expires_at) -- for reaper
 
 ## Deployment Plan
 
-### Docker Compose Services
+### Production Deployment
+The production environment is defined via `docker-compose.yml` and includes the full set of services for high availability and scalability.
 
 ```yaml
 services:
   mysql:
-    # ... (unchanged)
-  localstack:
-    # ... (unchanged)
+    # ... (production-ready MySQL setup)
+  localstack: # Or other S3-compatible service
+    # ... (production-ready blob storage)
   vfs-service:
     # ... (unchanged)
   webhook-daemon:
@@ -268,8 +278,8 @@ services:
       vfs-service: { condition: service_healthy }
       webhook-daemon: { condition: service_started }
     environment:
-      DB_DSN: root:root@tcp(mysql:3306)/vfs
-      WEBHOOK_DAEMON_URL: http://webhook-daemon:9000
+      DB_DSN: "gorm:mysql:..." # DSN for MySQL
+      BLOB_URL: "s3://..."
       WORKER_CONCURRENCY: 10
     deploy:
       replicas: 3
@@ -278,6 +288,35 @@ services:
   cli:
     # ... (unchanged)
 ```
+
+### Local Development & Testing
+For local development, a `docker-compose.override.yml` file simplifies the stack, enabling fast, dependency-free end-to-end testing.
+
+- **Database**: Uses a file-based SQLite database (`/data/vfs.db`).
+- **Blob Storage**: Uses a local file directory (`/data/blobs`).
+- This removes the need to run `mysql` and `localstack` containers for most development and testing scenarios.
+
+```yaml
+# docker-compose.override.yml
+services:
+  vfs-service:
+    environment:
+      DB_DSN: "gorm:sqlite:/data/vfs.db"
+      BLOB_URL: "file:///data/blobs"
+    volumes:
+      - .:/data
+  # ... other services adjusted similarly
+```
+
+---
+
+## Testing Strategy
+
+- **Unit Tests**: Standard Go tests are used for isolated testing of individual packages, functions, and methods to ensure correctness at the lowest level.
+- **Local End-to-End Integration Tests**: The primary mode for rapid development and CI. These are behavioral tests written with Ginkgo v2 and httpexpect that run against the entire application stack.
+    - **Backend**: Configured to use **SQLite** for the database and a **local filesystem directory** for blob storage.
+    - **Benefits**: This approach provides high-fidelity testing of service interactions without the overhead of managing heavier dependencies like MySQL and S3, enabling fast and reliable test execution on developer machines.
+- **Production-Fidelity Integration Tests**: Before a release, the test suite is run against a configuration that mirrors production: using **MySQL** and an **S3-compatible blob storage** (like LocalStack or a dedicated test bucket). This ensures that any database-specific or cloud-service-specific logic is validated.
 
 ---
 
@@ -295,8 +334,8 @@ services:
 
 | Failure | Detection | Mitigation |
 |---------|-----------|------------|
-| MySQL down | Health check fails | Return 503 Service Unavailable; clients should retry with exponential backoff. |
-| S3 unreachable | Upload/download timeout | Return 500 Internal Server Error. For uploads, an async garbage collection job cleans up any orphaned objects. |
+| Database down | Health check fails | Return 503 Service Unavailable; clients should retry with exponential backoff. |
+| Blob Storage unreachable | Upload/download timeout | Return 500 Internal Server Error. For uploads, an async garbage collection job cleans up any orphaned objects. |
 | Webhook endpoint down | 5 consecutive delivery failures | Open the circuit breaker for that endpoint; alert operators. |
 | Event queue backlog | `events` table `pending` count metric | Throttle incoming API requests (backpressure); scale `event-webhook-service` replicas. |
 | Cron lease deadlock | Heartbeat timeout | The lease reaper recovers the lease, allowing another scheduler to claim the job. |
@@ -306,6 +345,6 @@ services:
 
 ---
 
-*Sections on Resource Limits, Observability, Testing, Roadmap, and Future Enhancements are largely robust and remain as in the original document, with the understanding that the architectural changes noted above will propagate to their implementation and testing.*
+*Sections on Resource Limits, Observability, Roadmap, and Future Enhancements are largely robust and remain as in the original document, with the understanding that the architectural changes noted above will propagate to their implementation and testing.*
 
 This document represents the complete architectural specification and will be updated as implementation progresses.
