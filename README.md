@@ -4,7 +4,7 @@ A distributed virtual file system (VFS) backed by MySQL with strong consistency 
 
 ## Project Status
 
-**Current Phase**: Phase 3 Complete ✓
+**Current Phase**: Phase 4 Complete ✓
 
 See [docs/planning.md](docs/planning.md) for the complete architectural specification.
 
@@ -173,7 +173,7 @@ Key variables:
 - [x] **Phase 1**: Foundation (Scaffold, IDL, models, Docker Compose)
 - [x] **Phase 2**: Core VFS Logic (APIs, S3, idempotency, OPA)
 - [x] **Phase 3**: Event & Webhook System
-- [ ] **Phase 4**: Cron & Scheduling
+- [x] **Phase 4**: Cron & Scheduling
 - [ ] **Phase 5**: CLI Gateway
 - [ ] **Phase 6**: Testing & Hardening
 - [ ] **Phase 7**: Documentation & Polish
@@ -185,6 +185,7 @@ See `docs/planning.md` for detailed phase descriptions.
 - [Phase 1 Report](docs/phase-1-report.md) - Foundation complete
 - [Phase 2 Report](docs/phase-2-report.md) - Core VFS Logic complete
 - [Phase 3 Report](docs/phase-3-report.md) - Event & Webhook System complete
+- [Phase 4 Report](docs/phase-4-report.md) - Cron & Scheduling complete
 
 ## Contributing
 
