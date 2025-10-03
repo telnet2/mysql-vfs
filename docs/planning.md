@@ -25,6 +25,7 @@ This document captures the architectural blueprint for a MySQL-based distributed
 - **Webhook retry limit**: 5 attempts with exponential backoff (2s, 4s, 8s, 16s, 32s)
 - **OPA policy timeout**: 200ms (fail-closed on timeout)
 - **Cron lease duration**: 5 minutes with 30-second heartbeat requirement
+- **No database-level foreign keys, triggers, or stored procedures**: Referential integrity managed entirely in application code (see Phase 6 for validation implementation)
 
 ---
 
@@ -109,6 +110,30 @@ id, parent_file_id, derivative_file_id, relation_type, metadata (JSON), created_
 UNIQUE INDEX (parent_file_id, derivative_file_id)
 -- prevents circular dependencies via application-level DAG check
 ```
+
+### Referential Integrity Management
+
+**No Database-Level Foreign Keys**: This system does NOT use database-level foreign key constraints, triggers, or stored procedures. All referential integrity is managed in application code.
+
+**Application-Level Enforcement**:
+- **Tree Locking**: Directory operations lock all ancestor paths (root→leaf) using `SELECT ... FOR UPDATE` to prevent parent deletion during child creation
+- **Optimistic Locking**: File updates require `expected_version` to prevent lost updates
+- **Soft Deletes**: `deleted_at` timestamps prevent hard deletes that could orphan references
+- **Explicit Validation**: Service layer validates parent existence before creating children
+- **Cascade Logic**: Delete operations explicitly handle cascading (e.g., recursive directory deletion deletes all children)
+- **Transaction Boundaries**: All mutations that affect multiple tables use database transactions
+
+**Phase 6 Validation Tasks**:
+- Add referential integrity validation checks (e.g., verify all `parent_id` references exist)
+- Implement orphan detection and cleanup jobs
+- Add foreign key violation detection in integration tests
+- Create repair scripts for inconsistent data
+
+**Design Rationale**:
+- Enables fine-grained control over cascade behavior
+- Avoids database-level locking overhead
+- Supports eventual consistency patterns for distributed operations
+- Allows flexible schema evolution without migration complexity
 
 ### Idempotency & Events
 
@@ -750,8 +775,14 @@ var _ = Describe("File Lifecycle", func() {
 - [ ] Integration test suite (Ginkgo + httpexpect)
 - [ ] Load testing for concurrency edge cases
 - [ ] Circuit breaker and retry scenario tests
+- [ ] Referential integrity validation framework
+  - [ ] Add validation checks for all foreign key relationships (parent_id, directory_id, file_id, etc.)
+  - [ ] Implement orphan detection jobs (find records with missing parent references)
+  - [ ] Create data consistency repair scripts
+  - [ ] Add integration tests that verify referential integrity after mutations
+  - [ ] Implement periodic integrity check cron job
 - [ ] Observability: metrics, tracing, audit logs
-- **Deliverable**: 80%+ test coverage, all edge cases verified
+- **Deliverable**: 80%+ test coverage, all edge cases verified, referential integrity validated
 
 ### Phase 7: Documentation & Polish (Week 11)
 - [ ] API documentation (OpenAPI/Swagger)
