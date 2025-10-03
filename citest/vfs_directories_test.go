@@ -2,6 +2,8 @@ package citest
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -25,9 +27,10 @@ var _ = Describe("VFS Directory Operations", func() {
 
 		// Create root directory
 		root := &models.Directory{
-			ID:   "root",
-			Name: "/",
-			Path: "/",
+			ID:       "root",
+			Name:     "/",
+			Path:     "/",
+			PathHash: calculateTestPathHash("/"),
 		}
 		gormDB := testDB.GetDB()
 		gormDB.FirstOrCreate(root, "id = ?", "root")
@@ -258,4 +261,9 @@ var _ = Describe("VFS Directory Operations", func() {
 
 func stringPtr(s string) *string {
 	return &s
+}
+
+func calculateTestPathHash(path string) string {
+	hash := sha256.Sum256([]byte(path))
+	return hex.EncodeToString(hash[:])
 }

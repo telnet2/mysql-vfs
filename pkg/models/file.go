@@ -31,10 +31,10 @@ type File struct {
 	DeletedAt    gorm.DeletedAt `gorm:"index"`
 
 	// Relations (no DB-level foreign keys - referential integrity managed in application code)
-	Directory         *Directory      `gorm:"-:migration"`
-	Versions          []FileVersion   `gorm:"-:migration"`
-	ParentRelations   []FileRelation  `gorm:"-:migration"`
-	DerivativeRelations []FileRelation `gorm:"-:migration"`
+	Directory         *Directory      `gorm:"-"`
+	Versions          []FileVersion   `gorm:"-"`
+	ParentRelations   []FileRelation  `gorm:"-"`
+	DerivativeRelations []FileRelation `gorm:"-"`
 }
 
 func (File) TableName() string {

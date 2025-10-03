@@ -33,7 +33,7 @@ type Event struct {
 	CreatedAt           time.Time   `gorm:"not null"`
 
 	// Relations (no DB-level foreign keys - referential integrity managed in application code)
-	WebhookJobs []WebhookJob `gorm:"-:migration"`
+	WebhookJobs []WebhookJob `gorm:"-"`
 }
 
 func (Event) TableName() string {

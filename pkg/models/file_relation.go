@@ -14,8 +14,8 @@ type FileRelation struct {
 	CreatedAt        time.Time `gorm:"not null"`
 
 	// Relations (no DB-level foreign keys - referential integrity managed in application code)
-	ParentFile     *File `gorm:"-:migration"`
-	DerivativeFile *File `gorm:"-:migration"`
+	ParentFile     *File `gorm:"-"`
+	DerivativeFile *File `gorm:"-"`
 }
 
 func (FileRelation) TableName() string {

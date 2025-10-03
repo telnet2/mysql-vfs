@@ -20,7 +20,7 @@ type OPAPolicy struct {
 	DeletedAt         gorm.DeletedAt `gorm:"index"`
 
 	// Relations (no DB-level foreign keys - referential integrity managed in application code)
-	Directories []Directory `gorm:"-:migration"`
+	Directories []Directory `gorm:"-"`
 }
 
 func (OPAPolicy) TableName() string {

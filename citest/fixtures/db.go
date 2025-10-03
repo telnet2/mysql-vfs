@@ -70,8 +70,28 @@ func NewTestDatabase() *TestDatabase {
 		ctx:       ctx,
 	}
 
-	// Wait a bit more for MySQL to be fully ready
-	time.Sleep(2 * time.Second)
+	// Wait for MySQL to be fully ready
+	time.Sleep(3 * time.Second)
+
+	// Verify connection works
+	maxRetries := 5
+	for i := 0; i < maxRetries; i++ {
+		testGormDB, err := db.Connect(db.Config{
+			DSN:      dsn,
+			LogLevel: logger.Silent,
+		})
+		if err == nil {
+			sqlDB, _ := testGormDB.DB()
+			if sqlDB != nil {
+				sqlDB.Close()
+			}
+			break
+		}
+		if i == maxRetries-1 {
+			Expect(err).NotTo(HaveOccurred(), "Failed to connect after retries")
+		}
+		time.Sleep(1 * time.Second)
+	}
 
 	// Run migrations
 	testDB.Migrate()
@@ -87,7 +107,10 @@ func (td *TestDatabase) Migrate() {
 	})
 	Expect(err).NotTo(HaveOccurred())
 
-	// Migrations are run in db.Connect via AutoMigrate
+	// Run migrations explicitly
+	err = db.AutoMigrate(gormDB)
+	Expect(err).NotTo(HaveOccurred())
+
 	sqlDB, err := gormDB.DB()
 	Expect(err).NotTo(HaveOccurred())
 	sqlDB.Close()

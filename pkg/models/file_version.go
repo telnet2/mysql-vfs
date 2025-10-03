@@ -18,7 +18,7 @@ type FileVersion struct {
 	CreatedAt      time.Time   `gorm:"not null"`
 
 	// Relations (no DB-level foreign keys - referential integrity managed in application code)
-	File *File `gorm:"-:migration"`
+	File *File `gorm:"-"`
 }
 
 func (FileVersion) TableName() string {

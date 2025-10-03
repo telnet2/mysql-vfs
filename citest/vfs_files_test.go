@@ -34,9 +34,10 @@ var _ = Describe("VFS File Operations", func() {
 
 		// Create root directory
 		root := &models.Directory{
-			ID:   "root",
-			Name: "/",
-			Path: "/",
+			ID:       "root",
+			Name:     "/",
+			Path:     "/",
+			PathHash: calculateTestPathHash("/"),
 		}
 		gormDB := testDB.GetDB()
 		gormDB.FirstOrCreate(root, "id = ?", "root")

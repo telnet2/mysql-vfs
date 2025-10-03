@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"path"
@@ -21,6 +23,12 @@ type DirectoryService struct {
 // NewDirectoryService creates a new directory service
 func NewDirectoryService(db *gorm.DB) *DirectoryService {
 	return &DirectoryService{db: db}
+}
+
+// calculatePathHash calculates SHA256 hash of a path for uniqueness constraint
+func calculatePathHash(path string) string {
+	hash := sha256.Sum256([]byte(path))
+	return hex.EncodeToString(hash[:])
 }
 
 // emitEvent creates an event in the same transaction
@@ -102,10 +110,12 @@ func (s *DirectoryService) CreateDirectory(ctx context.Context, parentPath, name
 		}
 
 		// Create directory
+		pathHash := calculatePathHash(fullPath)
 		dir = &models.Directory{
 			ID:          uuid.New().String(),
 			Name:        name,
 			Path:        fullPath,
+			PathHash:    pathHash,
 			Version:     1,
 			OPAPolicyID: opaPolicyID,
 			CreatedAt:   time.Now(),

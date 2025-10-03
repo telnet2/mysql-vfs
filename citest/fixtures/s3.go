@@ -6,6 +6,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/telnet2/mysql-vfs/pkg/storage"
+	_ "gocloud.dev/blob/memblob" // Register mem:// driver
 )
 
 // TestS3 manages an in-memory storage for testing
