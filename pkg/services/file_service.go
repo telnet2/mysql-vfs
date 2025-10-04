@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/telnet2/mysql-vfs/pkg/domain"
+	"github.com/telnet2/mysql-vfs/pkg/events"
 	"github.com/telnet2/mysql-vfs/pkg/models"
 	"github.com/telnet2/mysql-vfs/pkg/storage"
 	"gorm.io/gorm"
@@ -27,9 +28,10 @@ const (
 
 // FileService handles file operations
 type FileService struct {
-	db          *gorm.DB
-	storage     storage.Storage
-	filesLoader *domain.FilesLoader
+	db           *gorm.DB
+	storage      storage.Storage
+	filesLoader  *domain.FilesLoader
+	eventTrigger domain.EventTrigger // For lifecycle events
 }
 
 // NewFileService creates a new file service
@@ -46,6 +48,16 @@ func NewFileServiceWithValidation(db *gorm.DB, storage storage.Storage, filesLoa
 		db:          db,
 		storage:     storage,
 		filesLoader: filesLoader,
+	}
+}
+
+// NewFileServiceWithLifecycle creates a new file service with lifecycle events
+func NewFileServiceWithLifecycle(db *gorm.DB, storage storage.Storage, filesLoader *domain.FilesLoader, eventTrigger domain.EventTrigger) *FileService {
+	return &FileService{
+		db:           db,
+		storage:      storage,
+		filesLoader:  filesLoader,
+		eventTrigger: eventTrigger,
 	}
 }
 
@@ -83,44 +95,153 @@ func (s *FileService) emitEvent(ctx context.Context, tx *gorm.DB, eventType, agg
 	return nil
 }
 
-// CreateFile creates a new file
+// getUserContext extracts user context from request context
+func (s *FileService) getUserContext(ctx context.Context) events.UserContext {
+	// TODO: Extract from actual auth context
+	// For now, return a default user
+	return events.UserContext{
+		UserID: "system",
+		Role:   "admin",
+		Groups: []string{},
+	}
+}
+
+// getRequestID gets or generates a request ID
+func (s *FileService) getRequestID(ctx context.Context) string {
+	requestID := ctx.Value("requestID")
+	if requestID == nil {
+		return uuid.New().String()
+	}
+	if rid, ok := requestID.(string); ok {
+		return rid
+	}
+	return uuid.New().String()
+}
+
+// CreateFile creates a new file with lifecycle event tracking
 func (s *FileService) CreateFile(ctx context.Context, directoryPath, name, contentType string, size int64, content io.Reader) (*models.File, error) {
-	// Validate size
-	if size > MaxFileSize {
-		return nil, fmt.Errorf("file size %d exceeds maximum %d bytes", size, MaxFileSize)
-	}
-
-	// Validate name
-	if name == "" || name == "." || name == ".." {
-		return nil, fmt.Errorf("invalid file name")
-	}
-
-	// Reject path separators (both Unix and Windows style)
-	if strings.Contains(name, "/") || strings.Contains(name, "\\") {
-		return nil, fmt.Errorf("invalid file name")
-	}
-
-	// Reject control characters (null bytes, etc.)
-	for _, r := range name {
-		if r < 32 || r == 127 { // Control characters
-			return nil, fmt.Errorf("invalid file name")
-		}
-	}
-
 	// Read content into buffer for checksum and storage
 	buf := new(bytes.Buffer)
 	if _, err := io.Copy(buf, content); err != nil {
 		return nil, fmt.Errorf("failed to read content: %w", err)
 	}
-
 	contentBytes := buf.Bytes()
 
 	// Calculate checksum
 	hash := sha256.Sum256(contentBytes)
 	checksum := hex.EncodeToString(hash[:])
 
+	// Get user context
+	user := s.getUserContext(ctx)
+	requestID := s.getRequestID(ctx)
+
+	// Create operation context
+	opCtx := &events.OperationContext{
+		OperationID:  uuid.New().String(),
+		Category:     events.CategoryFile,
+		Operation:    events.OperationCreate,
+		ResourcePath: directoryPath + "/" + name,
+		UserID:       user.UserID,
+		StartedAt:    time.Now(),
+		CurrentStage: events.StageAuthorization,
+		Status:       "in_progress",
+	}
+
+	// ========== AUTHORIZATION STAGE ==========
+	if s.eventTrigger != nil {
+		authStartTime := time.Now()
+		opCtx.AuthorizationStartedAt = &authStartTime
+
+		// Emit authorization.started
+		authPayload := s.buildAuthPayload(opCtx, user, requestID, name, contentType, size, checksum, events.ActionStarted, events.OutcomeSucceeded)
+		s.eventTrigger.Emit(ctx, "file.create.authorization.started", authPayload)
+
+		// TODO: Actual authorization check would go here
+		// For now, we assume authorization succeeds
+
+		authEndTime := time.Now()
+		opCtx.AuthorizationEndedAt = &authEndTime
+
+		// Emit authorization.succeeded
+		authSuccessPayload := s.buildAuthPayload(opCtx, user, requestID, name, contentType, size, checksum, events.ActionChecked, events.OutcomeSucceeded)
+		authSuccessPayload.Decision = "allow"
+		authSuccessPayload.Reason = "default allow policy"
+		s.eventTrigger.Emit(ctx, "file.create.authorization.succeeded", authSuccessPayload)
+	}
+
+	// ========== VALIDATION STAGE ==========
+	opCtx.CurrentStage = events.StageValidation
+
+	// Basic validation
+	if size > MaxFileSize {
+		if s.eventTrigger != nil {
+			valPayload := s.buildValidationPayload(opCtx, user, requestID, name, contentType, size, checksum, events.ActionChecked, events.OutcomeFailed)
+			valPayload.ValidationType = "size"
+			valPayload.Violations = []events.Violation{{
+				Field:   "size",
+				Message: fmt.Sprintf("file size %d exceeds maximum %d bytes", size, MaxFileSize),
+				Code:    "max_size_exceeded",
+			}}
+			s.eventTrigger.Emit(ctx, "file.create.validation.size.failed", valPayload)
+		}
+		return nil, fmt.Errorf("file size %d exceeds maximum %d bytes", size, MaxFileSize)
+	}
+
+	// Validate name
+	if name == "" || name == "." || name == ".." {
+		if s.eventTrigger != nil {
+			valPayload := s.buildValidationPayload(opCtx, user, requestID, name, contentType, size, checksum, events.ActionChecked, events.OutcomeFailed)
+			valPayload.ValidationType = "name"
+			valPayload.Violations = []events.Violation{{
+				Field:   "name",
+				Message: "invalid file name",
+				Code:    "invalid_name",
+			}}
+			s.eventTrigger.Emit(ctx, "file.create.validation.failed", valPayload)
+		}
+		return nil, fmt.Errorf("invalid file name")
+	}
+
+	// Reject path separators
+	if strings.Contains(name, "/") || strings.Contains(name, "\\") {
+		if s.eventTrigger != nil {
+			valPayload := s.buildValidationPayload(opCtx, user, requestID, name, contentType, size, checksum, events.ActionChecked, events.OutcomeFailed)
+			valPayload.ValidationType = "name"
+			valPayload.Violations = []events.Violation{{
+				Field:   "name",
+				Message: "file name cannot contain path separators",
+				Code:    "invalid_name",
+			}}
+			s.eventTrigger.Emit(ctx, "file.create.validation.failed", valPayload)
+		}
+		return nil, fmt.Errorf("invalid file name")
+	}
+
+	// Reject control characters
+	for _, r := range name {
+		if r < 32 || r == 127 {
+			if s.eventTrigger != nil {
+				valPayload := s.buildValidationPayload(opCtx, user, requestID, name, contentType, size, checksum, events.ActionChecked, events.OutcomeFailed)
+				valPayload.ValidationType = "name"
+				valPayload.Violations = []events.Violation{{
+					Field:   "name",
+					Message: "file name contains control characters",
+					Code:    "invalid_name",
+				}}
+				s.eventTrigger.Emit(ctx, "file.create.validation.failed", valPayload)
+			}
+			return nil, fmt.Errorf("invalid file name")
+		}
+	}
+
+	// ========== EXECUTION STAGE ==========
+	opCtx.CurrentStage = events.StageExecution
+
 	var file *models.File
 	err := s.db.Transaction(func(tx *gorm.DB) error {
+		execStartTime := time.Now()
+		opCtx.ExecutionStartedAt = &execStartTime
+
 		// Find directory
 		var dir models.Directory
 		if err := tx.Where("path = ? AND deleted_at IS NULL", directoryPath).First(&dir).Error; err != nil {
@@ -143,10 +264,44 @@ func (s *FileService) CreateFile(ctx context.Context, directoryPath, name, conte
 		// Skip validation for special files (they don't validate against themselves)
 		isSpecialFile := strings.HasPrefix(name, ".")
 		if s.filesLoader != nil && !isSpecialFile {
+			if s.eventTrigger != nil {
+				valPayload := s.buildValidationPayload(opCtx, user, requestID, name, contentType, size, checksum, events.ActionChecking, events.OutcomeSucceeded)
+				valPayload.ValidationType = "schema"
+				s.eventTrigger.Emit(ctx, "file.create.validation.schema.checking", valPayload)
+			}
+
 			if validationErr := s.filesLoader.ValidateFile(ctx, dir.ID, name, contentBytes); validationErr != nil {
-				// Return validation error to caller (will include detailed error messages)
+				// Schema validation failed
+				if s.eventTrigger != nil {
+					valPayload := s.buildValidationPayload(opCtx, user, requestID, name, contentType, size, checksum, events.ActionChecked, events.OutcomeFailed)
+					valPayload.ValidationType = "schema"
+					valPayload.Violations = []events.Violation{{
+						Field:   "content",
+						Message: validationErr.Error(),
+						Code:    "schema_validation_failed",
+					}}
+					s.eventTrigger.Emit(ctx, "file.create.validation.schema.failed", valPayload)
+				}
 				return validationErr
 			}
+
+			// Schema validation succeeded
+			if s.eventTrigger != nil {
+				valPayload := s.buildValidationPayload(opCtx, user, requestID, name, contentType, size, checksum, events.ActionChecked, events.OutcomeSucceeded)
+				valPayload.ValidationType = "schema"
+				s.eventTrigger.Emit(ctx, "file.create.validation.schema.succeeded", valPayload)
+			}
+		}
+
+		// All validation passed
+		if s.eventTrigger != nil {
+			valEndTime := time.Now()
+			opCtx.ValidationStartedAt = &execStartTime
+			opCtx.ValidationEndedAt = &valEndTime
+
+			valPayload := s.buildValidationPayload(opCtx, user, requestID, name, contentType, size, checksum, events.ActionChecked, events.OutcomeSucceeded)
+			valPayload.ValidationType = "all"
+			s.eventTrigger.Emit(ctx, "file.create.validation.succeeded", valPayload)
 		}
 
 		// Determine storage type
@@ -229,8 +384,32 @@ func (s *FileService) CreateFile(ctx context.Context, directoryPath, name, conte
 		return nil
 	})
 
+	// ========== COMPLETION STAGE ==========
 	if err != nil {
+		// Operation failed
+		if s.eventTrigger != nil {
+			opCtx.Status = "failed"
+			opCtx.ErrorMessage = err.Error()
+			completedAt := time.Now()
+			opCtx.CompletedAt = &completedAt
+
+			completionPayload := s.buildCompletionPayload(opCtx, user, requestID, file, false, err.Error())
+			s.eventTrigger.Emit(ctx, "file.create.completion.failed", completionPayload)
+		}
 		return nil, err
+	}
+
+	// Operation succeeded
+	if s.eventTrigger != nil {
+		opCtx.Status = "succeeded"
+		completedAt := time.Now()
+		opCtx.CompletedAt = &completedAt
+
+		completionPayload := s.buildCompletionPayload(opCtx, user, requestID, file, true, "")
+		s.eventTrigger.Emit(ctx, "file.create.completion.succeeded", completionPayload)
+
+		// Also emit legacy file.created event for backward compatibility
+		s.eventTrigger.Emit(ctx, "file.created", completionPayload)
 	}
 
 	return file, nil
@@ -561,4 +740,150 @@ func (s *FileService) parsePath(filePath string) (string, string) {
 		return "/", filePath[1:]
 	}
 	return filePath[:lastSlash], filePath[lastSlash+1:]
+}
+
+// buildAuthPayload builds an authorization event payload
+func (s *FileService) buildAuthPayload(
+	opCtx *events.OperationContext,
+	user events.UserContext,
+	requestID string,
+	name string,
+	contentType string,
+	size int64,
+	checksum string,
+	action events.Action,
+	outcome events.Outcome,
+) *events.AuthorizationEventPayload {
+	now := time.Now()
+	return &events.AuthorizationEventPayload{
+		Event: events.LifecycleEvent{
+			ID:          uuid.New().String(),
+			Category:    events.CategoryFile,
+			Operation:   events.OperationCreate,
+			Stage:       events.StageAuthorization,
+			Action:      action,
+			Outcome:     outcome,
+			Timestamp:   now,
+			OperationID: opCtx.OperationID,
+		},
+		Resource: events.FileResource{
+			Type:        events.ResourceTypeFile,
+			ID:          "",
+			Name:        name,
+			Path:        opCtx.ResourcePath,
+			SizeBytes:   size,
+			ContentType: contentType,
+			ChecksumSHA256: checksum,
+		},
+		User: events.UserContext{
+			UserID: user.UserID,
+			Role:   user.Role,
+			Groups: user.Groups,
+		},
+		Metadata: events.EventMetadata{
+			RequestID: requestID,
+		},
+	}
+}
+
+// buildValidationPayload builds a validation event payload
+func (s *FileService) buildValidationPayload(
+	opCtx *events.OperationContext,
+	user events.UserContext,
+	requestID string,
+	name string,
+	contentType string,
+	size int64,
+	checksum string,
+	action events.Action,
+	outcome events.Outcome,
+) *events.ValidationEventPayload {
+	now := time.Now()
+	return &events.ValidationEventPayload{
+		Event: events.LifecycleEvent{
+			ID:          uuid.New().String(),
+			Category:    events.CategoryFile,
+			Operation:   events.OperationCreate,
+			Stage:       events.StageValidation,
+			Action:      action,
+			Outcome:     outcome,
+			Timestamp:   now,
+			OperationID: opCtx.OperationID,
+		},
+		Resource: events.FileResource{
+			Type:        events.ResourceTypeFile,
+			ID:          "",
+			Name:        name,
+			Path:        opCtx.ResourcePath,
+			SizeBytes:   size,
+			ContentType: contentType,
+			ChecksumSHA256: checksum,
+		},
+		User: events.UserContext{
+			UserID: user.UserID,
+			Role:   user.Role,
+			Groups: user.Groups,
+		},
+		Metadata: events.EventMetadata{
+			RequestID: requestID,
+		},
+	}
+}
+
+// buildCompletionPayload builds a completion event payload
+func (s *FileService) buildCompletionPayload(
+	opCtx *events.OperationContext,
+	user events.UserContext,
+	requestID string,
+	file *models.File,
+	success bool,
+	errorMessage string,
+) *events.CompletionEventPayload {
+	now := time.Now()
+
+	var resource events.FileResource
+	if file != nil {
+		resource = events.FileResource{
+			Type:           events.ResourceTypeFile,
+			ID:             file.ID,
+			Name:           file.Name,
+			Path:           opCtx.ResourcePath,
+			SizeBytes:      file.SizeBytes,
+			ContentType:    file.ContentType,
+			Version:        file.Version,
+			ChecksumSHA256: file.ChecksumSHA256,
+			CreatedAt:      file.CreatedAt,
+			UpdatedAt:      file.UpdatedAt,
+		}
+	}
+
+	totalDuration := int64(0)
+	if opCtx.CompletedAt != nil {
+		totalDuration = opCtx.CompletedAt.Sub(opCtx.StartedAt).Milliseconds()
+	}
+
+	return &events.CompletionEventPayload{
+		Event: events.LifecycleEvent{
+			ID:          uuid.New().String(),
+			Category:    events.CategoryFile,
+			Operation:   events.OperationCreate,
+			Stage:       events.StageCompletion,
+			Timestamp:   now,
+			OperationID: opCtx.OperationID,
+		},
+		Resource:           resource,
+		User: events.UserContext{
+			UserID: user.UserID,
+			Role:   user.Role,
+			Groups: user.Groups,
+		},
+		Metadata: events.EventMetadata{
+			RequestID: requestID,
+		},
+		OperationContext:  opCtx,
+		Success:           success,
+		TotalDurationMs:   totalDuration,
+		ErrorMessage:      errorMessage,
+		RollbackPerformed: false,
+	}
 }

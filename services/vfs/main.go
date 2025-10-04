@@ -16,6 +16,7 @@ import (
 	"github.com/telnet2/mysql-vfs/pkg/config"
 	"github.com/telnet2/mysql-vfs/pkg/db"
 	"github.com/telnet2/mysql-vfs/pkg/domain"
+	"github.com/telnet2/mysql-vfs/pkg/events/handlers"
 	"github.com/telnet2/mysql-vfs/pkg/idempotency"
 	"github.com/telnet2/mysql-vfs/pkg/middleware"
 	"github.com/telnet2/mysql-vfs/pkg/models"
@@ -85,10 +86,26 @@ func main() {
 	filesLoader := domain.NewFilesLoader(fileRepo, dirRepo, cfg.SchemaCacheTTL)
 	policyLoader := domain.NewPolicyLoader(fileRepo, dirRepo, cfg.PolicyCacheTTL)
 	quotaLoader := domain.NewQuotaLoader(fileRepo, dirRepo, cfg.QuotaCacheTTL)
+	eventsLoader := domain.NewEventsLoader(fileRepo, dirRepo, cfg.SchemaCacheTTL) // Reuse schema TTL for events
+
+	// Initialize event handler registry
+	handlerRegistry := handlers.NewRegistry()
+	handlerRegistry.Register(handlers.NewWebhookHandler())
+	handlerRegistry.Register(handlers.NewLogHandler())
+	handlerRegistry.Register(handlers.NewMetricsHandler())
+
+	// Initialize lifecycle event trigger
+	eventTrigger := domain.NewLifecycleEventTrigger(
+		eventsLoader,
+		handlerRegistry,
+		domain.EventTriggerConfig{
+			MaxConcurrentHandlers: 10,
+		},
+	)
 
 	// Initialize services
 	dirService := services.NewDirectoryService(database)
-	fileService := services.NewFileServiceWithValidation(database, storageService, filesLoader)
+	fileService := services.NewFileServiceWithLifecycle(database, storageService, filesLoader, eventTrigger)
 	idempotencyService := idempotency.NewServiceWithTTL(database, cfg.IdempotencyTTL)
 
 	// Start idempotency cleanup worker
@@ -149,7 +166,9 @@ func main() {
 	log.Printf("VFS Service starting on port %s", cfg.ServerPort)
 	log.Printf("Authentication: %s", cfg.Auth.Provider)
 	log.Printf("Authorization: ENABLED (OPA policies via .rego files)")
-	log.Printf("Schema validation: ENABLED (.jsonschema files)")
+	log.Printf("Schema validation: ENABLED (.files special files)")
+	log.Printf("Lifecycle events: ENABLED (.events special files)")
+	log.Printf("Event handlers: webhook, log, metrics")
 	log.Printf("Cache TTL - Schema: %v, Policy: %v, Quota: %v", cfg.SchemaCacheTTL, cfg.PolicyCacheTTL, cfg.QuotaCacheTTL)
 	h.Spin()
 }

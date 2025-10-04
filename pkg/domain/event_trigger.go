@@ -10,6 +10,10 @@ import (
 	"github.com/telnet2/mysql-vfs/pkg/events/handlers"
 )
 
+// EventTrigger is the interface for emitting lifecycle events
+// Aliased from events package for domain layer convenience
+type EventTrigger = events.EventTrigger
+
 // LifecycleEventTrigger is the concrete implementation of EventTrigger
 type LifecycleEventTrigger struct {
 	eventsLoader    *EventsLoader
