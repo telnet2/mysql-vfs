@@ -32,4 +32,13 @@ var (
 
 	// ErrVersionConflict is returned when there's a version conflict (optimistic locking)
 	ErrVersionConflict = errors.New("version conflict")
+
+	// ErrNotImplemented is returned when a feature is not yet implemented
+	ErrNotImplemented = errors.New("not implemented")
+
+	// ErrInvalidInput is returned when input validation fails
+	ErrInvalidInput = errors.New("invalid input")
+
+	// ErrNotFound is a generic not found error
+	ErrNotFound = errors.New("not found")
 )
