@@ -23,7 +23,7 @@
   - [x] Enqueue actions into events pipeline with idempotency metadata
   - [x] Update workers to dispatch `ext.*` actions (workflow/webhook emitters)
   - [x] Add unit tests covering trigger execution and failure paths
-  - [ ] Add e2e tests covering trigger execution and failure paths
+  - [x] Add e2e tests covering trigger execution and failure paths
 <!-- - [ ] Integrate `.workflow` transition enforcement -->
 <!-- - [ ] Add `.webhook` policy evaluation (optional future) -->
 <!-- - [ ] Add `.retention` / `.transform` / `.quota` policy handlers (optional future) -->
