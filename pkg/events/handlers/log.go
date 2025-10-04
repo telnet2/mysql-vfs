@@ -25,16 +25,16 @@ func (h *LogHandler) Type() events.HandlerType {
 }
 
 // Handle processes a log event
-func (h *LogHandler) Handle(ctx context.Context, handler *events.EventHandler, payload interface{}) error {
+func (h *LogHandler) Handle(ctx context.Context, handler *events.EventHandler, payload interface{}) events.HandlerResponse {
 	// Parse log config
 	configBytes, err := json.Marshal(handler.Config)
 	if err != nil {
-		return fmt.Errorf("invalid log config: %w", err)
+		return events.ErrorResponse(fmt.Sprintf("invalid log config: %v", err))
 	}
 
 	var config events.LogConfig
 	if err := json.Unmarshal(configBytes, &config); err != nil {
-		return fmt.Errorf("invalid log config: %w", err)
+		return events.ErrorResponse(fmt.Sprintf("invalid log config: %v", err))
 	}
 
 	// Render message template
@@ -43,7 +43,7 @@ func (h *LogHandler) Handle(ctx context.Context, handler *events.EventHandler, p
 	// Log at appropriate level
 	h.logMessage(config.Level, handler.Name, message)
 
-	return nil
+	return events.SuccessResponse()
 }
 
 // renderTemplate renders a template string with payload data

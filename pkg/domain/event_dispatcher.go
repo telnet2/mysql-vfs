@@ -128,8 +128,9 @@ func (d *EventDispatcher) dispatchAsync(ctx context.Context, handler events.Even
 		}
 
 		// Execute handler
-		if err := handlerImpl.Handle(ctx, &handler, payload); err != nil {
-			log.Printf("handler %s (type: %s) failed: %v", handler.Name, handler.Type, err)
+		response := handlerImpl.Handle(ctx, &handler, payload)
+		if !response.Success {
+			log.Printf("handler %s (type: %s) failed: %s", handler.Name, handler.Type, response.Message)
 		}
 	}()
 }

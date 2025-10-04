@@ -158,6 +158,8 @@ type WebhookConfig struct {
 	TimeoutMs      int                     `json:"timeout_ms,omitempty"`
 	Retry          *RetryConfig            `json:"retry,omitempty"`
 	CircuitBreaker *CircuitBreakerConfig   `json:"circuit_breaker,omitempty"`
+	OnTimeout      string                  `json:"on_timeout,omitempty"`      // "abort" or "allow" (default: allow)
+	OnError        string                  `json:"on_error,omitempty"`        // "abort" or "allow" (default: allow)
 }
 
 // LogLevel represents log severity level
@@ -185,12 +187,14 @@ type MetricsConfig struct {
 
 // EventHandler represents a single event handler configuration
 type EventHandler struct {
-	Name    string        `json:"name"`
-	Events  []EventType   `json:"events"`
-	Type    HandlerType   `json:"type"`
-	Enabled *bool         `json:"enabled,omitempty"` // nil = true, explicit true/false
-	Filter  *EventFilter  `json:"filter,omitempty"`
-	Config  interface{}   `json:"config"` // Will be WebhookConfig, LogConfig, or MetricsConfig
+	Name         string        `json:"name"`
+	Events       []EventType   `json:"events"` // Can include wildcards: "file.*.authorization.*"
+	Type         HandlerType   `json:"type"`
+	Enabled      *bool         `json:"enabled,omitempty"`       // nil = true, explicit true/false
+	Synchronous  *bool         `json:"synchronous,omitempty"`   // nil = false, if true handler blocks operation
+	VetoEnabled  *bool         `json:"veto_enabled,omitempty"`  // nil = false, if true handler can abort operation
+	Filter       *EventFilter  `json:"filter,omitempty"`
+	Config       interface{}   `json:"config"` // Will be WebhookConfig, LogConfig, or MetricsConfig
 }
 
 // IsEnabled returns whether the handler is enabled (default: true)
@@ -199,6 +203,22 @@ func (h *EventHandler) IsEnabled() bool {
 		return true
 	}
 	return *h.Enabled
+}
+
+// IsSynchronous returns whether the handler should be executed synchronously (default: false)
+func (h *EventHandler) IsSynchronous() bool {
+	if h.Synchronous == nil {
+		return false
+	}
+	return *h.Synchronous
+}
+
+// IsVetoEnabled returns whether the handler can veto operations (default: false)
+func (h *EventHandler) IsVetoEnabled() bool {
+	if h.VetoEnabled == nil {
+		return false
+	}
+	return *h.VetoEnabled
 }
 
 // EventsFile represents the structure of a .events file

@@ -25,21 +25,21 @@ func (h *MetricsHandler) Type() events.HandlerType {
 }
 
 // Handle processes a metrics event
-func (h *MetricsHandler) Handle(ctx context.Context, handler *events.EventHandler, payload interface{}) error {
+func (h *MetricsHandler) Handle(ctx context.Context, handler *events.EventHandler, payload interface{}) events.HandlerResponse {
 	// Parse metrics config
 	configBytes, err := json.Marshal(handler.Config)
 	if err != nil {
-		return fmt.Errorf("invalid metrics config: %w", err)
+		return events.ErrorResponse(fmt.Sprintf("invalid metrics config: %v", err))
 	}
 
 	var config events.MetricsConfig
 	if err := json.Unmarshal(configBytes, &config); err != nil {
-		return fmt.Errorf("invalid metrics config: %w", err)
+		return events.ErrorResponse(fmt.Sprintf("invalid metrics config: %v", err))
 	}
 
 	// Validate metric name
 	if config.MetricName == "" {
-		return fmt.Errorf("metric_name is required")
+		return events.ErrorResponse("metric_name is required")
 	}
 
 	// Render tags with templates
@@ -51,7 +51,7 @@ func (h *MetricsHandler) Handle(ctx context.Context, handler *events.EventHandle
 	// Emit metric (log format that can be scraped by monitoring systems)
 	h.emitMetric(config.MetricName, value, renderedTags)
 
-	return nil
+	return events.SuccessResponse()
 }
 
 // renderTags renders tag templates with payload data

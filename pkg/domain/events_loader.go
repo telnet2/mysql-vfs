@@ -162,6 +162,25 @@ func (l *EventsLoader) mergeConfigs(parent, child *events.EventsFile) *events.Ev
 	return merged
 }
 
+// GetAllHandlers returns all enabled handlers (regardless of event type)
+func (l *EventsLoader) GetAllHandlers(ctx context.Context, dirID string) ([]events.EventHandler, error) {
+	config, err := l.Load(ctx, dirID)
+	if err != nil {
+		// No .events config - return empty list
+		return []events.EventHandler{}, nil
+	}
+
+	var handlers []events.EventHandler
+	for _, handler := range config.Handlers {
+		// Only return enabled handlers
+		if handler.IsEnabled() {
+			handlers = append(handlers, handler)
+		}
+	}
+
+	return handlers, nil
+}
+
 // GetHandlersForEvent returns all enabled handlers for a specific event type
 func (l *EventsLoader) GetHandlersForEvent(ctx context.Context, dirID string, eventType events.EventType) ([]events.EventHandler, error) {
 	config, err := l.Load(ctx, dirID)

@@ -8,9 +8,10 @@ import (
 
 // Handler is the interface that all event handlers must implement
 type Handler interface {
-	// Handle processes an event
-	// payload can be FileEventPayload, DirectoryEventPayload, or MoveEventPayload
-	Handle(ctx context.Context, handler *events.EventHandler, payload interface{}) error
+	// Handle processes an event and returns a HandlerResponse
+	// payload can be FileEventPayload, DirectoryEventPayload, MoveEventPayload,
+	// or lifecycle event payloads (AuthorizationEventPayload, ValidationEventPayload, etc.)
+	Handle(ctx context.Context, handler *events.EventHandler, payload interface{}) events.HandlerResponse
 
 	// Type returns the handler type (webhook, log, metrics)
 	Type() events.HandlerType

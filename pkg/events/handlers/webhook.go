@@ -127,22 +127,22 @@ func (h *WebhookHandler) Type() events.HandlerType {
 	return events.HandlerTypeWebhook
 }
 
-// Handle processes a webhook event
-func (h *WebhookHandler) Handle(ctx context.Context, handler *events.EventHandler, payload interface{}) error {
+// Handle processes a webhook event and returns HandlerResponse
+func (h *WebhookHandler) Handle(ctx context.Context, handler *events.EventHandler, payload interface{}) events.HandlerResponse {
 	// Parse webhook config
 	configBytes, err := json.Marshal(handler.Config)
 	if err != nil {
-		return fmt.Errorf("invalid webhook config: %w", err)
+		return events.ErrorResponse(fmt.Sprintf("invalid webhook config: %v", err))
 	}
 
 	var config events.WebhookConfig
 	if err := json.Unmarshal(configBytes, &config); err != nil {
-		return fmt.Errorf("invalid webhook config: %w", err)
+		return events.ErrorResponse(fmt.Sprintf("invalid webhook config: %v", err))
 	}
 
 	// Validate config
 	if config.URL == "" {
-		return fmt.Errorf("webhook URL is required")
+		return events.ErrorResponse("webhook URL is required")
 	}
 
 	// Get or create circuit breaker
@@ -157,27 +157,32 @@ func (h *WebhookHandler) Handle(ctx context.Context, handler *events.EventHandle
 		// Check if circuit allows execution
 		cb.OnAttempt()
 		if !cb.CanExecute() {
-			return fmt.Errorf("circuit breaker is open for handler %s", handler.Name)
+			msg := fmt.Sprintf("circuit breaker is open for handler %s", handler.Name)
+			// Check on_error config
+			if handler.IsVetoEnabled() && config.OnError == "abort" {
+				return events.VetoResponse(msg, "circuit_open")
+			}
+			return events.ErrorResponse(msg)
 		}
 	}
 
 	// Execute webhook with retries
-	err = h.executeWithRetry(ctx, &config, payload)
+	response := h.executeWithRetry(ctx, handler, &config, payload)
 
 	// Update circuit breaker
 	if cb != nil {
-		if err != nil {
-			cb.RecordFailure()
-		} else {
+		if response.Success {
 			cb.RecordSuccess()
+		} else {
+			cb.RecordFailure()
 		}
 	}
 
-	return err
+	return response
 }
 
 // executeWithRetry executes the webhook with retry logic
-func (h *WebhookHandler) executeWithRetry(ctx context.Context, config *events.WebhookConfig, payload interface{}) error {
+func (h *WebhookHandler) executeWithRetry(ctx context.Context, handler *events.EventHandler, config *events.WebhookConfig, payload interface{}) events.HandlerResponse {
 	maxAttempts := 1
 	if config.Retry != nil {
 		maxAttempts = config.Retry.MaxAttempts
@@ -186,7 +191,7 @@ func (h *WebhookHandler) executeWithRetry(ctx context.Context, config *events.We
 		}
 	}
 
-	var lastErr error
+	var lastResponse events.HandlerResponse
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		// Add delay before retry (except for first attempt)
 		if attempt > 0 && config.Retry != nil {
@@ -194,27 +199,41 @@ func (h *WebhookHandler) executeWithRetry(ctx context.Context, config *events.We
 			select {
 			case <-time.After(delay):
 			case <-ctx.Done():
-				return ctx.Err()
+				// Context timeout/cancellation
+				if handler.IsVetoEnabled() && config.OnTimeout == "abort" {
+					return events.VetoResponse("request timeout", "timeout")
+				}
+				return events.ErrorResponse(ctx.Err().Error())
 			}
 		}
 
 		// Execute webhook
-		err := h.executeWebhook(ctx, config, payload)
-		if err == nil {
-			return nil
+		response := h.executeWebhook(ctx, handler, config, payload)
+		if response.Success {
+			return response
 		}
 
-		lastErr = err
+		lastResponse = response
+
+		// If handler vetoed, don't retry
+		if response.Veto {
+			return response
+		}
 
 		// Check if error is retryable
-		if !h.isRetryable(err) {
-			return err
+		if !h.isRetryableResponse(response) {
+			return response
 		}
 
-		log.Printf("webhook attempt %d/%d failed: %v", attempt+1, maxAttempts, err)
+		log.Printf("webhook attempt %d/%d failed: %s", attempt+1, maxAttempts, response.Message)
 	}
 
-	return fmt.Errorf("webhook failed after %d attempts: %w", maxAttempts, lastErr)
+	// All retries failed
+	msg := fmt.Sprintf("webhook failed after %d attempts: %s", maxAttempts, lastResponse.Message)
+	if handler.IsVetoEnabled() && config.OnError == "abort" {
+		return events.VetoResponse(msg, "max_retries_exceeded")
+	}
+	return events.ErrorResponse(msg)
 }
 
 // calculateDelay calculates the delay before next retry
@@ -245,21 +264,40 @@ func (h *WebhookHandler) calculateDelay(attempt int, retry *events.RetryConfig) 
 	return delay
 }
 
-// isRetryable checks if an error is retryable
-func (h *WebhookHandler) isRetryable(err error) bool {
-	// Network errors are retryable
-	// 4xx errors (except 429) are not retryable
-	// 5xx errors are retryable
-	// For now, retry all errors (could be made smarter)
-	return true
+// isRetryableResponse checks if a response is retryable
+func (h *WebhookHandler) isRetryableResponse(response events.HandlerResponse) bool {
+	// Veto responses are never retried
+	if response.Veto {
+		return false
+	}
+
+	// Check error code to determine if retryable
+	// Network errors, 5xx errors, and timeouts are retryable
+	// 4xx errors (client errors) are not retryable
+	switch response.Code {
+	case "timeout", "network_error", "server_error":
+		return true
+	case "client_error", "forbidden", "unauthorized":
+		return false
+	default:
+		// Unknown errors are retryable by default
+		return true
+	}
+}
+
+// WebhookResponse represents the response from a webhook endpoint
+type WebhookResponse struct {
+	Veto    bool   `json:"veto,omitempty"`
+	Message string `json:"message,omitempty"`
+	Code    string `json:"code,omitempty"`
 }
 
 // executeWebhook executes a single webhook request
-func (h *WebhookHandler) executeWebhook(ctx context.Context, config *events.WebhookConfig, payload interface{}) error {
+func (h *WebhookHandler) executeWebhook(ctx context.Context, handler *events.EventHandler, config *events.WebhookConfig, payload interface{}) events.HandlerResponse {
 	// Marshal payload
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("failed to marshal payload: %w", err)
+		return events.ErrorResponse(fmt.Sprintf("failed to marshal payload: %v", err))
 	}
 
 	// Create request
@@ -270,12 +308,12 @@ func (h *WebhookHandler) executeWebhook(ctx context.Context, config *events.Webh
 
 	req, err := http.NewRequestWithContext(ctx, method, config.URL, bytes.NewReader(payloadBytes))
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		return events.ErrorResponse(fmt.Sprintf("failed to create request: %v", err))
 	}
 
 	// Set headers
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "VFS-Webhook/1.0")
+	req.Header.Set("User-Agent", "VFS-Webhook/2.0")
 	for key, value := range config.Headers {
 		req.Header.Set(key, value)
 	}
@@ -297,19 +335,92 @@ func (h *WebhookHandler) executeWebhook(ctx context.Context, config *events.Webh
 	// Execute request
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("webhook request failed: %w", err)
+		// Network error or timeout
+		if handler.IsVetoEnabled() && config.OnTimeout == "abort" {
+			return events.VetoResponse(fmt.Sprintf("webhook request failed: %v", err), "network_error")
+		}
+		return events.HandlerResponse{
+			Success: false,
+			Veto:    false,
+			Message: fmt.Sprintf("webhook request failed: %v", err),
+			Code:    "network_error",
+		}
 	}
 	defer resp.Body.Close()
 
-	// Read response body (for logging)
+	// Read response body
 	body, _ := io.ReadAll(resp.Body)
 
-	// Check status code
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("webhook returned status %d: %s", resp.StatusCode, string(body))
+	// Parse response body for veto information (if JSON)
+	var webhookResp WebhookResponse
+	if err := json.Unmarshal(body, &webhookResp); err == nil {
+		// Successfully parsed JSON response
+		if handler.IsVetoEnabled() && webhookResp.Veto {
+			return events.VetoResponse(webhookResp.Message, webhookResp.Code)
+		}
 	}
 
-	return nil
+	// Check status code
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		// Success
+		return events.SuccessResponse()
+	}
+
+	// Handle error status codes
+	statusMsg := fmt.Sprintf("webhook returned status %d: %s", resp.StatusCode, string(body))
+
+	// 403 Forbidden always means veto if veto is enabled
+	if resp.StatusCode == 403 && handler.IsVetoEnabled() {
+		message := webhookResp.Message
+		if message == "" {
+			message = statusMsg
+		}
+		code := webhookResp.Code
+		if code == "" {
+			code = "forbidden"
+		}
+		return events.VetoResponse(message, code)
+	}
+
+	// 401 Unauthorized
+	if resp.StatusCode == 401 && handler.IsVetoEnabled() {
+		message := webhookResp.Message
+		if message == "" {
+			message = statusMsg
+		}
+		code := webhookResp.Code
+		if code == "" {
+			code = "unauthorized"
+		}
+		return events.VetoResponse(message, code)
+	}
+
+	// 4xx client errors
+	if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+		return events.HandlerResponse{
+			Success: false,
+			Veto:    false,
+			Message: statusMsg,
+			Code:    "client_error",
+		}
+	}
+
+	// 5xx server errors
+	if resp.StatusCode >= 500 {
+		// Check on_error config
+		if handler.IsVetoEnabled() && config.OnError == "abort" {
+			return events.VetoResponse(statusMsg, "server_error")
+		}
+		return events.HandlerResponse{
+			Success: false,
+			Veto:    false,
+			Message: statusMsg,
+			Code:    "server_error",
+		}
+	}
+
+	// Unexpected status code
+	return events.ErrorResponse(statusMsg)
 }
 
 // generateHMAC generates HMAC-SHA256 signature
