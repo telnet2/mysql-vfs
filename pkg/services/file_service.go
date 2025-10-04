@@ -27,9 +27,9 @@ const (
 
 // FileService handles file operations
 type FileService struct {
-	db           *gorm.DB
-	storage      storage.Storage
-	schemaLoader *domain.SchemaLoader
+	db          *gorm.DB
+	storage     storage.Storage
+	filesLoader *domain.FilesLoader
 }
 
 // NewFileService creates a new file service
@@ -40,12 +40,12 @@ func NewFileService(db *gorm.DB, storage storage.Storage) *FileService {
 	}
 }
 
-// NewFileServiceWithValidation creates a new file service with schema validation
-func NewFileServiceWithValidation(db *gorm.DB, storage storage.Storage, schemaLoader *domain.SchemaLoader) *FileService {
+// NewFileServiceWithValidation creates a new file service with .files validation
+func NewFileServiceWithValidation(db *gorm.DB, storage storage.Storage, filesLoader *domain.FilesLoader) *FileService {
 	return &FileService{
-		db:           db,
-		storage:      storage,
-		schemaLoader: schemaLoader,
+		db:          db,
+		storage:     storage,
+		filesLoader: filesLoader,
 	}
 }
 
@@ -139,11 +139,11 @@ func (s *FileService) CreateFile(ctx context.Context, directoryPath, name, conte
 			return err
 		}
 
-		// Validate content against schema (if SchemaLoader is configured and content is JSON)
+		// Validate content against .files rules (pattern + schema)
 		// Skip validation for special files (they don't validate against themselves)
 		isSpecialFile := strings.HasPrefix(name, ".")
-		if s.schemaLoader != nil && contentType == "application/json" && !isSpecialFile {
-			if validationErr := s.schemaLoader.ValidateContent(ctx, directoryPath, contentBytes); validationErr != nil {
+		if s.filesLoader != nil && !isSpecialFile {
+			if validationErr := s.filesLoader.ValidateFile(ctx, dir.ID, name, contentBytes); validationErr != nil {
 				// Return validation error to caller (will include detailed error messages)
 				return validationErr
 			}

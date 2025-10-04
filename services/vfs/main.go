@@ -32,7 +32,7 @@ type VFSServer struct {
 	dirService         *services.DirectoryService
 	fileService        *services.FileService
 	idempotencyService *idempotency.Service
-	schemaLoader       *domain.SchemaLoader
+	filesLoader        *domain.FilesLoader
 	policyLoader       *domain.PolicyLoader
 	quotaLoader        *domain.QuotaLoader
 }
@@ -82,13 +82,13 @@ func main() {
 	dirRepo := gormrepo.NewGormDirectoryRepository(database)
 
 	// Initialize loaders with caching (from config)
-	schemaLoader := domain.NewSchemaLoader(fileRepo, dirRepo, cfg.SchemaCacheTTL)
+	filesLoader := domain.NewFilesLoader(fileRepo, dirRepo, cfg.SchemaCacheTTL)
 	policyLoader := domain.NewPolicyLoader(fileRepo, dirRepo, cfg.PolicyCacheTTL)
 	quotaLoader := domain.NewQuotaLoader(fileRepo, dirRepo, cfg.QuotaCacheTTL)
 
 	// Initialize services
 	dirService := services.NewDirectoryService(database)
-	fileService := services.NewFileServiceWithValidation(database, storageService, schemaLoader)
+	fileService := services.NewFileServiceWithValidation(database, storageService, filesLoader)
 	idempotencyService := idempotency.NewServiceWithTTL(database, cfg.IdempotencyTTL)
 
 	// Start idempotency cleanup worker
@@ -101,7 +101,7 @@ func main() {
 		dirService:         dirService,
 		fileService:        fileService,
 		idempotencyService: idempotencyService,
-		schemaLoader:       schemaLoader,
+		filesLoader:        filesLoader,
 		policyLoader:       policyLoader,
 		quotaLoader:        quotaLoader,
 	}

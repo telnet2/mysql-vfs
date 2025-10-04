@@ -29,22 +29,22 @@ type CreateFileRequest struct {
 
 // FileService contains pure business logic for file operations
 type FileService struct {
-	uow           repository.UnitOfWork
-	schemaLoader  *SchemaLoader
-	quotaLoader   *QuotaLoader
-	policyLoader  *PolicyLoader
+	uow          repository.UnitOfWork
+	filesLoader  *FilesLoader
+	quotaLoader  *QuotaLoader
+	policyLoader *PolicyLoader
 }
 
 // NewFileService creates a new file service with special file loaders
 func NewFileService(
 	uow repository.UnitOfWork,
-	schemaLoader *SchemaLoader,
+	filesLoader *FilesLoader,
 	quotaLoader *QuotaLoader,
 	policyLoader *PolicyLoader,
 ) *FileService {
 	return &FileService{
 		uow:          uow,
-		schemaLoader: schemaLoader,
+		filesLoader:  filesLoader,
 		quotaLoader:  quotaLoader,
 		policyLoader: policyLoader,
 	}
@@ -92,6 +92,16 @@ func (s *FileService) createSpecialFile(ctx context.Context, req CreateFileReque
 
 // createRegularFile handles creation of regular files with validation
 func (s *FileService) createRegularFile(ctx context.Context, req CreateFileRequest) (*models.File, error) {
+	// Get directory to validate file against .files rules
+	dirRepo := s.uow.Directories()
+	dir, err := dirRepo.FindByPath(ctx, req.DirectoryPath)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			return nil, ErrDirectoryNotFound
+		}
+		return nil, err
+	}
+
 	// Check quota if one exists
 	if s.quotaLoader != nil {
 		if err := s.quotaLoader.CheckQuota(ctx, req.DirectoryPath, 1, int64(len(req.Content))); err != nil {
@@ -99,9 +109,9 @@ func (s *FileService) createRegularFile(ctx context.Context, req CreateFileReque
 		}
 	}
 
-	// Validate against JSON schema if one exists and content is JSON
-	if s.schemaLoader != nil && req.ContentType == "application/json" {
-		if err := s.schemaLoader.ValidateContent(ctx, req.DirectoryPath, []byte(req.Content)); err != nil {
+	// Validate against .files rules (pattern + schema)
+	if s.filesLoader != nil {
+		if err := s.filesLoader.ValidateFile(ctx, dir.ID, req.Name, []byte(req.Content)); err != nil {
 			return nil, err
 		}
 	}
@@ -235,9 +245,9 @@ func (s *FileService) UpdateFile(ctx context.Context, fileID string, newContent 
 			return nil, err
 		}
 	} else {
-		// Regular file - validate against schema if JSON
-		if s.schemaLoader != nil && file.ContentType == "application/json" {
-			if err := s.schemaLoader.ValidateContent(ctx, dir.Path, []byte(newContent)); err != nil {
+		// Regular file - validate against .files rules
+		if s.filesLoader != nil {
+			if err := s.filesLoader.ValidateFile(ctx, file.DirectoryID, file.Name, []byte(newContent)); err != nil {
 				return nil, err
 			}
 		}
@@ -340,10 +350,17 @@ func (s *FileService) DeleteFile(ctx context.Context, fileID string, userRole st
 
 // invalidateCacheForSpecialFile invalidates the appropriate cache when a special file changes
 func (s *FileService) invalidateCacheForSpecialFile(directoryPath, fileName string) {
+	// Get directory ID for cache invalidation
+	dirRepo := s.uow.Directories()
+	dir, err := dirRepo.FindByPath(context.Background(), directoryPath)
+	if err != nil {
+		return // Can't invalidate if directory not found
+	}
+
 	switch GetSpecialFileType(fileName) {
-	case SpecialFileTypeSchema:
-		if s.schemaLoader != nil {
-			s.schemaLoader.Invalidate(directoryPath)
+	case SpecialFileTypeFiles:
+		if s.filesLoader != nil {
+			s.filesLoader.InvalidateCache(dir.ID)
 		}
 	case SpecialFileTypePolicy:
 		if s.policyLoader != nil {

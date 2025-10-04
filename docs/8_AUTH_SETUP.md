@@ -1,369 +1,333 @@
-# VFS Authentication Configuration Examples
+# MySQL VFS Bootstrap Guide
 
-All auth configuration is centralized in environment variables. Choose the auth provider that fits your needs.
-
----
-
-## 🔐 Production Configurations
-
-### Option 1: JWT Authentication (Recommended)
-
-**Use Case:** Standard web apps, mobile apps, microservices
-
-```bash
-# .env.production
-AUTH_PROVIDER=jwt
-AUTH_JWT_SECRET=your-secret-key-minimum-32-characters-long
-AUTH_JWT_ISSUER=https://auth.yourcompany.com
-
-# Optional
-AUTH_ALLOW_ANONYMOUS=false
-
-# Cache settings
-SCHEMA_CACHE_TTL_SECONDS=300  # 5 minutes
-POLICY_CACHE_TTL_SECONDS=300  # 5 minutes
-QUOTA_CACHE_TTL_SECONDS=300   # 5 minutes
-```
-
-**Token Example:**
-```bash
-curl -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." \
-     https://vfs.example.com/api/v1/files/data/users/alice.json
-```
-
-**JWT Payload:**
-```json
-{
-  "user_id": "alice",
-  "role": "admin",
-  "groups": ["engineering", "admins"],
-  "iss": "https://auth.yourcompany.com",
-  "exp": 1735689600
-}
-```
+**How to set up initial super user and file-based authentication**
 
 ---
 
-### Option 2: OAuth/OIDC Token Introspection
+## Overview
 
-**Use Case:** Enterprise SSO (Okta, Auth0, Google Workspace)
+MySQL VFS v2 uses **hybrid authentication** with two layers:
 
-```bash
-# .env.production
-AUTH_PROVIDER=oauth
-AUTH_OAUTH_INTROSPECTION_URL=https://oauth.provider.com/oauth/introspect
-AUTH_OAUTH_CLIENT_ID=vfs-service
-AUTH_OAUTH_CLIENT_SECRET=your-oauth-client-secret
+1. **Super User (Environment-Based)** - Always checked first, used for bootstrap
+2. **File-Based Auth (.user files)** - Production auth stored in VFS itself
 
-AUTH_ALLOW_ANONYMOUS=false
-```
-
-**Token Example:**
-```bash
-curl -H "Authorization: Bearer <oauth-access-token>" \
-     https://vfs.example.com/api/v1/files/data/users/alice.json
-```
+This guide shows you how to bootstrap from scratch.
 
 ---
 
-### Option 3: Mutual TLS (mTLS)
+## Quick Start (5 Minutes)
 
-**Use Case:** Banking, Government, High-Security Environments
-
-```bash
-# .env.production
-AUTH_PROVIDER=mtls
-AUTH_MTLS_CA_FILE=/etc/vfs/certs/ca.pem
-AUTH_MTLS_CERT_FILE=/etc/vfs/certs/server.crt
-AUTH_MTLS_KEY_FILE=/etc/vfs/certs/server.key
-
-AUTH_ALLOW_ANONYMOUS=false
-```
-
-**Client Request:**
-```bash
-curl --cert client.crt --key client.key \
-     https://vfs.example.com/api/v1/files/data/users/alice.json
-```
-
----
-
-### Option 4: Reverse Proxy with HMAC Signature
-
-**Use Case:** Behind nginx/Traefik with custom auth
+### Step 1: Generate Super User Token
 
 ```bash
-# .env.production
-AUTH_PROVIDER=proxy
-AUTH_PROXY_SHARED_SECRET=shared-secret-between-proxy-and-vfs-min-32-chars
+# Generate a secure random token (64 characters)
+export SUPER_USER_TOKEN=$(openssl rand -hex 32)
+echo "Save this token securely: $SUPER_USER_TOKEN"
 
-AUTH_ALLOW_ANONYMOUS=false
+# Optional: customize super user identity
+export SUPER_USER_ID=super-admin
+export SUPER_USER_ROLE=super-admin
 ```
 
-**Nginx Configuration:**
-```nginx
-location /api/v1/ {
-    # Authenticate user with your auth service
-    auth_request /auth;
-
-    # Generate HMAC token
-    set $timestamp $msec;
-    set $message "$auth_user_id:$auth_role:$auth_groups:$timestamp";
-    set $signature hmac_sha256($message, "shared-secret");
-
-    # Send as Authorization header
-    proxy_set_header Authorization "Bearer $auth_user_id:$auth_role:$auth_groups:$timestamp:$signature";
-    proxy_pass http://vfs-service:8080;
-}
-```
-
----
-
-## 🧪 Development Configuration
-
-### Header-Based Auth (UNSAFE - Development Only)
-
-**Use Case:** Local development, testing
+### Step 2: Configure VFS
 
 ```bash
-# .env.development
-AUTH_PROVIDER=headers
-AUTH_ALLOW_ANONYMOUS=true  # Allow requests without auth headers
+# Use file-based auth (production)
+export AUTH_PROVIDER=file
+export FILE_AUTH_DIRECTORY=/
+export USER_CACHE_TTL_SECONDS=300
 
-# Cache settings (shorter for faster dev feedback)
-SCHEMA_CACHE_TTL_SECONDS=10
-POLICY_CACHE_TTL_SECONDS=10
-QUOTA_CACHE_TTL_SECONDS=10
-```
-
-**Request Example:**
-```bash
-curl -H "X-User-ID: alice" \
-     -H "X-User-Role: admin" \
-     -H "X-User-Groups: engineering,admins" \
-     http://localhost:8080/api/v1/files/data/users/alice.json
-```
-
-**⚠️ WARNING:** Never use `AUTH_PROVIDER=headers` in production!
-
----
-
-## 🔄 Switching Auth Providers
-
-You can switch auth providers by changing the `AUTH_PROVIDER` environment variable. No code changes required!
-
-### Example: Development → Production
-
-```bash
-# Development (local)
-export AUTH_PROVIDER=headers
-export AUTH_ALLOW_ANONYMOUS=true
-
-# Staging (test with JWT)
-export AUTH_PROVIDER=jwt
-export AUTH_JWT_SECRET=staging-secret-key-min-32-chars
-export AUTH_JWT_ISSUER=https://auth.staging.example.com
-
-# Production (JWT)
-export AUTH_PROVIDER=jwt
-export AUTH_JWT_SECRET=production-secret-key-min-32-chars
-export AUTH_JWT_ISSUER=https://auth.example.com
-```
-
----
-
-## 🐳 Docker Compose Examples
-
-### Development with Header Auth
-
-```yaml
-# docker-compose.dev.yml
-services:
-  vfs-service:
-    image: vfs:latest
-    environment:
-      - AUTH_PROVIDER=headers
-      - AUTH_ALLOW_ANONYMOUS=true
-      - DB_DSN=root:password@tcp(mysql:3306)/vfs?parseTime=true
-      - SCHEMA_CACHE_TTL_SECONDS=10
-      - POLICY_CACHE_TTL_SECONDS=10
-    ports:
-      - "8080:8080"
-```
-
-### Production with JWT
-
-```yaml
-# docker-compose.prod.yml
-services:
-  vfs-service:
-    image: vfs:latest
-    environment:
-      - AUTH_PROVIDER=jwt
-      - AUTH_JWT_SECRET=${JWT_SECRET}  # from .env file or secrets
-      - AUTH_JWT_ISSUER=https://auth.example.com
-      - AUTH_ALLOW_ANONYMOUS=false
-      - DB_DSN=${DATABASE_DSN}
-      - SCHEMA_CACHE_TTL_SECONDS=300
-      - POLICY_CACHE_TTL_SECONDS=300
-    ports:
-      - "8080:8080"
-    secrets:
-      - jwt_secret
-      - database_dsn
-```
-
----
-
-## 🔒 Security Best Practices
-
-### 1. JWT Secrets
-
-- **Minimum 32 characters**
-- Use strong random strings: `openssl rand -base64 32`
-- Rotate regularly (store in secrets manager)
-- Never commit to git
-
-### 2. Token Expiration
-
-Configure short-lived tokens in your JWT issuer:
-```json
-{
-  "exp": 1735689600,  // 15 minutes from now
-  "iat": 1735688700
-}
-```
-
-### 3. HTTPS Only
-
-Always use HTTPS in production:
-```nginx
-server {
-    listen 443 ssl;
-    ssl_certificate /path/to/cert.pem;
-    ssl_certificate_key /path/to/key.pem;
-
-    location / {
-        proxy_pass http://vfs-service:8080;
-    }
-}
-```
-
-### 4. Network Isolation
-
-```yaml
-# docker-compose.yml
-services:
-  vfs-service:
-    networks:
-      - internal
-    # No public ports - only via reverse proxy
-
-  nginx:
-    networks:
-      - internal
-      - public
-    ports:
-      - "443:443"
-```
-
----
-
-## 📋 Complete Configuration Reference
-
-```bash
-# ============================================================================
-# Authentication
-# ============================================================================
-
-# Provider: jwt, oauth, mtls, proxy, headers (dev only)
-AUTH_PROVIDER=jwt
-
-# JWT Configuration
-AUTH_JWT_SECRET=your-secret-key-minimum-32-characters-long
-AUTH_JWT_ISSUER=https://auth.yourcompany.com
-
-# OAuth Configuration
-AUTH_OAUTH_INTROSPECTION_URL=https://oauth.provider.com/oauth/introspect
-AUTH_OAUTH_CLIENT_ID=vfs-service
-AUTH_OAUTH_CLIENT_SECRET=your-oauth-client-secret
-
-# Proxy Configuration
-AUTH_PROXY_SHARED_SECRET=shared-secret-between-proxy-and-vfs
-
-# mTLS Configuration
-AUTH_MTLS_CA_FILE=/etc/vfs/certs/ca.pem
-AUTH_MTLS_CERT_FILE=/etc/vfs/certs/server.crt
-AUTH_MTLS_KEY_FILE=/etc/vfs/certs/server.key
-
-# Allow anonymous access (dev only)
-AUTH_ALLOW_ANONYMOUS=false
-
-# ============================================================================
-# Cache Configuration
-# ============================================================================
-
-SCHEMA_CACHE_TTL_SECONDS=300  # 5 minutes
-POLICY_CACHE_TTL_SECONDS=300  # 5 minutes
-QUOTA_CACHE_TTL_SECONDS=300   # 5 minutes
-
-# ============================================================================
 # Database
-# ============================================================================
+export DB_DSN='root:password@tcp(localhost:3306)/vfs?parseTime=true'
 
-DB_DSN=user:password@tcp(localhost:3306)/vfs?parseTime=true
-LOG_LEVEL=info
-
-# ============================================================================
-# Server
-# ============================================================================
-
-PORT=8080
-
-# ============================================================================
-# Storage
-# ============================================================================
-
-S3_BUCKET=vfs-files
-S3_REGION=us-east-1
-S3_ENDPOINT=https://s3.amazonaws.com
-
-# ============================================================================
-# Idempotency
-# ============================================================================
-
-IDEMPOTENCY_TTL_SECONDS=86400  # 24 hours
+# Start VFS
+./vfs
 ```
 
----
-
-## 🧪 Testing Different Auth Providers
+### Step 3: Create Root Directory
 
 ```bash
-# Test with JWT
-AUTH_PROVIDER=jwt \
-AUTH_JWT_SECRET=test-secret-min-32-chars-long-key \
-AUTH_JWT_ISSUER=https://test.example.com \
-go run ./services/vfs/main.go
+curl -X POST http://localhost:8080/api/v1/directories \
+  -H "Authorization: Bearer $SUPER_USER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"parent_path": "/", "name": "root"}'
+```
 
-# Test with headers (dev mode)
-AUTH_PROVIDER=headers \
-AUTH_ALLOW_ANONYMOUS=true \
-go run ./services/vfs/main.go
+### Step 4: Create `.user` File
 
-# Test with OAuth
-AUTH_PROVIDER=oauth \
-AUTH_OAUTH_INTROSPECTION_URL=https://oauth.test.com/introspect \
-AUTH_OAUTH_CLIENT_ID=test \
-AUTH_OAUTH_CLIENT_SECRET=secret \
-go run ./services/vfs/main.go
+```bash
+# Create admin and regular users
+curl -X POST http://localhost:8080/api/v1/files \
+  -H "Authorization: Bearer $SUPER_USER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "directory_path": "/",
+    "name": ".user",
+    "content_type": "application/json",
+    "content": "{\"users\":[{\"user_id\":\"admin\",\"token\":\"$(openssl rand -hex 16)\",\"role\":\"admin\",\"groups\":[\"admins\"]},{\"user_id\":\"alice\",\"token\":\"$(openssl rand -hex 16)\",\"role\":\"user\",\"groups\":[\"engineering\"]}]}"
+  }'
+```
+
+**Save the tokens!** Extract them from the created file:
+
+```bash
+curl http://localhost:8080/api/v1/files/.user \
+  -H "Authorization: Bearer $SUPER_USER_TOKEN" | jq '.users'
+```
+
+### Step 5: Test User Auth
+
+```bash
+# Get admin token from previous step
+export ADMIN_TOKEN=<token-from-user-file>
+
+# Test it works
+curl http://localhost:8080/api/v1/directories/ \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+✅ **Done!** Super user is still available for emergencies.
+
+---
+
+## .user File Format
+
+```json
+{
+  "users": [
+    {
+      "user_id": "admin",
+      "token": "static-token-here",           // Required if no password_hash
+      "password_hash": "$2a$10$...",          // bcrypt hash (optional)
+      "role": "admin",
+      "groups": ["admins", "engineering"]
+    },
+    {
+      "user_id": "alice",
+      "token": "alice-secret-token",
+      "role": "user",
+      "groups": ["engineering"]
+    }
+  ]
+}
+```
+
+**Fields:**
+- `user_id` - Unique user identifier (required)
+- `token` - Static bearer token for this user (required if no password_hash)
+- `password_hash` - bcrypt hashed password (optional, for future password auth)
+- `role` - User role (e.g., "admin", "user")
+- `groups` - Array of group names
+
+---
+
+## Security Best Practices
+
+### Super User Token
+
+✅ **DO:**
+- Generate with `openssl rand -hex 32` (64 chars)
+- Store in secret management (Vault, AWS Secrets Manager, K8s Secrets)
+- Rotate regularly (monthly/quarterly)
+- Use only for bootstrap and emergencies
+
+❌ **DON'T:**
+- Commit to git
+- Share with anyone
+- Use simple/guessable values
+- Leave in environment permanently
+
+### User Tokens
+
+✅ **DO:**
+- Generate unique random tokens per user
+- Store securely (password manager, secrets vault)
+- Rotate when compromised
+- Use different tokens for different environments (dev/staging/prod)
+
+❌ **DON'T:**
+- Reuse tokens across users
+- Embed in code
+- Log tokens
+- Send over unencrypted channels
+
+### .user File Access
+
+**Restrict access with `.rego` policy:**
+
+```bash
+# Create /.rego to protect /.user
+curl -X POST http://localhost:8080/api/v1/files \
+  -H "Authorization: Bearer $SUPER_USER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "directory_path": "/",
+    "name": ".rego",
+    "content_type": "text/plain",
+    "content": "package vfs.authz\n\ndefault allow = false\n\n# Only super-admins can access .user file\nallow {\n    input.resource.path == \"/.user\"\n    input.user.role == \"super-admin\"\n}\n\n# Admins can access everything else\nallow {\n    input.user.role == \"admin\"\n}\n"
+  }'
 ```
 
 ---
 
-**Key Benefits:**
-- ✅ **Centralized** - All config in one place
-- ✅ **Flexible** - Switch providers without code changes
-- ✅ **Secure** - Production-grade options (JWT, OAuth, mTLS)
-- ✅ **Dev-Friendly** - Simple header mode for local development
-- ✅ **Environment-Based** - Different configs for dev/staging/prod
+## Production Setup
+
+### Environment Variables (Production)
+
+```bash
+# Super User (from secrets manager)
+export SUPER_USER_TOKEN=$(aws secretsmanager get-secret-value --secret-id vfs-super-user --query SecretString --output text)
+export SUPER_USER_ID=super-admin
+export SUPER_USER_ROLE=super-admin
+
+# File-based auth
+export AUTH_PROVIDER=file
+export FILE_AUTH_DIRECTORY=/
+export USER_CACHE_TTL_SECONDS=300
+
+# Database (from secrets)
+export DB_DSN=$(aws secretsmanager get-secret-value --secret-id vfs-db-dsn --query SecretString --output text)
+
+# Storage
+export S3_BUCKET=production-vfs-files
+export S3_REGION=us-east-1
+```
+
+### Kubernetes Deployment
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vfs-super-user
+type: Opaque
+stringData:
+  token: <generated-with-openssl-rand-hex-32>
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vfs
+spec:
+  template:
+    spec:
+      containers:
+      - name: vfs
+        image: mysql-vfs:v2
+        env:
+        - name: SUPER_USER_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: vfs-super-user
+              key: token
+        - name: AUTH_PROVIDER
+          value: "file"
+        - name: FILE_AUTH_DIRECTORY
+          value: "/"
+```
+
+---
+
+## Troubleshooting
+
+### "User not found" after creating .user
+
+**Cause:** Cache not invalidated or wrong directory
+
+**Fix:**
+```bash
+# Check .user file exists
+curl http://localhost:8080/api/v1/files/.user \
+  -H "Authorization: Bearer $SUPER_USER_TOKEN"
+
+# Verify FILE_AUTH_DIRECTORY matches
+echo $FILE_AUTH_DIRECTORY  # Should be "/"
+```
+
+### "Invalid token" with valid .user token
+
+**Cause:** Super user token being checked first, or cache issue
+
+**Fix:**
+```bash
+# Ensure using token from .user file, not super user token
+# Wait for cache TTL (5 minutes default)
+# Or restart VFS to clear cache
+```
+
+### Lost super user token
+
+**Solution 1:** Check secrets manager
+```bash
+aws secretsmanager get-secret-value --secret-id vfs-super-user
+```
+
+**Solution 2:** Regenerate and update deployment
+```bash
+# Generate new token
+NEW_TOKEN=$(openssl rand -hex 32)
+
+# Update secret
+aws secretsmanager update-secret \
+  --secret-id vfs-super-user \
+  --secret-string "$NEW_TOKEN"
+
+# Restart VFS pods
+kubectl rollout restart deployment vfs
+```
+
+---
+
+## Migration from Dev to Production
+
+### Current: Header Auth (Dev)
+
+```bash
+AUTH_PROVIDER=headers
+AUTH_ALLOW_ANONYMOUS=true
+```
+
+### Step 1: Set Up Super User
+
+```bash
+export SUPER_USER_TOKEN=$(openssl rand -hex 32)
+export AUTH_PROVIDER=file
+```
+
+### Step 2: Bootstrap .user File
+
+Use super user token to create `/.user` with production users
+
+### Step 3: Update Clients
+
+Change all API clients to use tokens from `.user` file instead of headers
+
+### Step 4: Disable Super User (Optional)
+
+For maximum security, remove `SUPER_USER_TOKEN` from environment after setup (keeps emergency access available if needed).
+
+---
+
+## FAQ
+
+**Q: Can I have multiple super users?**
+A: No, only one super user token. But you can have multiple admin users in `.user` file.
+
+**Q: What if .user file gets corrupted?**
+A: Super user token always works - use it to fix/recreate `.user` file.
+
+**Q: Can I use passwords instead of tokens?**
+A: `.user` supports `password_hash` (bcrypt), but password auth is not yet implemented. Use tokens for now.
+
+**Q: How do I rotate user tokens?**
+A: Edit `.user` file with super user token or admin token, update the token field.
+
+**Q: Should I disable super user in production?**
+A: Keep it enabled for emergencies, but store token in secure secrets manager (Vault, AWS Secrets Manager).
+
+---
+
+**Next Steps:**
+- [Authentication Guide](5_AUTHENTICATION.md) - Full auth architecture
+- [Authorization Guide](6_AUTHORIZATION.md) - OPA policies for access control
+- [Deployment Guide](9_DEPLOYMENT.md) - Production deployment
