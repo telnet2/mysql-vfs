@@ -11,6 +11,7 @@ type Dependencies struct {
 	PolicyRegistry  *policy.Registry
 	PolicyEvaluator *policy.Evaluator
 	PolicyValidator *policy.Validator
+	PolicyTriggerEngine *policy.TriggerEngine
 }
 
 var deps Dependencies

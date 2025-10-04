@@ -38,11 +38,16 @@ type PolicyValidator interface {
 	Invalidate(directoryIDs ...string)
 }
 
+type PolicyTriggerEngine interface {
+	Evaluate(ctx context.Context, directoryID string, manifests []policy.Manifest, input policy.TriggerContext) ([]policy.TriggerMatch, error)
+}
+
 type FileService struct {
 	DB        *gorm.DB
 	policies  PolicyRegistry
 	eval      PolicyEvaluator
 	validator PolicyValidator
+	engine    PolicyTriggerEngine
 }
 
 type FileDTO struct {
@@ -111,8 +116,8 @@ type DeleteFileInput struct {
 	Actor           string
 }
 
-func NewFileService(db *gorm.DB, registry PolicyRegistry, evaluator PolicyEvaluator, validator PolicyValidator) *FileService {
-	return &FileService{DB: db, policies: registry, eval: evaluator, validator: validator}
+func NewFileService(db *gorm.DB, registry PolicyRegistry, evaluator PolicyEvaluator, validator PolicyValidator, engine PolicyTriggerEngine) *FileService {
+	return &FileService{DB: db, policies: registry, eval: evaluator, validator: validator, engine: engine}
 }
 
 func (s *FileService) invalidatePolicyCaches(changes map[string]struct{}) {
@@ -402,6 +407,126 @@ func buildVersionAttributes(data FileVersionData) map[string]any {
 	return attrs
 }
 
+func extractVersionMetadata(version *db.FileVersion) map[string]any {
+	if version == nil || len(version.MetadataJSON) == 0 {
+		return nil
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(version.MetadataJSON, &metadata); err != nil {
+		return map[string]any{"_raw": string(version.MetadataJSON)}
+	}
+	return metadata
+}
+
+func parseJSONAny(raw []byte) any {
+	if len(raw) == 0 {
+		return nil
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return string(raw)
+	}
+	return value
+}
+
+func buildVersionPayload(version *db.FileVersion) map[string]any {
+	if version == nil {
+		return nil
+	}
+	payload := map[string]any{
+		"id":           version.ID,
+		"storage_mode": version.StorageMode,
+		"created_by":   version.CreatedBy,
+		"created_at":   version.CreatedAt,
+	}
+	if version.BlobKey != nil {
+		payload["blob_key"] = *version.BlobKey
+	}
+	if data := parseJSONAny(version.JSONPayload); data != nil {
+		payload["json_payload"] = data
+	}
+	if metadata := extractVersionMetadata(version); metadata != nil {
+		payload["metadata"] = metadata
+	}
+	return payload
+}
+
+func resolveStorageMode(version *db.FileVersion, payload map[string]any) string {
+	if version != nil {
+		if mode := strings.TrimSpace(version.StorageMode); mode != "" {
+			return mode
+		}
+	}
+	if len(payload) == 0 {
+		return ""
+	}
+	if fileValue, ok := payload["file"]; ok {
+		switch v := fileValue.(type) {
+		case FileDTO:
+			if mode := strings.TrimSpace(v.StorageMode); mode != "" {
+				return mode
+			}
+		case map[string]any:
+			if mode, ok := v["storage_mode"].(string); ok && strings.TrimSpace(mode) != "" {
+				return strings.TrimSpace(mode)
+			}
+		}
+	}
+	if mode, ok := payload["storage_mode"].(string); ok && strings.TrimSpace(mode) != "" {
+		return strings.TrimSpace(mode)
+	}
+	return ""
+}
+
+func (s *FileService) triggerFileEvents(ctx context.Context, tx *gorm.DB, eventType, actor, requestID string, file db.File, version *db.FileVersion, attrs map[string]any, payload map[string]any) error {
+	if s == nil || s.engine == nil {
+		return nil
+	}
+	if policy.IsSpecialFile(file.Name) {
+		return nil
+	}
+	directoryID := strings.TrimSpace(file.DirectoryID)
+	if directoryID == "" {
+		return nil
+	}
+	name := strings.TrimSpace(eventType)
+	if name == "" {
+		return nil
+	}
+	var manifests []policy.Manifest
+	if s.policies != nil {
+		resolved, err := s.policies.Resolve(ctx, directoryID)
+		if err != nil {
+			return err
+		}
+		manifests = resolved
+	}
+	metadata := extractVersionMetadata(version)
+	contextPayload := policy.TriggerContext{
+		DirectoryID: directoryID,
+		EventType:   name,
+		Scope:       policy.ScopeFile,
+		Actor:       strings.TrimSpace(actor),
+		RequestID:   strings.TrimSpace(requestID),
+		FileID:      strings.TrimSpace(file.ID),
+		FileName:    file.Name,
+		FilePath:    file.Path,
+		StorageMode: resolveStorageMode(version, payload),
+		Metadata:    copyAnyMap(metadata),
+		Attributes:  copyAnyMap(attrs),
+		Payload:     copyAnyMap(payload),
+	}
+	matches, err := s.engine.Evaluate(ctx, directoryID, manifests, contextPayload)
+	if err != nil {
+		return err
+	}
+	if len(matches) == 0 {
+		return nil
+	}
+	_, err = enqueueTriggerActions(ctx, tx, matches, contextPayload)
+	return err
+}
+
 func normalizeStringList(values []string) []string {
 	result := make([]string, 0, len(values))
 	for _, v := range values {
@@ -447,8 +572,9 @@ func (s *FileService) Create(ctx context.Context, in CreateFileInput) (FileDTO, 
 		}
 
 		path := buildChildPath(directory.Path, in.Name)
+		createAttrs := buildCreateAttributes(in)
 
-		if err := s.authorize(ctx, directory.ID, "", in.Name, path, in.Actor, policy.ActionCreate, buildCreateAttributes(in)); err != nil {
+		if err := s.authorize(ctx, directory.ID, "", in.Name, path, in.Actor, policy.ActionCreate, createAttrs); err != nil {
 			return err
 		}
 
@@ -496,6 +622,16 @@ func (s *FileService) Create(ctx context.Context, in CreateFileInput) (FileDTO, 
 					FileIDs:      []string{existing.ID},
 				},
 			}); err != nil {
+				return err
+			}
+			triggerPayload := map[string]any{
+				"file":       dto,
+				"attributes": createAttrs,
+			}
+			if version != nil {
+				triggerPayload["version"] = buildVersionPayload(version)
+			}
+			if err := s.triggerFileEvents(ctx, tx, "file.updated", in.Actor, in.RequestID, existing, version, createAttrs, triggerPayload); err != nil {
 				return err
 			}
 			return nil
@@ -550,6 +686,16 @@ func (s *FileService) Create(ctx context.Context, in CreateFileInput) (FileDTO, 
 				FileIDs:      []string{file.ID},
 			},
 		}); err != nil {
+			return err
+		}
+		triggerPayload := map[string]any{
+			"file":       dto,
+			"attributes": createAttrs,
+		}
+		if version != nil {
+			triggerPayload["version"] = buildVersionPayload(version)
+		}
+		if err := s.triggerFileEvents(ctx, tx, "file.created", in.Actor, in.RequestID, file, version, createAttrs, triggerPayload); err != nil {
 			return err
 		}
 		return nil
@@ -629,7 +775,8 @@ func (s *FileService) Update(ctx context.Context, in UpdateFileInput) (FileDTO, 
 			}
 		}
 
-		if err := s.authorize(ctx, file.DirectoryID, file.ID, file.Name, file.Path, in.Actor, policy.ActionUpdate, buildUpdateAttributes(in, file, originalDirectoryID, originalName, originalPath)); err != nil {
+		updateAttrs := buildUpdateAttributes(in, file, originalDirectoryID, originalName, originalPath)
+		if err := s.authorize(ctx, file.DirectoryID, file.ID, file.Name, file.Path, in.Actor, policy.ActionUpdate, updateAttrs); err != nil {
 			return err
 		}
 
@@ -677,6 +824,21 @@ func (s *FileService) Update(ctx context.Context, in UpdateFileInput) (FileDTO, 
 		}); err != nil {
 			return err
 		}
+		triggerPayload := map[string]any{
+			"file":       dto,
+			"attributes": updateAttrs,
+			"original": map[string]any{
+				"directory_id": originalDirectoryID,
+				"name":         originalName,
+				"path":         originalPath,
+			},
+		}
+		if version != nil {
+			triggerPayload["version"] = buildVersionPayload(version)
+		}
+		if err := s.triggerFileEvents(ctx, tx, "file.updated", in.Actor, in.RequestID, file, version, updateAttrs, triggerPayload); err != nil {
+			return err
+		}
 		return nil
 	})
 
@@ -707,9 +869,16 @@ func (s *FileService) Delete(ctx context.Context, in DeleteFileInput) error {
 			invalidateDirs[file.DirectoryID] = struct{}{}
 		}
 
-		if err := s.authorize(ctx, file.DirectoryID, file.ID, file.Name, file.Path, in.Actor, policy.ActionDelete, buildDeleteAttributes(in, file)); err != nil {
+		deleteAttrs := buildDeleteAttributes(in, file)
+		if err := s.authorize(ctx, file.DirectoryID, file.ID, file.Name, file.Path, in.Actor, policy.ActionDelete, deleteAttrs); err != nil {
 			return err
 		}
+
+		version, err := s.loadVersionByID(tx, file.CurrentVersionID)
+		if err != nil {
+			return err
+		}
+		deletedDTO := mapFile(file, version)
 
 		if err := tx.Delete(&file).Error; err != nil {
 			return err
@@ -728,6 +897,16 @@ func (s *FileService) Delete(ctx context.Context, in DeleteFileInput) error {
 				FileIDs:      []string{file.ID},
 			},
 		}); err != nil {
+			return err
+		}
+		triggerPayload := map[string]any{
+			"file":       deletedDTO,
+			"attributes": deleteAttrs,
+		}
+		if version != nil {
+			triggerPayload["version"] = buildVersionPayload(version)
+		}
+		if err := s.triggerFileEvents(ctx, tx, "file.deleted", in.Actor, in.RequestID, file, version, deleteAttrs, triggerPayload); err != nil {
 			return err
 		}
 		return nil

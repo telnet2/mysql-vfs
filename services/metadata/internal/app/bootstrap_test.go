@@ -97,7 +97,7 @@ func TestBootstrapAdminIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve root: %v", err)
 	}
-	fileSvc := service.NewFileService(database, registry, nil, nil)
+	fileSvc := service.NewFileService(database, registry, nil, nil, nil)
 	group, err := fileSvc.ResolvePath(context.Background(), filepath.Join(root.Path, ".group"))
 	if err != nil {
 		t.Fatalf("resolve group: %v", err)

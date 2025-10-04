@@ -35,12 +35,14 @@ func main() {
 	registry := policy.NewRegistry(loader)
 	evaluator := policy.NewEvaluator(registry)
 	validator := policy.NewValidator(registry)
+	triggerEngine := policy.NewTriggerEngine(registry)
 
 	app.SetDependencies(app.Dependencies{
-		DB:              database,
-		PolicyRegistry:  registry,
-		PolicyEvaluator: evaluator,
-		PolicyValidator: validator,
+		DB:                  database,
+		PolicyRegistry:      registry,
+		PolicyEvaluator:     evaluator,
+		PolicyValidator:     validator,
+		PolicyTriggerEngine: triggerEngine,
 	})
 	if err := app.BootstrapAdmin(context.Background(), app.Get()); err != nil {
 		log.Fatalf("bootstrap admin: %v", err)

@@ -200,7 +200,7 @@ func CreateFile(ctx context.Context, c *hzapp.RequestContext) {
 	}
 
 	dependencies := deps.Get()
-	svc := service.NewFileService(dependencies.DB, dependencies.PolicyRegistry, dependencies.PolicyEvaluator, dependencies.PolicyValidator)
+	svc := service.NewFileService(dependencies.DB, dependencies.PolicyRegistry, dependencies.PolicyEvaluator, dependencies.PolicyValidator, dependencies.PolicyTriggerEngine)
 	dto, err := svc.Create(ctx, service.CreateFileInput{
 		DirectoryID:  req.DirectoryID,
 		Name:         req.Name,
@@ -219,7 +219,7 @@ func CreateFile(ctx context.Context, c *hzapp.RequestContext) {
 func GetFile(ctx context.Context, c *hzapp.RequestContext) {
 	id := c.Param("id")
 	dep := deps.Get()
-	svc := service.NewFileService(dep.DB, dep.PolicyRegistry, dep.PolicyEvaluator, dep.PolicyValidator)
+	svc := service.NewFileService(dep.DB, dep.PolicyRegistry, dep.PolicyEvaluator, dep.PolicyValidator, dep.PolicyTriggerEngine)
 	dto, err := svc.GetByID(ctx, id)
 	if err != nil {
 		handleServiceError(c, err)
@@ -235,7 +235,7 @@ func ResolveFile(ctx context.Context, c *hzapp.RequestContext) {
 		return
 	}
 	dep := deps.Get()
-	svc := service.NewFileService(dep.DB, dep.PolicyRegistry, dep.PolicyEvaluator, dep.PolicyValidator)
+	svc := service.NewFileService(dep.DB, dep.PolicyRegistry, dep.PolicyEvaluator, dep.PolicyValidator, dep.PolicyTriggerEngine)
 	dto, err := svc.ResolvePath(ctx, path)
 	if err != nil {
 		handleServiceError(c, err)
@@ -247,7 +247,7 @@ func ResolveFile(ctx context.Context, c *hzapp.RequestContext) {
 func ListFileVersions(ctx context.Context, c *hzapp.RequestContext) {
 	id := c.Param("id")
 	dep := deps.Get()
-	svc := service.NewFileService(dep.DB, dep.PolicyRegistry, dep.PolicyEvaluator, dep.PolicyValidator)
+	svc := service.NewFileService(dep.DB, dep.PolicyRegistry, dep.PolicyEvaluator, dep.PolicyValidator, dep.PolicyTriggerEngine)
 	versions, err := svc.ListVersions(ctx, id)
 	if err != nil {
 		handleServiceError(c, err)
@@ -279,7 +279,7 @@ func UpdateFile(ctx context.Context, c *hzapp.RequestContext) {
 	}
 
 	dep := deps.Get()
-	svc := service.NewFileService(dep.DB, dep.PolicyRegistry, dep.PolicyEvaluator, dep.PolicyValidator)
+	svc := service.NewFileService(dep.DB, dep.PolicyRegistry, dep.PolicyEvaluator, dep.PolicyValidator, dep.PolicyTriggerEngine)
 	dto, err := svc.Update(ctx, service.UpdateFileInput{
 		FileID:          id,
 		NewName:         req.Name,
@@ -309,7 +309,7 @@ func DeleteFile(ctx context.Context, c *hzapp.RequestContext) {
 		}
 	}
 	dep := deps.Get()
-	svc := service.NewFileService(dep.DB, dep.PolicyRegistry, dep.PolicyEvaluator, dep.PolicyValidator)
+	svc := service.NewFileService(dep.DB, dep.PolicyRegistry, dep.PolicyEvaluator, dep.PolicyValidator, dep.PolicyTriggerEngine)
 	err := svc.Delete(ctx, service.DeleteFileInput{
 		FileID:          id,
 		ExpectedVersion: version,
@@ -342,7 +342,7 @@ func ResolvePolicy(ctx context.Context, c *hzapp.RequestContext) {
 
 	dep := deps.Get()
 	dirSvc := service.NewDirectoryService(dep.DB)
-	fileSvc := service.NewFileService(dep.DB, dep.PolicyRegistry, dep.PolicyEvaluator, dep.PolicyValidator)
+	fileSvc := service.NewFileService(dep.DB, dep.PolicyRegistry, dep.PolicyEvaluator, dep.PolicyValidator, dep.PolicyTriggerEngine)
 	resolver := service.NewPolicyResolver(dep.PolicyRegistry, dirSvc, fileSvc)
 	result, err := resolver.Resolve(ctx, query.DirectoryID, query.Path, typeFilter)
 	if err != nil {

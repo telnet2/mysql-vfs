@@ -26,7 +26,7 @@ func BootstrapAdmin(ctx context.Context, deps Dependencies) error {
 	}
 
 	dirSvc := service.NewDirectoryService(deps.DB)
-	fileSvc := service.NewFileService(deps.DB, deps.PolicyRegistry, deps.PolicyEvaluator, deps.PolicyValidator)
+	fileSvc := service.NewFileService(deps.DB, deps.PolicyRegistry, deps.PolicyEvaluator, deps.PolicyValidator, deps.PolicyTriggerEngine)
 
 	root, err := dirSvc.ResolvePath(ctx, "/")
 	if err != nil {

@@ -23,8 +23,8 @@
 - [ ] Update webhook service to consume resolved policies
 - [ ] Expand citest coverage for policy inheritance and workflows
 - [ ] Implement `.events` trigger system
-  - [ ] Parse `.events` manifests via policy registry with caching/invalidation
-  - [ ] Evaluate triggers (match filters + optional Rego conditions)
-  - [ ] Enqueue actions into events pipeline with idempotency metadata
+  - [x] Parse `.events` manifests via policy registry with caching/invalidation
+  - [x] Evaluate triggers (match filters + optional Rego conditions)
+  - [x] Enqueue actions into events pipeline with idempotency metadata
   - [ ] Update workers to dispatch `ext.*` actions (workflow/webhook emitters)
   - [ ] Add unit/e2e tests covering trigger execution and failure paths

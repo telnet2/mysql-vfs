@@ -13,11 +13,13 @@ import (
 )
 
 type EventPayload struct {
-	EventType string
-	SubjectID string
-	RequestID string
-	Data      any
-	Scopes    ScopeSet
+	EventType      string
+	SubjectID      string
+	RequestID      string
+	IdempotencyKey string
+	Data           any
+	Scopes         ScopeSet
+	Source         string
 }
 
 type ScopeSet struct {
@@ -34,13 +36,18 @@ func (s ScopeSet) Normalize() ScopeSet {
 
 func persistEvent(ctx context.Context, tx *gorm.DB, payload EventPayload) (db.Event, error) {
 	reqID := strings.TrimSpace(payload.RequestID)
-	if reqID == "" {
-		reqID = uuid.NewString()
+	idKey := strings.TrimSpace(payload.IdempotencyKey)
+	dedupeKey := idKey
+	if dedupeKey == "" {
+		dedupeKey = reqID
+	}
+	if dedupeKey == "" {
+		dedupeKey = uuid.NewString()
 	}
 
 	existing := db.Event{}
 	if err := tx.WithContext(ctx).
-		Where("request_id = ? AND type = ?", reqID, payload.EventType).
+		Where("request_id = ? AND type = ?", dedupeKey, payload.EventType).
 		First(&existing).Error; err != nil && err != gorm.ErrRecordNotFound {
 		return db.Event{}, err
 	} else if err == nil {
@@ -58,6 +65,15 @@ func persistEvent(ctx context.Context, tx *gorm.DB, payload EventPayload) (db.Ev
 		},
 		"recorded_at": time.Now().UTC(),
 	}
+	if reqID != "" {
+		envelope["request_id"] = reqID
+	}
+	if payload.Source != "" {
+		envelope["source"] = payload.Source
+	}
+	if dedupeKey != "" {
+		envelope["idempotency_key"] = dedupeKey
+	}
 	body, err := json.Marshal(envelope)
 	if err != nil {
 		return db.Event{}, err
@@ -71,7 +87,7 @@ func persistEvent(ctx context.Context, tx *gorm.DB, payload EventPayload) (db.Ev
 		Status:        "pending",
 		RetryCount:    0,
 		NextAttemptAt: time.Now(),
-		RequestID:     reqID,
+		RequestID:     dedupeKey,
 	}
 
 	if err := tx.Create(&event).Error; err != nil {
