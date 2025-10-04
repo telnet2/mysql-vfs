@@ -3,7 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -13,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/user"
 	"path"
 	"path/filepath"
@@ -26,6 +28,7 @@ import (
 	"github.com/peterh/liner"
 
 	"github.com/telnet2/mysql-vfs/internal/config"
+	"github.com/telnet2/mysql-vfs/pkg/vfsclient"
 )
 
 const (
@@ -33,128 +36,25 @@ const (
 	requestTimeout  = 15 * time.Second
 	metadataService = "metadata"
 	contentService  = "content"
-	actorHeader     = "X-VFS-Actor"
 )
 
-type directoryDTO struct {
-	ID        string     `json:"id"`
-	Name      string     `json:"name"`
-	ParentID  *string    `json:"parent_id"`
-	Path      string     `json:"path"`
-	Version   int64      `json:"version"`
-	CreatedAt time.Time  `json:"created_at"`
-	UpdatedAt time.Time  `json:"updated_at"`
-	DeletedAt *time.Time `json:"deleted_at"`
-}
-
-type fileDTO struct {
-	ID           string          `json:"id"`
-	Name         string          `json:"name"`
-	DirectoryID  string          `json:"directory_id"`
-	Path         string          `json:"path"`
-	Version      int64           `json:"version"`
-	OriginFileID *string         `json:"origin_file_id"`
-	StorageMode  string          `json:"storage_mode"`
-	BlobKey      *string         `json:"blob_key"`
-	InlineJSON   json.RawMessage `json:"inline_json"`
-	Checksum     *string         `json:"checksum"`
-	Size         *int64          `json:"size"`
-	MimeType     *string         `json:"mime_type"`
-	CreatedAt    time.Time       `json:"created_at"`
-	UpdatedAt    time.Time       `json:"updated_at"`
-	DeletedAt    *time.Time      `json:"deleted_at"`
-}
-
-type listDirectoryResponse struct {
-	Directories []directoryDTO `json:"directories"`
-	Files       []fileDTO      `json:"files"`
-}
-
-type uploadResponse struct {
-	StorageMode string          `json:"storage_mode"`
-	BlobKey     *string         `json:"blob_key"`
-	JSONPayload json.RawMessage `json:"json_payload"`
-	Checksum    string          `json:"checksum"`
-	Size        int64           `json:"size"`
-	MimeType    string          `json:"mime_type"`
-}
-
-type fileVersionDTO struct {
-	ID          string          `json:"id"`
-	Index       int             `json:"index"`
-	StorageMode string          `json:"storage_mode"`
-	BlobKey     *string         `json:"blob_key"`
-	JSONPayload json.RawMessage `json:"json_payload"`
-	Metadata    map[string]any  `json:"metadata"`
-	CreatedBy   string          `json:"created_by"`
-	CreatedAt   time.Time       `json:"created_at"`
-}
-
-type policyManifestDTO struct {
-	Type        string         `json:"type"`
-	Name        string         `json:"name"`
-	SourcePath  string         `json:"source_path"`
-	DirectoryID string         `json:"directory_id"`
-	Scope       string         `json:"scope"`
-	Inheritance string         `json:"inheritance"`
-	AppliesTo   []string       `json:"applies_to,omitempty"`
-	Metadata    map[string]any `json:"metadata,omitempty"`
-}
-
-type policyUserDTO struct {
-	ID          string         `json:"id"`
-	DisplayName string         `json:"display_name,omitempty"`
-	Email       string         `json:"email,omitempty"`
-	Groups      []string       `json:"groups,omitempty"`
-	Attributes  map[string]any `json:"attributes,omitempty"`
-}
-
-type policyGroupDTO struct {
-	ID          string         `json:"id"`
-	DisplayName string         `json:"display_name,omitempty"`
-	Description string         `json:"description,omitempty"`
-	Members     []string       `json:"members,omitempty"`
-	Attributes  map[string]any `json:"attributes,omitempty"`
-}
-
-type principalSetDTO struct {
-	Users  []policyUserDTO  `json:"users,omitempty"`
-	Groups []policyGroupDTO `json:"groups,omitempty"`
-}
-
-type policyResolutionDTO struct {
-	DirectoryID string              `json:"directory_id"`
-	Manifests   []policyManifestDTO `json:"manifests"`
-	Principals  principalSetDTO     `json:"principals"`
-}
-
-type apiError struct {
-	Status  int
-	Code    string
-	Message string
-}
-
-func (e apiError) Error() string {
-	if e.Code != "" {
-		return fmt.Sprintf("%s (%s)", e.Message, e.Code)
-	}
-	return e.Message
-}
-
-type metadataClient struct {
-	baseURL    string
-	httpClient *http.Client
-	actor      string
-}
-
-type contentClient struct {
-	baseURL    string
-	httpClient *http.Client
-}
+// Type aliases for SDK types
+type (
+	directoryDTO          = vfsclient.DirectoryDTO
+	fileDTO               = vfsclient.FileDTO
+	listDirectoryResponse = vfsclient.ListDirectoryResponse
+	uploadResponse        = vfsclient.UploadResponse
+	fileVersionDTO        = vfsclient.FileVersionDTO
+	policyManifestDTO     = vfsclient.PolicyManifestDTO
+	policyUserDTO         = vfsclient.PolicyUserDTO
+	policyGroupDTO        = vfsclient.PolicyGroupDTO
+	principalSetDTO       = vfsclient.PrincipalSetDTO
+	policyResolutionDTO   = vfsclient.PolicyResolutionDTO
+	apiError              = vfsclient.APIError
+)
 
 type cli struct {
-	metadata    *metadataClient
-	content     *contentClient
+	client      *vfsclient.Client
 	cwdDir      directoryDTO
 	dirCache    map[string]directoryDTO
 	actor       string
@@ -191,16 +91,15 @@ func main() {
 
 	actor := resolveActor()
 
+	client := vfsclient.NewClient(vfsclient.Config{
+		MetadataURL: metadataURL,
+		ContentURL:  contentURL,
+		Actor:       actor,
+		Timeout:     requestTimeout,
+	})
+
 	cli := &cli{
-		metadata: &metadataClient{
-			baseURL:    metadataURL,
-			httpClient: &http.Client{Timeout: requestTimeout},
-			actor:      actor,
-		},
-		content: &contentClient{
-			baseURL:    contentURL,
-			httpClient: &http.Client{Timeout: requestTimeout},
-		},
+		client:   client,
 		dirCache: make(map[string]directoryDTO),
 		actor:    actor,
 		stdout:   os.Stdout,
@@ -226,13 +125,13 @@ func (c *cli) initialize() error {
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 	defer cancel()
 
-	dir, err := c.metadata.ResolveDirectory(ctx, "/")
+	dir, err := c.client.Metadata.ResolveDirectory(ctx, "/")
 	if err != nil {
 		if apiErr, ok := err.(apiError); ok && apiErr.Status == http.StatusNotFound {
-			created, cerr := c.metadata.CreateDirectory(ctx, "/", nil)
+			created, cerr := c.client.Metadata.CreateDirectory(ctx, "/", nil)
 			if cerr != nil {
 				if aerr, ok := cerr.(apiError); ok && aerr.Status == http.StatusConflict {
-					dir, err = c.metadata.ResolveDirectory(ctx, "/")
+					dir, err = c.client.Metadata.ResolveDirectory(ctx, "/")
 				} else {
 					return cerr
 				}
@@ -306,10 +205,14 @@ func (c *cli) run() error {
 			c.handleCp(args)
 		case "tree":
 			c.handleTree(args)
+		case "edit":
+			c.handleEdit(args)
 		case "stat":
 			c.handleStat(args)
 		case "history":
 			c.handleHistory(args)
+		case "show":
+			c.handleShow(args)
 		case "principals":
 			c.handlePrincipals(args)
 		default:
@@ -397,7 +300,7 @@ func (c *cli) close() {
 func (c *cli) commandList() []string {
 	return []string{
 		"help", "exit", "quit", "pwd", "cd", "ls", "import", "cat", "jq",
-		"mkdir", "rmdir", "rm", "xattr", "mv", "cp", "tree", "stat", "history", "principals",
+		"mkdir", "rmdir", "rm", "xattr", "mv", "cp", "tree", "edit", "stat", "history", "show", "principals",
 	}
 }
 func filterByPrefix(items []string, prefix string) []string {
@@ -474,7 +377,7 @@ func (c *cli) pathCompletionForCommand(cmd string, argIndex int, current string)
 		if argIndex == 0 {
 			return c.pathCompletions(current, true)
 		}
-	case "rm", "cat", "jq", "xattr", "stat", "history", "tree":
+	case "rm", "cat", "jq", "xattr", "stat", "history", "tree", "edit", "show":
 		if argIndex == 0 {
 			return c.pathCompletions(current, false)
 		}
@@ -498,7 +401,7 @@ func (c *cli) pathCompletions(input string, dirsOnly bool) []string {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
-	listing, err := c.metadata.ListDirectory(ctx, parentDir.ID, false)
+	listing, err := c.client.Metadata.ListDirectory(ctx, parentDir.ID, false)
 	cancel()
 	if err != nil {
 		return nil
@@ -581,11 +484,14 @@ func (c *cli) handleCD(args []string) {
 
 func (c *cli) handleLS(args []string) {
 	recursive := false
+	showHidden := false
 	var targetPath string
 	for _, arg := range args[1:] {
 		switch arg {
 		case "-r", "--recursive":
 			recursive = true
+		case "-a", "--all":
+			showHidden = true
 		default:
 			if targetPath != "" {
 				fmt.Fprintln(c.stderr, "ls: too many arguments")
@@ -609,7 +515,7 @@ func (c *cli) handleLS(args []string) {
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 	defer cancel()
 
-	listing, err := c.metadata.ListDirectory(ctx, dir.ID, recursive)
+	listing, err := c.client.Metadata.ListDirectory(ctx, dir.ID, recursive)
 	if err != nil {
 		fmt.Fprintf(c.stderr, "ls: %v\n", err)
 		return
@@ -624,9 +530,28 @@ func (c *cli) handleLS(args []string) {
 		if d.Path == dir.Path {
 			continue
 		}
-		fmt.Fprintf(c.stdout, "dir  %s\n", d.Path)
+		displayPath := d.Path
+		if !recursive && strings.HasPrefix(d.Path, dir.Path) && d.Path != dir.Path {
+			relPath := strings.TrimPrefix(d.Path, dir.Path)
+			relPath = strings.TrimPrefix(relPath, "/")
+			if relPath != "" {
+				displayPath = relPath
+			}
+		}
+		fmt.Fprintf(c.stdout, "dir  %s\n", displayPath)
 	}
 	for _, f := range files {
+		if !showHidden && isPolicyFilename(f.Name) {
+			continue
+		}
+		displayPath := f.Path
+		if !recursive && strings.HasPrefix(f.Path, dir.Path) && f.Path != dir.Path {
+			relPath := strings.TrimPrefix(f.Path, dir.Path)
+			relPath = strings.TrimPrefix(relPath, "/")
+			if relPath != "" {
+				displayPath = relPath
+			}
+		}
 		extra := make([]string, 0, 2)
 		if f.StorageMode != "" {
 			extra = append(extra, f.StorageMode)
@@ -635,9 +560,9 @@ func (c *cli) handleLS(args []string) {
 			extra = append(extra, fmt.Sprintf("%dB", *f.Size))
 		}
 		if len(extra) > 0 {
-			fmt.Fprintf(c.stdout, "file %s (%s)\n", f.Path, strings.Join(extra, ", "))
+			fmt.Fprintf(c.stdout, "file %s (%s)\n", displayPath, strings.Join(extra, ", "))
 		} else {
-			fmt.Fprintf(c.stdout, "file %s\n", f.Path)
+			fmt.Fprintf(c.stdout, "file %s\n", displayPath)
 		}
 	}
 }
@@ -648,7 +573,7 @@ func (c *cli) handleCat(args []string) {
 	}
 	target := c.resolvePath(args[1])
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
-	file, err := c.metadata.ResolveFile(ctx, target)
+	file, err := c.client.Metadata.ResolveFile(ctx, target)
 	cancel()
 	if err != nil {
 		fmt.Fprintf(c.stderr, "cat: %v\n", err)
@@ -676,7 +601,7 @@ func (c *cli) handleCat(args []string) {
 			return
 		}
 		ctxDownload, cancelDownload := context.WithTimeout(context.Background(), requestTimeout)
-		data, err := c.content.Download(ctxDownload, *file.BlobKey)
+		data, err := c.client.Content.Download(ctxDownload, *file.BlobKey)
 		cancelDownload()
 		if err != nil {
 			fmt.Fprintf(c.stderr, "cat: %v\n", err)
@@ -715,7 +640,7 @@ func (c *cli) handleImport(args []string) {
 
 	mimeType := mime.TypeByExtension(strings.ToLower(filepath.Ext(localPath)))
 	ctxUpload, cancelUpload := context.WithTimeout(context.Background(), requestTimeout)
-	uploadResp, err := c.content.Upload(ctxUpload, filepath.Base(remotePath), mimeType, data)
+	uploadResp, err := c.client.Content.Upload(ctxUpload, filepath.Base(remotePath), mimeType, data)
 	cancelUpload()
 	if err != nil {
 		fmt.Fprintf(c.stderr, "import: %v\n", err)
@@ -735,7 +660,7 @@ func (c *cli) handleImport(args []string) {
 		}
 	}
 
-	createReq := createFileRequest{
+	createReq := vfsclient.CreateFileRequest{
 		DirectoryID: dir.ID,
 		Name:        filepath.Base(remotePath),
 		StorageMode: uploadResp.StorageMode,
@@ -762,7 +687,7 @@ func (c *cli) handleImport(args []string) {
 	}
 
 	ctxCreate, cancelCreate := context.WithTimeout(context.Background(), requestTimeout)
-	_, err = c.metadata.CreateFile(ctxCreate, createReq)
+	_, err = c.client.Metadata.CreateFile(ctxCreate, createReq)
 	cancelCreate()
 	if err != nil {
 		fmt.Fprintf(c.stderr, "import: %v\n", err)
@@ -773,13 +698,41 @@ func (c *cli) handleImport(args []string) {
 }
 
 func (c *cli) handleTree(args []string) {
-	targetPath := c.cwdDir.Path
-	if len(args) > 2 {
-		fmt.Fprintln(c.stderr, "usage: tree [path]")
-		return
+	depth := 2
+	pageSize := 100
+	var targetPath string
+
+	for i := 1; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "-d" || arg == "--depth":
+			if i+1 >= len(args) {
+				fmt.Fprintln(c.stderr, "usage: tree [-d depth] [path]")
+				return
+			}
+			i++
+			var err error
+			_, err = fmt.Sscanf(args[i], "%d", &depth)
+			if err != nil || depth < 1 || depth > 4 {
+				fmt.Fprintln(c.stderr, "tree: depth must be between 1 and 4")
+				return
+			}
+		case strings.HasPrefix(arg, "-"):
+			fmt.Fprintf(c.stderr, "tree: unknown option: %s\n", arg)
+			return
+		default:
+			if targetPath != "" {
+				fmt.Fprintln(c.stderr, "usage: tree [-d depth] [path]")
+				return
+			}
+			targetPath = arg
+		}
 	}
-	if len(args) == 2 {
-		targetPath = c.resolvePath(args[1])
+
+	if targetPath == "" {
+		targetPath = c.cwdDir.Path
+	} else {
+		targetPath = c.resolvePath(targetPath)
 	}
 
 	dir, err := c.lookupDirectory(targetPath)
@@ -789,7 +742,7 @@ func (c *cli) handleTree(args []string) {
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
-	listing, err := c.metadata.ListDirectory(ctx, dir.ID, true)
+	listing, err := c.client.Metadata.ListDirectory(ctx, dir.ID, true)
 	cancel()
 	if err != nil {
 		fmt.Fprintf(c.stderr, "tree: %v\n", err)
@@ -797,7 +750,7 @@ func (c *cli) handleTree(args []string) {
 	}
 
 	rootNode := buildTree(dir, listing)
-	printTree(c.stdout, rootNode)
+	printTreeWithPagination(c.stdout, c.line, rootNode, depth, pageSize)
 }
 
 type treeNode struct {
@@ -809,37 +762,42 @@ type treeNode struct {
 
 func buildTree(root directoryDTO, listing listDirectoryResponse) *treeNode {
 	nodes := make(map[string]*treeNode)
-	getNode := func(fullPath string, isDir bool) *treeNode {
-		if n, ok := nodes[fullPath]; ok {
-			if isDir {
-				n.isDir = true
-			}
-			return n
-		}
-		name := path.Base(fullPath)
-		if fullPath == "/" {
-			name = "/"
-		}
-		n := &treeNode{name: name, fullPath: fullPath, isDir: isDir}
-		nodes[fullPath] = n
-		return n
-	}
 
 	rootNode := &treeNode{name: root.Path, fullPath: root.Path, isDir: true}
 	nodes[root.Path] = rootNode
 
 	for _, d := range listing.Directories {
-		node := getNode(d.Path, true)
-		parentPath := parentDirectoryPath(d.Path)
-		parent := getNode(parentPath, true)
-		parent.children = append(parent.children, node)
+		if d.Path == root.Path {
+			continue
+		}
+		name := path.Base(d.Path)
+		node := &treeNode{name: name, fullPath: d.Path, isDir: true}
+		nodes[d.Path] = node
 	}
 
 	for _, f := range listing.Files {
-		node := getNode(f.Path, false)
+		name := path.Base(f.Path)
+		node := &treeNode{name: name, fullPath: f.Path, isDir: false}
+		nodes[f.Path] = node
+	}
+
+	for _, d := range listing.Directories {
+		if d.Path == root.Path {
+			continue
+		}
+		node := nodes[d.Path]
+		parentPath := parentDirectoryPath(d.Path)
+		if parent, ok := nodes[parentPath]; ok {
+			parent.children = append(parent.children, node)
+		}
+	}
+
+	for _, f := range listing.Files {
+		node := nodes[f.Path]
 		parentPath := parentDirectoryPath(f.Path)
-		parent := getNode(parentPath, true)
-		parent.children = append(parent.children, node)
+		if parent, ok := nodes[parentPath]; ok {
+			parent.children = append(parent.children, node)
+		}
 	}
 
 	for _, node := range nodes {
@@ -857,12 +815,51 @@ func buildTree(root directoryDTO, listing listDirectoryResponse) *treeNode {
 	return rootNode
 }
 
-func printTree(w io.Writer, root *treeNode) {
-	fmt.Fprintln(w, ".")
-	printTreeChildren(w, root, "")
+func printTreeWithPagination(w io.Writer, liner *liner.State, root *treeNode, maxDepth, pageSize int) {
+	lines := []string{"."}
+	collectTreeLines(&lines, root, "", 0, maxDepth)
+
+	if len(lines) <= pageSize {
+		for _, line := range lines {
+			fmt.Fprintln(w, line)
+		}
+		return
+	}
+
+	page := 0
+	for {
+		start := page * pageSize
+		end := start + pageSize
+		if end > len(lines) {
+			end = len(lines)
+		}
+
+		for i := start; i < end; i++ {
+			fmt.Fprintln(w, lines[i])
+		}
+
+		if end >= len(lines) {
+			break
+		}
+
+		fmt.Fprintf(w, "\n-- More (%d/%d lines shown, press Enter for next page or 'q' to quit) --", end, len(lines))
+		if liner != nil {
+			input, err := liner.Prompt("")
+			if err != nil || strings.TrimSpace(strings.ToLower(input)) == "q" {
+				fmt.Fprintln(w)
+				break
+			}
+		} else {
+			break
+		}
+		page++
+	}
 }
 
-func printTreeChildren(w io.Writer, node *treeNode, prefix string) {
+func collectTreeLines(lines *[]string, node *treeNode, prefix string, currentDepth, maxDepth int) {
+	if len(node.children) == 0 || currentDepth >= maxDepth {
+		return
+	}
 	for i, child := range node.children {
 		isLast := i == len(node.children)-1
 		connector := "├──"
@@ -877,8 +874,10 @@ func printTreeChildren(w io.Writer, node *treeNode, prefix string) {
 		} else if child.isDir {
 			name = child.name + "/"
 		}
-		fmt.Fprintf(w, "%s%s %s\n", prefix, connector, name)
-		printTreeChildren(w, child, childPrefix)
+		*lines = append(*lines, fmt.Sprintf("%s%s %s", prefix, connector, name))
+		if len(child.children) > 0 {
+			collectTreeLines(lines, child, childPrefix, currentDepth+1, maxDepth)
+		}
 	}
 }
 
@@ -893,7 +892,7 @@ func (c *cli) handleStat(args []string) {
 	}
 
 	ctxDir, cancelDir := context.WithTimeout(context.Background(), requestTimeout)
-	dir, dirErr := c.metadata.ResolveDirectory(ctxDir, targetPath)
+	dir, dirErr := c.client.Metadata.ResolveDirectory(ctxDir, targetPath)
 	cancelDir()
 	if dirErr == nil {
 		attrs := map[string]any{
@@ -971,7 +970,7 @@ func (c *cli) handleHistory(args []string) {
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
-	versions, err := c.metadata.ListFileVersions(ctx, file.ID)
+	versions, err := c.client.Metadata.ListFileVersions(ctx, file.ID)
 	cancel()
 	if err != nil {
 		fmt.Fprintf(c.stderr, "history: %v\n", err)
@@ -1007,6 +1006,91 @@ func (c *cli) handleHistory(args []string) {
 	}
 	if err := writeJSON(c.stdout, entries); err != nil {
 		fmt.Fprintf(c.stderr, "history: %v\n", err)
+	}
+}
+
+func (c *cli) handleShow(args []string) {
+	if len(args) < 2 || len(args) > 3 {
+		fmt.Fprintln(c.stderr, "usage: show <file> [version_index]")
+		return
+	}
+
+	filePath := c.resolvePath(args[1])
+	file, err := c.resolveFile(filePath)
+	if err != nil {
+		fmt.Fprintf(c.stderr, "show: %v\n", err)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+	versions, err := c.client.Metadata.ListFileVersions(ctx, file.ID)
+	cancel()
+	if err != nil {
+		fmt.Fprintf(c.stderr, "show: %v\n", err)
+		return
+	}
+	if len(versions) == 0 {
+		fmt.Fprintln(c.stderr, "show: no versions found")
+		return
+	}
+
+	var targetVersion fileVersionDTO
+	if len(args) == 3 {
+		var versionIndex int
+		if _, err := fmt.Sscanf(args[2], "%d", &versionIndex); err != nil {
+			fmt.Fprintf(c.stderr, "show: invalid version index: %s\n", args[2])
+			return
+		}
+		found := false
+		for _, v := range versions {
+			if v.Index == versionIndex {
+				targetVersion = v
+				found = true
+				break
+			}
+		}
+		if !found {
+			fmt.Fprintf(c.stderr, "show: version %d not found\n", versionIndex)
+			return
+		}
+	} else {
+		targetVersion = versions[len(versions)-1]
+	}
+
+	var data []byte
+	switch targetVersion.StorageMode {
+	case "inline_json":
+		if len(targetVersion.JSONPayload) == 0 {
+			fmt.Fprintln(c.stderr, "show: no inline content")
+			return
+		}
+		var buf bytes.Buffer
+		if err := json.Indent(&buf, targetVersion.JSONPayload, "", "  "); err != nil {
+			buf.Reset()
+			buf.Write(targetVersion.JSONPayload)
+		}
+		buf.WriteByte('\n')
+		data = buf.Bytes()
+	case "blob":
+		if targetVersion.BlobKey == nil {
+			fmt.Fprintln(c.stderr, "show: missing blob key")
+			return
+		}
+		ctxDownload, cancelDownload := context.WithTimeout(context.Background(), requestTimeout)
+		downloadedData, err := c.client.Content.Download(ctxDownload, *targetVersion.BlobKey)
+		cancelDownload()
+		if err != nil {
+			fmt.Fprintf(c.stderr, "show: download: %v\n", err)
+			return
+		}
+		data = downloadedData
+	default:
+		fmt.Fprintf(c.stderr, "show: unsupported storage mode %q\n", targetVersion.StorageMode)
+		return
+	}
+
+	if _, err := c.stdout.Write(data); err != nil {
+		fmt.Fprintf(c.stderr, "show: %v\n", err)
 	}
 }
 
@@ -1051,7 +1135,7 @@ func (c *cli) handlePrincipals(args []string) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 	defer cancel()
-	result, err := c.metadata.ResolvePolicy(ctx, directoryID, targetPath, typeFilter)
+	result, err := c.client.Metadata.ResolvePolicy(ctx, directoryID, targetPath, typeFilter)
 	if err != nil {
 		if apiErr, ok := err.(apiError); ok && apiErr.Status == http.StatusNotFound {
 			fmt.Fprintln(c.stderr, "principals: target not found")
@@ -1081,7 +1165,7 @@ func (c *cli) handleJQ(args []string) {
 	expression := strings.Join(args[2:], " ")
 
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
-	file, err := c.metadata.ResolveFile(ctx, target)
+	file, err := c.client.Metadata.ResolveFile(ctx, target)
 	cancel()
 	if err != nil {
 		fmt.Fprintf(c.stderr, "jq: %v\n", err)
@@ -1181,7 +1265,7 @@ func (c *cli) handleMkdir(args []string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 	defer cancel()
-	dir, err := c.metadata.CreateDirectory(ctx, name, &parent.ID)
+	dir, err := c.client.Metadata.CreateDirectory(ctx, name, &parent.ID)
 	if err != nil {
 		if apiErr, ok := err.(apiError); ok && apiErr.Status == http.StatusConflict {
 			fmt.Fprintln(c.stderr, "mkdir: directory already exists")
@@ -1225,7 +1309,7 @@ func (c *cli) handleRmdir(args []string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 	defer cancel()
-	if err := c.metadata.DeleteDirectory(ctx, dir.ID, force); err != nil {
+	if err := c.client.Metadata.DeleteDirectory(ctx, dir.ID, force); err != nil {
 		if apiErr, ok := err.(apiError); ok {
 			switch apiErr.Status {
 			case http.StatusNotFound:
@@ -1257,7 +1341,7 @@ func (c *cli) handleRm(args []string) {
 	}
 	targetPath := c.resolvePath(args[1])
 	ctxResolve, cancelResolve := context.WithTimeout(context.Background(), requestTimeout)
-	file, err := c.metadata.ResolveFile(ctxResolve, targetPath)
+	file, err := c.client.Metadata.ResolveFile(ctxResolve, targetPath)
 	cancelResolve()
 	if err != nil {
 		if apiErr, ok := err.(apiError); ok && apiErr.Status == http.StatusNotFound {
@@ -1274,7 +1358,7 @@ func (c *cli) handleRm(args []string) {
 		}
 	}
 	ctxDelete, cancelDelete := context.WithTimeout(context.Background(), requestTimeout)
-	err = c.metadata.DeleteFile(ctxDelete, file.ID)
+	err = c.client.Metadata.DeleteFile(ctxDelete, file.ID)
 	cancelDelete()
 	if err != nil {
 		fmt.Fprintf(c.stderr, "rm: %v\n", err)
@@ -1293,7 +1377,7 @@ func (c *cli) handleXAttr(args []string) {
 		targetPath = c.resolvePath(args[1])
 	}
 	ctxDir, cancelDir := context.WithTimeout(context.Background(), requestTimeout)
-	dir, dirErr := c.metadata.ResolveDirectory(ctxDir, targetPath)
+	dir, dirErr := c.client.Metadata.ResolveDirectory(ctxDir, targetPath)
 	cancelDir()
 	if dirErr == nil {
 		attrs := map[string]any{
@@ -1319,7 +1403,7 @@ func (c *cli) handleXAttr(args []string) {
 		return
 	}
 	ctxFile, cancelFile := context.WithTimeout(context.Background(), requestTimeout)
-	file, fileErr := c.metadata.ResolveFile(ctxFile, targetPath)
+	file, fileErr := c.client.Metadata.ResolveFile(ctxFile, targetPath)
 	cancelFile()
 	if fileErr != nil {
 		fmt.Fprintf(c.stderr, "xattr: %v\n", fileErr)
@@ -1368,7 +1452,7 @@ func (c *cli) handleXAttr(args []string) {
 func (c *cli) resolveFile(p string) (fileDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 	defer cancel()
-	return c.metadata.ResolveFile(ctx, p)
+	return c.client.Metadata.ResolveFile(ctx, p)
 }
 
 func (c *cli) handleMv(args []string) {
@@ -1423,7 +1507,7 @@ func (c *cli) moveDirectory(dir directoryDTO, dest string) error {
 	}
 
 	version := dir.Version
-	req := updateDirectoryRequest{
+	req := vfsclient.UpdateDirectoryRequest{
 		Name:    &name,
 		Version: &version,
 	}
@@ -1435,7 +1519,7 @@ func (c *cli) moveDirectory(dir directoryDTO, dest string) error {
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
-	updated, err := c.metadata.UpdateDirectory(ctx, dir.ID, req)
+	updated, err := c.client.Metadata.UpdateDirectory(ctx, dir.ID, req)
 	cancel()
 	if err != nil {
 		return err
@@ -1470,7 +1554,7 @@ func (c *cli) moveFile(file fileDTO, dest string) error {
 	name := path.Base(finalPath)
 
 	version := file.Version
-	req := updateFileRequest{
+	req := vfsclient.UpdateFileRequest{
 		Actor:   c.actor,
 		Version: &version,
 	}
@@ -1485,7 +1569,7 @@ func (c *cli) moveFile(file fileDTO, dest string) error {
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
-	updated, err := c.metadata.UpdateFile(ctx, file.ID, req)
+	updated, err := c.client.Metadata.UpdateFile(ctx, file.ID, req)
 	cancel()
 	if err != nil {
 		return err
@@ -1562,7 +1646,7 @@ func (c *cli) handleCp(args []string) {
 	}
 
 	name := path.Base(finalPath)
-	createReq := createFileRequest{
+	createReq := vfsclient.CreateFileRequest{
 		DirectoryID: directoryID,
 		Name:        name,
 		StorageMode: file.StorageMode,
@@ -1570,7 +1654,7 @@ func (c *cli) handleCp(args []string) {
 	}
 
 	ctxVersions, cancelVersions := context.WithTimeout(context.Background(), requestTimeout)
-	versions, err := c.metadata.ListFileVersions(ctxVersions, file.ID)
+	versions, err := c.client.Metadata.ListFileVersions(ctxVersions, file.ID)
 	cancelVersions()
 	if err == nil && len(versions) > 0 {
 		meta := versions[len(versions)-1].Metadata
@@ -1597,7 +1681,7 @@ func (c *cli) handleCp(args []string) {
 			return
 		}
 		ctxDownload, cancelDownload := context.WithTimeout(context.Background(), requestTimeout)
-		data, err := c.content.Download(ctxDownload, *file.BlobKey)
+		data, err := c.client.Content.Download(ctxDownload, *file.BlobKey)
 		cancelDownload()
 		if err != nil {
 			fmt.Fprintf(c.stderr, "cp: download: %v\n", err)
@@ -1608,7 +1692,7 @@ func (c *cli) handleCp(args []string) {
 			mimeType = *file.MimeType
 		}
 		ctxUpload, cancelUpload := context.WithTimeout(context.Background(), requestTimeout)
-		uploadResp, err := c.content.Upload(ctxUpload, name, mimeType, data)
+		uploadResp, err := c.client.Content.Upload(ctxUpload, name, mimeType, data)
 		cancelUpload()
 		if err != nil {
 			fmt.Fprintf(c.stderr, "cp: upload: %v\n", err)
@@ -1653,13 +1737,157 @@ func (c *cli) handleCp(args []string) {
 	}
 
 	ctxCreate, cancelCreate := context.WithTimeout(context.Background(), requestTimeout)
-	created, err := c.metadata.CreateFile(ctxCreate, createReq)
+	created, err := c.client.Metadata.CreateFile(ctxCreate, createReq)
 	cancelCreate()
 	if err != nil {
 		fmt.Fprintf(c.stderr, "cp: %v\n", err)
 		return
 	}
 	fmt.Fprintf(c.stdout, "copied to %s\n", created.Path)
+}
+
+func (c *cli) handleEdit(args []string) {
+	if len(args) != 2 {
+		fmt.Fprintln(c.stderr, "usage: edit <path>")
+		return
+	}
+	targetPath := c.resolvePath(args[1])
+
+	file, err := c.resolveFile(targetPath)
+	if err != nil {
+		fmt.Fprintf(c.stderr, "edit: %v\n", err)
+		return
+	}
+
+	if isPolicyFilename(file.Name) {
+		if err := c.ensurePolicyAdmin(parentDirectoryPath(file.Path)); err != nil {
+			fmt.Fprintf(c.stderr, "edit: %v\n", err)
+			return
+		}
+	}
+
+	var data []byte
+	switch file.StorageMode {
+	case "inline_json":
+		if len(file.InlineJSON) == 0 {
+			data = []byte("{}")
+		} else {
+			var buf bytes.Buffer
+			if err := json.Indent(&buf, file.InlineJSON, "", "  "); err != nil {
+				data = file.InlineJSON
+			} else {
+				data = buf.Bytes()
+			}
+		}
+	case "blob":
+		if file.BlobKey == nil {
+			fmt.Fprintln(c.stderr, "edit: missing blob key")
+			return
+		}
+		ctxDownload, cancelDownload := context.WithTimeout(context.Background(), requestTimeout)
+		downloadedData, err := c.client.Content.Download(ctxDownload, *file.BlobKey)
+		cancelDownload()
+		if err != nil {
+			fmt.Fprintf(c.stderr, "edit: download: %v\n", err)
+			return
+		}
+		data = downloadedData
+	default:
+		fmt.Fprintf(c.stderr, "edit: unsupported storage mode %q\n", file.StorageMode)
+		return
+	}
+
+	tmpDir, err := os.MkdirTemp("", "vfscli-edit-")
+	if err != nil {
+		fmt.Fprintf(c.stderr, "edit: create temp dir: %v\n", err)
+		return
+	}
+	defer os.RemoveAll(tmpDir)
+
+	tmpFile := filepath.Join(tmpDir, filepath.Base(file.Name))
+	if err := os.WriteFile(tmpFile, data, 0600); err != nil {
+		fmt.Fprintf(c.stderr, "edit: write temp file: %v\n", err)
+		return
+	}
+
+	originalHash := hashBytes(data)
+
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		editor = "vi"
+	}
+
+	cmd := exec.Command(editor, tmpFile)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintf(c.stderr, "edit: editor failed: %v\n", err)
+		return
+	}
+
+	editedData, err := os.ReadFile(tmpFile)
+	if err != nil {
+		fmt.Fprintf(c.stderr, "edit: read temp file: %v\n", err)
+		return
+	}
+
+	editedHash := hashBytes(editedData)
+	if editedHash == originalHash {
+		fmt.Fprintln(c.stdout, "no changes made")
+		return
+	}
+
+	mimeType := ""
+	if file.MimeType != nil {
+		mimeType = *file.MimeType
+	}
+
+	ctxUpload, cancelUpload := context.WithTimeout(context.Background(), requestTimeout)
+	uploadResp, err := c.client.Content.Upload(ctxUpload, filepath.Base(file.Name), mimeType, editedData)
+	cancelUpload()
+	if err != nil {
+		fmt.Fprintf(c.stderr, "edit: upload: %v\n", err)
+		return
+	}
+
+	version := file.Version
+	updateReq := vfsclient.UpdateFileRequest{
+		Actor:       c.actor,
+		Version:     &version,
+		StorageMode: &uploadResp.StorageMode,
+	}
+	if uploadResp.BlobKey != nil {
+		updateReq.BlobKey = uploadResp.BlobKey
+	}
+	if len(uploadResp.JSONPayload) > 0 {
+		payload := json.RawMessage(uploadResp.JSONPayload)
+		updateReq.JSONPayload = &payload
+	}
+	if uploadResp.Checksum != "" {
+		updateReq.Checksum = &uploadResp.Checksum
+	}
+	if uploadResp.Size > 0 {
+		updateReq.Size = &uploadResp.Size
+	}
+	if uploadResp.MimeType != "" {
+		updateReq.MimeType = &uploadResp.MimeType
+	}
+
+	ctxUpdate, cancelUpdate := context.WithTimeout(context.Background(), requestTimeout)
+	_, err = c.client.Metadata.UpdateFile(ctxUpdate, file.ID, updateReq)
+	cancelUpdate()
+	if err != nil {
+		fmt.Fprintf(c.stderr, "edit: update file: %v\n", err)
+		return
+	}
+
+	fmt.Fprintf(c.stdout, "updated %s\n", file.Path)
+}
+
+func hashBytes(data []byte) string {
+	h := sha256.Sum256(data)
+	return hex.EncodeToString(h[:])
 }
 
 func (c *cli) invalidateDirCache(prefix string) {
@@ -1679,7 +1907,7 @@ func (c *cli) printHelp() {
 	fmt.Fprintln(c.stdout, "  exit|quit            Exit the CLI")
 	fmt.Fprintln(c.stdout, "  pwd                  Print current directory")
 	fmt.Fprintln(c.stdout, "  cd [path]            Change directory (default /)")
-	fmt.Fprintln(c.stdout, "  ls [-r] [path]       List directory contents")
+	fmt.Fprintln(c.stdout, "  ls [-r] [-a] [path]  List directory contents (-a shows policy files)")
 	fmt.Fprintln(c.stdout, "  mkdir [-p] <path>    Create a directory (use -p for parents)")
 	fmt.Fprintln(c.stdout, "  rmdir [-f] <path>    Remove a directory (use -f to force)")
 	fmt.Fprintln(c.stdout, "  rm <path>            Delete a file")
@@ -1689,9 +1917,11 @@ func (c *cli) printHelp() {
 	fmt.Fprintln(c.stdout, "  xattr [path]         Show metadata for a file or directory")
 	fmt.Fprintln(c.stdout, "  mv <src> <dst>       Move or rename files/directories")
 	fmt.Fprintln(c.stdout, "  cp <src> <dst>       Copy files")
-	fmt.Fprintln(c.stdout, "  tree [path]          Display directory tree")
+	fmt.Fprintln(c.stdout, "  tree [-d depth] [path]  Display directory tree (default depth: 2, max: 4)")
+	fmt.Fprintln(c.stdout, "  edit <path>          Edit file using $EDITOR (default: vi)")
 	fmt.Fprintln(c.stdout, "  stat [path]          Show detailed attributes")
 	fmt.Fprintln(c.stdout, "  history <path>       List file version history")
+	fmt.Fprintln(c.stdout, "  show <file> [index]  Show file content at specific version (default: latest)")
 	fmt.Fprintln(c.stdout, "  principals [options] [path]  Show resolved users and groups")
 }
 
@@ -1793,7 +2023,7 @@ func (c *cli) ensurePolicyAdmin(path string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 	defer cancel()
-	result, err := c.metadata.ResolvePolicy(ctx, "", normalizePath(path), "")
+	result, err := c.client.Metadata.ResolvePolicy(ctx, "", normalizePath(path), "")
 	if err != nil {
 		return err
 	}
@@ -1809,7 +2039,7 @@ func (c *cli) lookupDirectory(p string) (directoryDTO, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 	defer cancel()
-	dir, err := c.metadata.ResolveDirectory(ctx, p)
+	dir, err := c.client.Metadata.ResolveDirectory(ctx, p)
 	if err != nil {
 		return directoryDTO{}, err
 	}
@@ -1823,14 +2053,14 @@ func (c *cli) ensureDirectory(p string) (directoryDTO, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 	defer cancel()
-	dir, err := c.metadata.ResolveDirectory(ctx, p)
+	dir, err := c.client.Metadata.ResolveDirectory(ctx, p)
 	if err == nil {
 		c.dirCache[p] = dir
 		return dir, nil
 	}
 	if apiErr, ok := err.(apiError); ok && apiErr.Status == http.StatusNotFound {
 		if p == "/" {
-			created, cerr := c.metadata.CreateDirectory(ctx, "/", nil)
+			created, cerr := c.client.Metadata.CreateDirectory(ctx, "/", nil)
 			if cerr != nil {
 				return directoryDTO{}, cerr
 			}
@@ -1846,7 +2076,7 @@ func (c *cli) ensureDirectory(p string) (directoryDTO, error) {
 		if name == "" {
 			return directoryDTO{}, fmt.Errorf("invalid directory path %s", p)
 		}
-		created, cerr := c.metadata.CreateDirectory(ctx, name, &parent.ID)
+		created, cerr := c.client.Metadata.CreateDirectory(ctx, name, &parent.ID)
 		if cerr != nil {
 			if aerr, ok := cerr.(apiError); ok && aerr.Status == http.StatusConflict {
 				return c.lookupDirectory(p)
@@ -1857,289 +2087,6 @@ func (c *cli) ensureDirectory(p string) (directoryDTO, error) {
 		return created, nil
 	}
 	return directoryDTO{}, err
-}
-
-type createFileRequest struct {
-	DirectoryID string           `json:"directory_id"`
-	Name        string           `json:"name"`
-	StorageMode string           `json:"storage_mode"`
-	BlobKey     *string          `json:"blob_key,omitempty"`
-	JSONPayload *json.RawMessage `json:"json_payload,omitempty"`
-	Metadata    map[string]any   `json:"metadata,omitempty"`
-	Checksum    *string          `json:"checksum,omitempty"`
-	Size        *int64           `json:"size,omitempty"`
-	MimeType    *string          `json:"mime_type,omitempty"`
-	Actor       string           `json:"actor"`
-}
-
-type updateDirectoryRequest struct {
-	Name     *string `json:"name,omitempty"`
-	ParentID *string `json:"parent_id,omitempty"`
-	Version  *int64  `json:"version,omitempty"`
-}
-
-type updateFileRequest struct {
-	DirectoryID *string          `json:"directory_id,omitempty"`
-	Name        *string          `json:"name,omitempty"`
-	StorageMode *string          `json:"storage_mode,omitempty"`
-	BlobKey     *string          `json:"blob_key,omitempty"`
-	JSONPayload *json.RawMessage `json:"json_payload,omitempty"`
-	Metadata    map[string]any   `json:"metadata,omitempty"`
-	Checksum    *string          `json:"checksum,omitempty"`
-	Size        *int64           `json:"size,omitempty"`
-	MimeType    *string          `json:"mime_type,omitempty"`
-	Version     *int64           `json:"version,omitempty"`
-	Actor       string           `json:"actor"`
-}
-
-func (m *metadataClient) ResolveDirectory(ctx context.Context, path string) (directoryDTO, error) {
-	endpoint := fmt.Sprintf("%s/api/v1/directories/resolve?path=%s", m.baseURL, url.QueryEscape(path))
-	var out directoryDTO
-	if err := m.do(ctx, http.MethodGet, endpoint, nil, &out); err != nil {
-		return directoryDTO{}, err
-	}
-	return out, nil
-}
-
-func (m *metadataClient) CreateDirectory(ctx context.Context, name string, parentID *string) (directoryDTO, error) {
-	payload := map[string]any{"name": name}
-	if parentID != nil {
-		payload["parent_id"] = parentID
-	}
-	endpoint := fmt.Sprintf("%s/api/v1/directories", m.baseURL)
-	var out directoryDTO
-	if err := m.do(ctx, http.MethodPost, endpoint, payload, &out); err != nil {
-		return directoryDTO{}, err
-	}
-	return out, nil
-}
-
-func (m *metadataClient) DeleteDirectory(ctx context.Context, id string, force bool) error {
-	endpoint := fmt.Sprintf("%s/api/v1/directories/%s", m.baseURL, url.PathEscape(id))
-	if force {
-		endpoint += "?force=true"
-	}
-	return m.do(ctx, http.MethodDelete, endpoint, nil, nil)
-}
-
-func (m *metadataClient) UpdateDirectory(ctx context.Context, id string, in updateDirectoryRequest) (directoryDTO, error) {
-	endpoint := fmt.Sprintf("%s/api/v1/directories/%s", m.baseURL, url.PathEscape(id))
-	var out directoryDTO
-	if err := m.do(ctx, http.MethodPatch, endpoint, in, &out); err != nil {
-		return directoryDTO{}, err
-	}
-	return out, nil
-}
-
-func (m *metadataClient) ListDirectory(ctx context.Context, parentID string, recursive bool) (listDirectoryResponse, error) {
-	params := url.Values{}
-	if parentID != "" {
-		params.Set("parent_id", parentID)
-	}
-	if recursive {
-		params.Set("recursive", "true")
-	}
-	endpoint := fmt.Sprintf("%s/api/v1/directories", m.baseURL)
-	if enc := params.Encode(); enc != "" {
-		endpoint += "?" + enc
-	}
-	var out listDirectoryResponse
-	if err := m.do(ctx, http.MethodGet, endpoint, nil, &out); err != nil {
-		return listDirectoryResponse{}, err
-	}
-	return out, nil
-}
-
-func (m *metadataClient) ResolveFile(ctx context.Context, path string) (fileDTO, error) {
-	endpoint := fmt.Sprintf("%s/api/v1/files/resolve?path=%s", m.baseURL, url.QueryEscape(path))
-	var out fileDTO
-	if err := m.do(ctx, http.MethodGet, endpoint, nil, &out); err != nil {
-		return fileDTO{}, err
-	}
-	return out, nil
-}
-
-func (m *metadataClient) CreateFile(ctx context.Context, in createFileRequest) (fileDTO, error) {
-	endpoint := fmt.Sprintf("%s/api/v1/files", m.baseURL)
-	var out fileDTO
-	if err := m.do(ctx, http.MethodPost, endpoint, in, &out); err != nil {
-		return fileDTO{}, err
-	}
-	return out, nil
-}
-
-func (m *metadataClient) DeleteFile(ctx context.Context, id string) error {
-	endpoint := fmt.Sprintf("%s/api/v1/files/%s", m.baseURL, url.PathEscape(id))
-	return m.do(ctx, http.MethodDelete, endpoint, nil, nil)
-}
-
-func (m *metadataClient) UpdateFile(ctx context.Context, id string, in updateFileRequest) (fileDTO, error) {
-	endpoint := fmt.Sprintf("%s/api/v1/files/%s", m.baseURL, url.PathEscape(id))
-	var out fileDTO
-	if err := m.do(ctx, http.MethodPatch, endpoint, in, &out); err != nil {
-		return fileDTO{}, err
-	}
-	return out, nil
-}
-
-func (m *metadataClient) GetFile(ctx context.Context, id string) (fileDTO, error) {
-	endpoint := fmt.Sprintf("%s/api/v1/files/%s", m.baseURL, url.PathEscape(id))
-	var out fileDTO
-	if err := m.do(ctx, http.MethodGet, endpoint, nil, &out); err != nil {
-		return fileDTO{}, err
-	}
-	return out, nil
-}
-
-func (m *metadataClient) ListFileVersions(ctx context.Context, id string) ([]fileVersionDTO, error) {
-	endpoint := fmt.Sprintf("%s/api/v1/files/%s/versions", m.baseURL, url.PathEscape(id))
-	var out []fileVersionDTO
-	if err := m.do(ctx, http.MethodGet, endpoint, nil, &out); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (m *metadataClient) ResolvePolicy(ctx context.Context, directoryID, path, typ string) (policyResolutionDTO, error) {
-	params := url.Values{}
-	if strings.TrimSpace(directoryID) != "" {
-		params.Set("directory_id", directoryID)
-	}
-	if strings.TrimSpace(path) != "" {
-		params.Set("path", path)
-	}
-	if strings.TrimSpace(typ) != "" {
-		params.Set("type", typ)
-	}
-	endpoint := fmt.Sprintf("%s/api/v1/policies/resolve", m.baseURL)
-	if enc := params.Encode(); enc != "" {
-		endpoint += "?" + enc
-	}
-	var out policyResolutionDTO
-	if err := m.do(ctx, http.MethodGet, endpoint, nil, &out); err != nil {
-		return policyResolutionDTO{}, err
-	}
-	return out, nil
-}
-
-func (m *metadataClient) do(ctx context.Context, method, endpoint string, body any, out any) error {
-	var reader io.Reader
-	if body != nil {
-		buf := &bytes.Buffer{}
-		if err := json.NewEncoder(buf).Encode(body); err != nil {
-			return err
-		}
-		reader = buf
-	}
-	req, err := http.NewRequestWithContext(ctx, method, endpoint, reader)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Accept", "application/json")
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	if strings.TrimSpace(m.actor) != "" {
-		req.Header.Set(actorHeader, m.actor)
-	}
-	resp, err := m.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		return parseAPIError(resp)
-	}
-	if out == nil || resp.StatusCode == http.StatusNoContent {
-		io.Copy(io.Discard, resp.Body)
-		return nil
-	}
-	return json.NewDecoder(resp.Body).Decode(out)
-}
-
-func (c *contentClient) Upload(ctx context.Context, name, mimeType string, data []byte) (uploadResponse, error) {
-	payload := map[string]any{
-		"name":      name,
-		"mime_type": mimeType,
-		"data":      base64.StdEncoding.EncodeToString(data),
-	}
-	endpoint := fmt.Sprintf("%s/api/v1/content", c.baseURL)
-	var out uploadResponse
-	if err := c.do(ctx, http.MethodPost, endpoint, payload, &out); err != nil {
-		return uploadResponse{}, err
-	}
-	if out.MimeType == "" {
-		out.MimeType = mimeType
-	}
-	return out, nil
-}
-
-func (c *contentClient) Download(ctx context.Context, key string) ([]byte, error) {
-	endpoint := fmt.Sprintf("%s/api/v1/content/%s", c.baseURL, url.PathEscape(key))
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		return nil, parseAPIError(resp)
-	}
-	return io.ReadAll(resp.Body)
-}
-
-func (c *contentClient) do(ctx context.Context, method, endpoint string, body any, out any) error {
-	var reader io.Reader
-	if body != nil {
-		buf := &bytes.Buffer{}
-		if err := json.NewEncoder(buf).Encode(body); err != nil {
-			return err
-		}
-		reader = buf
-	}
-	req, err := http.NewRequestWithContext(ctx, method, endpoint, reader)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Accept", "application/json")
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		return parseAPIError(resp)
-	}
-	if out == nil || resp.StatusCode == http.StatusNoContent {
-		io.Copy(io.Discard, resp.Body)
-		return nil
-	}
-	return json.NewDecoder(resp.Body).Decode(out)
-}
-
-func parseAPIError(resp *http.Response) error {
-	var payload struct {
-		Error struct {
-			Code    string `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	data, _ := io.ReadAll(resp.Body)
-	_ = json.Unmarshal(data, &payload)
-	message := strings.TrimSpace(payload.Error.Message)
-	if message == "" && len(data) > 0 {
-		message = strings.TrimSpace(string(data))
-	}
-	if message == "" {
-		message = resp.Status
-	}
-	return apiError{Status: resp.StatusCode, Code: payload.Error.Code, Message: message}
 }
 
 func serviceBaseURL(cfg config.Settings, name string) (string, error) {

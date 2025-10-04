@@ -11,7 +11,7 @@ services:
       MYSQL_USER: vfs
       MYSQL_PASSWORD: vfs
     ports:
-      - "3306:3306"
+      - "23306:3306"
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-proot"]
       interval: 5s
