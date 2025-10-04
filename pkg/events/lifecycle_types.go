@@ -206,32 +206,32 @@ func (e *LifecycleEvent) GetEventType() string {
 // AuthorizationEventPayload represents the payload for authorization events
 type AuthorizationEventPayload struct {
 	Event           LifecycleEvent `json:"event"`
-	Resource        FileResource   `json:"resource"`
+	Resource        interface{}    `json:"resource"` // FileResource or DirectoryResource
 	User            UserContext    `json:"user"`
 	Metadata        EventMetadata  `json:"metadata"`
 
 	// Authorization-specific fields
-	PolicyName      string         `json:"policy_name,omitempty"`
-	RequiredRole    string         `json:"required_role,omitempty"`
-	RequiredPermissions []string   `json:"required_permissions,omitempty"`
-	Decision        string         `json:"decision"` // "allow" or "deny"
-	Reason          string         `json:"reason,omitempty"`
-	DeniedBy        string         `json:"denied_by,omitempty"` // Which check denied (policy, role, permission)
+	PolicyName          string   `json:"policy_name,omitempty"`
+	RequiredRole        string   `json:"required_role,omitempty"`
+	RequiredPermissions []string `json:"required_permissions,omitempty"`
+	Decision            string   `json:"decision"` // "allow" or "deny"
+	Reason              string   `json:"reason,omitempty"`
+	DeniedBy            string   `json:"denied_by,omitempty"` // Which check denied (policy, role, permission)
 }
 
 // ValidationEventPayload represents the payload for validation events
 type ValidationEventPayload struct {
 	Event      LifecycleEvent `json:"event"`
-	Resource   FileResource   `json:"resource"`
+	Resource   interface{}    `json:"resource"` // FileResource or DirectoryResource
 	User       UserContext    `json:"user"`
 	Metadata   EventMetadata  `json:"metadata"`
 
 	// Validation-specific fields
-	ValidationType string         `json:"validation_type"` // "schema", "quota", "content", "size"
-	SchemaPath     string         `json:"schema_path,omitempty"`
-	Violations     []Violation    `json:"violations,omitempty"`
-	QuotaUsed      *QuotaUsage    `json:"quota_used,omitempty"`
-	QuotaLimit     *QuotaLimit    `json:"quota_limit,omitempty"`
+	ValidationType string      `json:"validation_type"` // "schema", "quota", "content", "size"
+	SchemaPath     string      `json:"schema_path,omitempty"`
+	Violations     []Violation `json:"violations,omitempty"`
+	QuotaUsed      *QuotaUsage `json:"quota_used,omitempty"`
+	QuotaLimit     *QuotaLimit `json:"quota_limit,omitempty"`
 }
 
 // Violation represents a validation violation
@@ -273,16 +273,16 @@ type ExecutionEventPayload struct {
 
 // CompletionEventPayload represents the payload for completion events
 type CompletionEventPayload struct {
-	Event           LifecycleEvent    `json:"event"`
-	Resource        FileResource      `json:"resource"`
-	User            UserContext       `json:"user"`
-	Metadata        EventMetadata     `json:"metadata"`
+	Event            LifecycleEvent    `json:"event"`
+	Resource         interface{}       `json:"resource"` // FileResource or DirectoryResource
+	User             UserContext       `json:"user"`
+	Metadata         EventMetadata     `json:"metadata"`
 	OperationContext *OperationContext `json:"operation_context"`
 
 	// Completion-specific fields
-	Success         bool              `json:"success"`
-	TotalDurationMs int64             `json:"total_duration_ms"`
-	ErrorMessage    string            `json:"error_message,omitempty"`
-	FailedStage     string            `json:"failed_stage,omitempty"`
-	RollbackPerformed bool            `json:"rollback_performed,omitempty"`
+	Success           bool   `json:"success"`
+	TotalDurationMs   int64  `json:"total_duration_ms"`
+	ErrorMessage      string `json:"error_message,omitempty"`
+	FailedStage       string `json:"failed_stage,omitempty"`
+	RollbackPerformed bool   `json:"rollback_performed,omitempty"`
 }

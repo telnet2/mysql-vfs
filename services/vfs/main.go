@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -104,7 +103,7 @@ func main() {
 	)
 
 	// Initialize services
-	dirService := services.NewDirectoryService(database)
+	dirService := services.NewDirectoryServiceWithLifecycle(database, eventTrigger)
 	fileService := services.NewFileServiceWithLifecycle(database, storageService, filesLoader, eventTrigger)
 	idempotencyService := idempotency.NewServiceWithTTL(database, cfg.IdempotencyTTL)
 
@@ -557,12 +556,4 @@ func (s *VFSServer) moveFile(ctx context.Context, c *app.RequestContext) {
 	}
 
 	c.JSON(consts.StatusOK, response)
-}
-
-// getEnv retrieves an environment variable or returns a default value
-func getEnv(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
 }

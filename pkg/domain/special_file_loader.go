@@ -23,7 +23,6 @@ type GenericLoader struct {
 	fileType SpecialFileType
 	cache    *sync.Map
 	cacheTTL time.Duration
-	mu       sync.RWMutex
 }
 
 // NewGenericLoader creates a loader for any special file type

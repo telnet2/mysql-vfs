@@ -56,6 +56,7 @@ type DirectoryResource struct {
 	Name      string       `json:"name"`
 	Path      string       `json:"path"`
 	CreatedAt time.Time    `json:"created_at"`
+	UpdatedAt time.Time    `json:"updated_at"`
 }
 
 // UserContext represents the user who triggered the event

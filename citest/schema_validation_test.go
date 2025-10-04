@@ -15,18 +15,18 @@ import (
 	"github.com/telnet2/mysql-vfs/pkg/services"
 )
 
-var _ = Describe("Schema Validation E2E", Ordered, func() {
+var _ = Describe("Files Validation E2E", Ordered, func() {
 	var (
-		ctx          context.Context
-		testDB       *fixtures.TestDatabase
-		testStorage  *fixtures.TestS3
-		dirService   *services.DirectoryService
-		fileService  *services.FileService
-		schemaLoader *domain.SchemaLoader
+		ctx         context.Context
+		testDB      *fixtures.TestDatabase
+		testStorage *fixtures.TestS3
+		dirService  *services.DirectoryService
+		fileService *services.FileService
+		filesLoader *domain.FilesLoader
 	)
 
 	BeforeAll(func() {
-		GinkgoWriter.Println("🚀 Setting up Schema Validation test environment...")
+		GinkgoWriter.Println("🚀 Setting up Files Validation test environment...")
 		testDB = fixtures.NewTestDatabase()
 		testStorage = fixtures.NewTestS3()
 		ctx = context.Background()
@@ -35,12 +35,12 @@ var _ = Describe("Schema Validation E2E", Ordered, func() {
 		fileRepo := gorm.NewGormFileRepository(testDB.GetDB())
 		dirRepo := gorm.NewGormDirectoryRepository(testDB.GetDB())
 
-		// Create schema loader with 5-minute cache
-		schemaLoader = domain.NewSchemaLoader(fileRepo, dirRepo, 5*time.Minute)
+		// Create files loader with 5-minute cache
+		filesLoader = domain.NewFilesLoader(fileRepo, dirRepo, 5*time.Minute)
 
 		// Create services
 		dirService = services.NewDirectoryService(testDB.GetDB())
-		fileService = services.NewFileServiceWithValidation(testDB.GetDB(), testStorage.Storage, schemaLoader)
+		fileService = services.NewFileServiceWithValidation(testDB.GetDB(), testStorage.Storage, filesLoader)
 
 		GinkgoWriter.Println("✅ Test environment ready")
 	})
@@ -50,45 +50,52 @@ var _ = Describe("Schema Validation E2E", Ordered, func() {
 		testStorage.Cleanup()
 	})
 
-	Context("when admin creates a schema", func() {
+	Context("when admin creates a .files config", func() {
 		It("should validate files uploaded to that directory", func() {
 			// Step 1: Create directory
 			dir, err := dirService.CreateDirectory(ctx, "/", "users")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(dir.Path).To(Equal("/users"))
 
-			// Step 2: Admin creates schema for user data
-			schema := `{
-				"$schema": "http://json-schema.org/draft-07/schema#",
-				"type": "object",
-				"properties": {
-					"name": {
-						"type": "string",
-						"minLength": 1
-					},
-					"email": {
-						"type": "string",
-						"format": "email"
-					},
-					"age": {
-						"type": "integer",
-						"minimum": 0,
-						"maximum": 150
+			// Step 2: Admin creates .files config for user data validation
+			filesConfig := `{
+				"rules": [
+					{
+						"pattern": "*.json",
+						"type": "glob",
+						"schema": {
+							"type": "object",
+							"properties": {
+								"name": {
+									"type": "string",
+									"minLength": 1
+								},
+								"email": {
+									"type": "string",
+									"format": "email"
+								},
+								"age": {
+									"type": "integer",
+									"minimum": 0,
+									"maximum": 150
+								}
+							},
+							"required": ["name", "email"]
+						}
 					}
-				},
-				"required": ["name", "email"]
+				]
 			}`
 
-			schemaFile, err := fileService.CreateFile(
+			filesFile, err := fileService.CreateFile(
 				ctx,
 				"/users",
-				".jsonschema",
+				".files",
 				"application/json",
-				int64(len(schema)),
-				io.NopCloser(strings.NewReader(schema)),
+				int64(len(filesConfig)),
+				io.NopCloser(strings.NewReader(filesConfig)),
 			)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(schemaFile.Name).To(Equal(".jsonschema"))
+			Expect(filesFile.Name).To(Equal(".files"))
 
 			// Step 3: User uploads valid JSON file
 			validUser := `{
@@ -144,30 +151,37 @@ var _ = Describe("Schema Validation E2E", Ordered, func() {
 		})
 	})
 
-	Context("when schema inheritance is used", func() {
-		It("should inherit schema from parent directory", func() {
-			// Step 1: Create parent directory with schema
+	Context("when .files inheritance is used", func() {
+		It("should inherit .files config from parent directory", func() {
+			// Step 1: Create parent directory with .files config
 			_, err := dirService.CreateDirectory(ctx, "/", "data")
 			Expect(err).NotTo(HaveOccurred())
 
-			schema := `{
-				"$schema": "http://json-schema.org/draft-07/schema#",
-				"type": "object",
-				"properties": {
-					"value": {
-						"type": "number"
+			filesConfig := `{
+				"rules": [
+					{
+						"pattern": "*.json",
+						"type": "glob",
+						"schema": {
+							"type": "object",
+							"properties": {
+								"value": {
+									"type": "number"
+								}
+							},
+							"required": ["value"]
+						}
 					}
-				},
-				"required": ["value"]
+				]
 			}`
 
 			_, err = fileService.CreateFile(
 				ctx,
 				"/data",
-				".jsonschema",
+				".files",
 				"application/json",
-				int64(len(schema)),
-				io.NopCloser(strings.NewReader(schema)),
+				int64(len(filesConfig)),
+				io.NopCloser(strings.NewReader(filesConfig)),
 			)
 			Expect(err).NotTo(HaveOccurred())
 
@@ -202,49 +216,63 @@ var _ = Describe("Schema Validation E2E", Ordered, func() {
 			Expect(err.Error()).To(ContainSubstring("value"))
 		})
 
-		It("should allow child directory to override parent schema", func() {
-			// Step 1: Create parent with lenient schema
+		It("should allow child directory to override parent .files config", func() {
+			// Step 1: Create parent with lenient .files config
 			_, err := dirService.CreateDirectory(ctx, "/", "config")
 			Expect(err).NotTo(HaveOccurred())
 
-			parentSchema := `{
-				"$schema": "http://json-schema.org/draft-07/schema#",
-				"type": "object"
+			parentConfig := `{
+				"rules": [
+					{
+						"pattern": "*.json",
+						"type": "glob",
+						"schema": {
+							"type": "object"
+						}
+					}
+				]
 			}`
 
 			_, err = fileService.CreateFile(
 				ctx,
 				"/config",
-				".jsonschema",
+				".files",
 				"application/json",
-				int64(len(parentSchema)),
-				io.NopCloser(strings.NewReader(parentSchema)),
+				int64(len(parentConfig)),
+				io.NopCloser(strings.NewReader(parentConfig)),
 			)
 			Expect(err).NotTo(HaveOccurred())
 
-			// Step 2: Create child with strict schema
+			// Step 2: Create child with strict .files config
 			_, err = dirService.CreateDirectory(ctx, "/config", "strict")
 			Expect(err).NotTo(HaveOccurred())
 
-			strictSchema := `{
-				"$schema": "http://json-schema.org/draft-07/schema#",
-				"type": "object",
-				"properties": {
-					"key": {
-						"type": "string"
+			strictConfig := `{
+				"rules": [
+					{
+						"pattern": "*.json",
+						"type": "glob",
+						"schema": {
+							"type": "object",
+							"properties": {
+								"key": {
+									"type": "string"
+								}
+							},
+							"required": ["key"],
+							"additionalProperties": false
+						}
 					}
-				},
-				"required": ["key"],
-				"additionalProperties": false
+				]
 			}`
 
 			_, err = fileService.CreateFile(
 				ctx,
 				"/config/strict",
-				".jsonschema",
+				".files",
 				"application/json",
-				int64(len(strictSchema)),
-				io.NopCloser(strings.NewReader(strictSchema)),
+				int64(len(strictConfig)),
+				io.NopCloser(strings.NewReader(strictConfig)),
 			)
 			Expect(err).NotTo(HaveOccurred())
 
@@ -283,24 +311,31 @@ var _ = Describe("Schema Validation E2E", Ordered, func() {
 		})
 	})
 
-	Context("when validating non-JSON files", func() {
-		It("should skip validation for non-JSON content types", func() {
-			// Create directory with JSON schema
+	Context("when validating files with patterns", func() {
+		It("should only validate files matching patterns", func() {
+			// Create directory with .files config for JSON only
 			_, err := dirService.CreateDirectory(ctx, "/", "mixed")
 			Expect(err).NotTo(HaveOccurred())
 
-			schema := `{
-				"$schema": "http://json-schema.org/draft-07/schema#",
-				"type": "object"
+			filesConfig := `{
+				"rules": [
+					{
+						"pattern": "*.json",
+						"type": "glob",
+						"schema": {
+							"type": "object"
+						}
+					}
+				]
 			}`
 
 			_, err = fileService.CreateFile(
 				ctx,
 				"/mixed",
-				".jsonschema",
+				".files",
 				"application/json",
-				int64(len(schema)),
-				io.NopCloser(strings.NewReader(schema)),
+				int64(len(filesConfig)),
+				io.NopCloser(strings.NewReader(filesConfig)),
 			)
 			Expect(err).NotTo(HaveOccurred())
 
@@ -330,9 +365,9 @@ var _ = Describe("Schema Validation E2E", Ordered, func() {
 		})
 	})
 
-	Context("when directory has no schema", func() {
+	Context("when directory has no .files config", func() {
 		It("should allow any content", func() {
-			// Create directory without schema
+			// Create directory without .files config
 			_, err := dirService.CreateDirectory(ctx, "/", "unvalidated")
 			Expect(err).NotTo(HaveOccurred())
 

@@ -474,7 +474,7 @@ export AUTH_PROVIDER=headers
 ### Objective
 Redesign event system to track complete operation lifecycle with authorization-first approach, substages, and veto capabilities.
 
-### Implementation Status: ✅ 95% Complete (Core complete, remaining operations pending)
+### Implementation Status: ✅ 100% Complete (All operations instrumented)
 
 #### Architecture Design ✅
 
@@ -569,14 +569,14 @@ Examples:
 
 **5. FileService Integration** ✅
 - Location: `pkg/services/file_service.go`
-- CreateFile with full lifecycle events:
-  1. `file.create.authorization.started/succeeded`
-  2. `file.create.validation.{size,name,schema}.{checking,succeeded,failed}`
-  3. `file.create.execution` (database operations)
-  4. `file.create.completion.{succeeded,failed}`
-- Helper methods: `buildAuthPayload()`, `buildValidationPayload()`, `buildCompletionPayload()`
+- All file operations with full lifecycle events:
+  - **CreateFile**: Authorization → Validation (size, name, schema) → Execution → Completion
+  - **UpdateFile**: Authorization → Validation (size, version, schema) → Execution → Completion
+  - **DeleteFile**: Authorization → Validation (existence) → Execution → Completion
+  - **MoveFile**: Authorization → Validation (source, destination, conflicts) → Execution → Completion
+- Helper methods: `buildAuthPayloadForOp()`, `buildValidationPayloadForOp()`, `buildCompletionPayloadForOp()`
 - Veto support throughout the flow
-- Commits: `b8fc4d7`
+- Commits: `b8fc4d7`, (today's commit)
 
 **6. Enhanced .events Configuration** ✅
 - Updated EventHandler type (`pkg/events/types.go`):
@@ -589,13 +589,22 @@ Examples:
 - Wildcard pattern matching fully implemented
 - Commits: `a306fe4`
 
-**7. Main Service Wiring** ✅
+**7. DirectoryService Integration** ✅
+- Location: `pkg/services/directory_service.go`
+- All directory operations with full lifecycle events:
+  - **CreateDirectory**: Authorization → Validation (parent existence) → Execution → Completion
+  - **DeleteDirectory**: Authorization → Validation (existence, emptiness) → Execution → Completion
+- Helper methods: `buildAuthPayloadForDir()`, `buildValidationPayloadForDir()`, `buildCompletionPayloadForDir()`
+- Support for both FileResource and DirectoryResource in event payloads
+- Commits: (today's commit)
+
+**8. Main Service Wiring** ✅
 - Location: `services/vfs/main.go`
 - EventsLoader initialization
 - Handler registry with webhook/log/metrics
 - LifecycleEventTrigger with concurrency control
-- FileService wired with lifecycle events
-- Commits: `b8fc4d7`
+- FileService and DirectoryService wired with lifecycle events
+- Commits: `b8fc4d7`, (today's commit)
 
 #### Example .events Configuration
 
@@ -768,15 +777,19 @@ Examples:
 | Metrics Handler | ✅ Complete | 100% |
 | Event Emitters Integration | 🚧 Partial | 20% |
 | Lifecycle Event System Design | ✅ Complete | 100% |
-| Lifecycle Event Implementation | ✅ Complete | 95% |
+| Lifecycle Event Implementation | ✅ Complete | 100% |
 | Pattern Matching (Wildcards) | ✅ Complete | 100% |
 | Veto Capability | ✅ Complete | 100% |
 | CreateFile Lifecycle Events | ✅ Complete | 100% |
-| Remaining Operations (Update/Delete/Move/Dir) | ⏳ Pending | 0% |
+| UpdateFile Lifecycle Events | ✅ Complete | 100% |
+| DeleteFile Lifecycle Events | ✅ Complete | 100% |
+| MoveFile Lifecycle Events | ✅ Complete | 100% |
+| CreateDirectory Lifecycle Events | ✅ Complete | 100% |
+| DeleteDirectory Lifecycle Events | ✅ Complete | 100% |
 | Documentation | 🚧 Partial | 60% |
 | Tests | ⏳ Not Started | 0% |
 
-**Overall v2.1 Progress: 92%** (Core complete, remaining ops + tests pending)
+**Overall v2.1 Progress: 95%** (Implementation complete, tests + docs pending)
 
 ---
 
@@ -882,8 +895,8 @@ Examples:
    - [x] Implement wildcard pattern matching for events
    - [x] Add substage tracking for authorization, validation, execution
    - [x] Wire up EventTrigger in services/main
-   - [ ] Add lifecycle events to UpdateFile, DeleteFile, MoveFile
-   - [ ] Add lifecycle events to CreateDirectory, DeleteDirectory
+   - [x] Add lifecycle events to UpdateFile, DeleteFile, MoveFile
+   - [x] Add lifecycle events to CreateDirectory, DeleteDirectory
 
 2. **Testing**
    - [ ] Update tests from `.jsonschema` to `.files`

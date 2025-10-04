@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/telnet2/mysql-vfs/pkg/domain"
+	"github.com/telnet2/mysql-vfs/pkg/events"
 	"github.com/telnet2/mysql-vfs/pkg/models"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -27,14 +29,22 @@ const (
 
 // DirectoryService handles directory operations
 type DirectoryService struct {
-	db *gorm.DB
+	db           *gorm.DB
+	eventTrigger domain.EventTrigger // For lifecycle events
 }
 
 // NewDirectoryService creates a new directory service
 func NewDirectoryService(db *gorm.DB) *DirectoryService {
-	// Initialize random seed for backoff jitter (seed once per service instance)
-	rand.Seed(time.Now().UnixNano())
+	// Note: As of Go 1.20, random is automatically seeded
 	return &DirectoryService{db: db}
+}
+
+// NewDirectoryServiceWithLifecycle creates a new directory service with lifecycle events
+func NewDirectoryServiceWithLifecycle(db *gorm.DB, eventTrigger domain.EventTrigger) *DirectoryService {
+	return &DirectoryService{
+		db:           db,
+		eventTrigger: eventTrigger,
+	}
 }
 
 // calculateBackoff calculates exponential backoff with jitter
@@ -176,11 +186,66 @@ func (s *DirectoryService) CreateDirectory(ctx context.Context, parentPath, name
 	return nil, fmt.Errorf("failed to create directory after %d attempts: %w", maxRetries, lastErr)
 }
 
-// tryCreateDirectory attempts to create a directory without locks (single attempt)
+// tryCreateDirectory attempts to create a directory without locks (single attempt) with lifecycle events
 func (s *DirectoryService) tryCreateDirectory(ctx context.Context, parentPath, fullPath, name string) (*models.Directory, error) {
-	var dir *models.Directory
+	// Get user context
+	user := s.getUserContext(ctx)
+	requestID := s.getRequestID(ctx)
 
+	// Create operation context
+	opCtx := &events.OperationContext{
+		OperationID:  uuid.New().String(),
+		Category:     events.CategoryDirectory,
+		Operation:    events.OperationCreate,
+		ResourcePath: fullPath,
+		UserID:       user.UserID,
+		StartedAt:    time.Now(),
+		CurrentStage: events.StageAuthorization,
+		Status:       "in_progress",
+	}
+
+	// ========== AUTHORIZATION STAGE ==========
+	if s.eventTrigger != nil {
+		authStartTime := time.Now()
+		opCtx.AuthorizationStartedAt = &authStartTime
+
+		// Emit authorization.started (synchronous - can veto)
+		authPayload := s.buildAuthPayloadForDir(opCtx, user, requestID, name, events.OperationCreate, events.ActionStarted, events.OutcomeSucceeded)
+		if err := s.eventTrigger.EmitSync(ctx, "directory.create.authorization.started", authPayload); err != nil {
+			return nil, fmt.Errorf("authorization failed: %w", err)
+		}
+
+		// TODO: Actual authorization check would go here
+		// For now, we assume authorization succeeds
+
+		authEndTime := time.Now()
+		opCtx.AuthorizationEndedAt = &authEndTime
+
+		// Emit authorization.succeeded (synchronous - can veto)
+		authSuccessPayload := s.buildAuthPayloadForDir(opCtx, user, requestID, name, events.OperationCreate, events.ActionChecked, events.OutcomeSucceeded)
+		authSuccessPayload.Decision = "allow"
+		authSuccessPayload.Reason = "default allow policy"
+		if err := s.eventTrigger.EmitSync(ctx, "directory.create.authorization.succeeded", authSuccessPayload); err != nil {
+			return nil, fmt.Errorf("authorization failed: %w", err)
+		}
+	}
+
+	// ========== VALIDATION STAGE ==========
+	opCtx.CurrentStage = events.StageValidation
+
+	if s.eventTrigger != nil {
+		valStartTime := time.Now()
+		opCtx.ValidationStartedAt = &valStartTime
+	}
+
+	// ========== EXECUTION STAGE ==========
+	opCtx.CurrentStage = events.StageExecution
+
+	var dir *models.Directory
 	err := s.db.Transaction(func(tx *gorm.DB) error {
+		execStartTime := time.Now()
+		opCtx.ExecutionStartedAt = &execStartTime
+
 		// Verify parent exists (no lock - optimistic approach)
 		var parent models.Directory
 		if parentPath == "/" {
@@ -194,9 +259,33 @@ func (s *DirectoryService) tryCreateDirectory(ctx context.Context, parentPath, f
 		} else {
 			if err := tx.Where("path = ? AND deleted_at IS NULL", parentPath).First(&parent).Error; err != nil {
 				if err == gorm.ErrRecordNotFound {
+					// Parent directory not found - validation failure
+					if s.eventTrigger != nil {
+						valPayload := s.buildValidationPayloadForDir(opCtx, user, requestID, name, events.OperationCreate, events.ActionChecked, events.OutcomeFailed)
+						valPayload.ValidationType = "parent_existence"
+						valPayload.Violations = []events.Violation{{
+							Field:   "parent",
+							Message: fmt.Sprintf("parent directory not found: %s", parentPath),
+							Code:    "parent_not_found",
+						}}
+						s.eventTrigger.Emit(ctx, "directory.create.validation.parent.failed", valPayload)
+					}
 					return fmt.Errorf("parent directory not found: %s", parentPath)
 				}
 				return err
+			}
+		}
+
+		// Parent validation succeeded
+		if s.eventTrigger != nil {
+			valEndTime := time.Now()
+			opCtx.ValidationEndedAt = &valEndTime
+
+			valPayload := s.buildValidationPayloadForDir(opCtx, user, requestID, name, events.OperationCreate, events.ActionChecked, events.OutcomeSucceeded)
+			valPayload.ValidationType = "all"
+			// Use EmitSync - final validation veto point
+			if err := s.eventTrigger.EmitSync(ctx, "directory.create.validation.succeeded", valPayload); err != nil {
+				return fmt.Errorf("validation vetoed: %w", err)
 			}
 		}
 
@@ -221,7 +310,7 @@ func (s *DirectoryService) tryCreateDirectory(ctx context.Context, parentPath, f
 			return err
 		}
 
-		// Emit directory.created event
+		// Emit legacy directory.created event
 		if err := s.emitEvent(ctx, tx, "directory.created", dir.ID, map[string]interface{}{
 			"directory_id": dir.ID,
 			"name":         dir.Name,
@@ -234,8 +323,32 @@ func (s *DirectoryService) tryCreateDirectory(ctx context.Context, parentPath, f
 		return nil
 	})
 
+	// ========== COMPLETION STAGE ==========
 	if err != nil {
+		// Operation failed
+		if s.eventTrigger != nil {
+			opCtx.Status = "failed"
+			opCtx.ErrorMessage = err.Error()
+			completedAt := time.Now()
+			opCtx.CompletedAt = &completedAt
+
+			completionPayload := s.buildCompletionPayloadForDir(opCtx, user, requestID, dir, events.OperationCreate, false, err.Error())
+			s.eventTrigger.Emit(ctx, "directory.create.completion.failed", completionPayload)
+		}
 		return nil, err
+	}
+
+	// Operation succeeded
+	if s.eventTrigger != nil {
+		opCtx.Status = "succeeded"
+		completedAt := time.Now()
+		opCtx.CompletedAt = &completedAt
+
+		completionPayload := s.buildCompletionPayloadForDir(opCtx, user, requestID, dir, events.OperationCreate, true, "")
+		s.eventTrigger.Emit(ctx, "directory.create.completion.succeeded", completionPayload)
+
+		// Also emit legacy directory.created event for backward compatibility
+		s.eventTrigger.Emit(ctx, "directory.created", completionPayload)
 	}
 
 	return dir, nil
@@ -290,14 +403,71 @@ func (s *DirectoryService) ListDirectory(dirPath string, limit int, cursor strin
 	return directories, files, nextCursor, nil
 }
 
-// DeleteDirectory deletes a directory (optionally recursive)
+// DeleteDirectory deletes a directory (optionally recursive) with lifecycle event tracking
 func (s *DirectoryService) DeleteDirectory(ctx context.Context, dirPath string, recursive bool) error {
+	// Get user context
+	user := s.getUserContext(ctx)
+	requestID := s.getRequestID(ctx)
+
 	// Prevent deleting root directory
 	if dirPath == "/" {
 		return fmt.Errorf("cannot delete root directory")
 	}
 
-	return s.db.Transaction(func(tx *gorm.DB) error {
+	// Create operation context
+	opCtx := &events.OperationContext{
+		OperationID:  uuid.New().String(),
+		Category:     events.CategoryDirectory,
+		Operation:    events.OperationDelete,
+		ResourcePath: dirPath,
+		UserID:       user.UserID,
+		StartedAt:    time.Now(),
+		CurrentStage: events.StageAuthorization,
+		Status:       "in_progress",
+	}
+
+	// ========== AUTHORIZATION STAGE ==========
+	if s.eventTrigger != nil {
+		authStartTime := time.Now()
+		opCtx.AuthorizationStartedAt = &authStartTime
+
+		// Emit authorization.started (synchronous - can veto)
+		authPayload := s.buildAuthPayloadForDir(opCtx, user, requestID, "", events.OperationDelete, events.ActionStarted, events.OutcomeSucceeded)
+		if err := s.eventTrigger.EmitSync(ctx, "directory.delete.authorization.started", authPayload); err != nil {
+			return fmt.Errorf("authorization failed: %w", err)
+		}
+
+		// TODO: Actual authorization check would go here
+		// For now, we assume authorization succeeds
+
+		authEndTime := time.Now()
+		opCtx.AuthorizationEndedAt = &authEndTime
+
+		// Emit authorization.succeeded (synchronous - can veto)
+		authSuccessPayload := s.buildAuthPayloadForDir(opCtx, user, requestID, "", events.OperationDelete, events.ActionChecked, events.OutcomeSucceeded)
+		authSuccessPayload.Decision = "allow"
+		authSuccessPayload.Reason = "default allow policy"
+		if err := s.eventTrigger.EmitSync(ctx, "directory.delete.authorization.succeeded", authSuccessPayload); err != nil {
+			return fmt.Errorf("authorization failed: %w", err)
+		}
+	}
+
+	// ========== VALIDATION STAGE ==========
+	opCtx.CurrentStage = events.StageValidation
+
+	if s.eventTrigger != nil {
+		valStartTime := time.Now()
+		opCtx.ValidationStartedAt = &valStartTime
+	}
+
+	// ========== EXECUTION STAGE ==========
+	opCtx.CurrentStage = events.StageExecution
+
+	var dir *models.Directory
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		execStartTime := time.Now()
+		opCtx.ExecutionStartedAt = &execStartTime
+
 		// Lock directory path (tree lock)
 		pathComponents := s.getPathComponents(dirPath)
 		if err := s.lockPaths(tx, pathComponents); err != nil {
@@ -305,14 +475,27 @@ func (s *DirectoryService) DeleteDirectory(ctx context.Context, dirPath string, 
 		}
 
 		// Find directory
-		var dir models.Directory
-		if err := tx.Where("path = ? AND deleted_at IS NULL", dirPath).First(&dir).Error; err != nil {
+		var d models.Directory
+		if err := tx.Where("path = ? AND deleted_at IS NULL", dirPath).First(&d).Error; err != nil {
 			if err == gorm.ErrRecordNotFound {
+				// Directory not found - validation failure
+				if s.eventTrigger != nil {
+					valPayload := s.buildValidationPayloadForDir(opCtx, user, requestID, "", events.OperationDelete, events.ActionChecked, events.OutcomeFailed)
+					valPayload.ValidationType = "existence"
+					valPayload.Violations = []events.Violation{{
+						Field:   "directory",
+						Message: fmt.Sprintf("directory not found: %s", dirPath),
+						Code:    "not_found",
+					}}
+					s.eventTrigger.Emit(ctx, "directory.delete.validation.existence.failed", valPayload)
+				}
 				return fmt.Errorf("directory not found: %s", dirPath)
 			}
 			return err
 		}
+		dir = &d
 
+		// Directory exists - validate emptiness (if not recursive)
 		if !recursive {
 			// Check if directory is empty
 			var childCount int64
@@ -320,6 +503,17 @@ func (s *DirectoryService) DeleteDirectory(ctx context.Context, dirPath string, 
 				return err
 			}
 			if childCount > 0 {
+				// Directory not empty - validation failure
+				if s.eventTrigger != nil {
+					valPayload := s.buildValidationPayloadForDir(opCtx, user, requestID, dir.Name, events.OperationDelete, events.ActionChecked, events.OutcomeFailed)
+					valPayload.ValidationType = "emptiness"
+					valPayload.Violations = []events.Violation{{
+						Field:   "directory",
+						Message: fmt.Sprintf("directory not empty (contains %d subdirectories)", childCount),
+						Code:    "directory_not_empty",
+					}}
+					s.eventTrigger.Emit(ctx, "directory.delete.validation.emptiness.failed", valPayload)
+				}
 				return fmt.Errorf("directory not empty (contains %d subdirectories)", childCount)
 			}
 
@@ -328,6 +522,17 @@ func (s *DirectoryService) DeleteDirectory(ctx context.Context, dirPath string, 
 				return err
 			}
 			if fileCount > 0 {
+				// Directory not empty - validation failure
+				if s.eventTrigger != nil {
+					valPayload := s.buildValidationPayloadForDir(opCtx, user, requestID, dir.Name, events.OperationDelete, events.ActionChecked, events.OutcomeFailed)
+					valPayload.ValidationType = "emptiness"
+					valPayload.Violations = []events.Violation{{
+						Field:   "directory",
+						Message: fmt.Sprintf("directory not empty (contains %d files)", fileCount),
+						Code:    "directory_not_empty",
+					}}
+					s.eventTrigger.Emit(ctx, "directory.delete.validation.emptiness.failed", valPayload)
+				}
 				return fmt.Errorf("directory not empty (contains %d files)", fileCount)
 			}
 		} else {
@@ -337,12 +542,25 @@ func (s *DirectoryService) DeleteDirectory(ctx context.Context, dirPath string, 
 			}
 		}
 
+		// All validation passed
+		if s.eventTrigger != nil {
+			valEndTime := time.Now()
+			opCtx.ValidationEndedAt = &valEndTime
+
+			valPayload := s.buildValidationPayloadForDir(opCtx, user, requestID, dir.Name, events.OperationDelete, events.ActionChecked, events.OutcomeSucceeded)
+			valPayload.ValidationType = "all"
+			// Use EmitSync - final validation veto point
+			if err := s.eventTrigger.EmitSync(ctx, "directory.delete.validation.succeeded", valPayload); err != nil {
+				return fmt.Errorf("validation vetoed: %w", err)
+			}
+		}
+
 		// Soft delete the directory
 		if err := tx.Delete(&dir).Error; err != nil {
 			return fmt.Errorf("failed to delete directory: %w", err)
 		}
 
-		// Emit directory.deleted event
+		// Emit legacy directory.deleted event
 		if err := s.emitEvent(ctx, tx, "directory.deleted", dir.ID, map[string]interface{}{
 			"directory_id": dir.ID,
 			"name":         dir.Name,
@@ -354,6 +572,36 @@ func (s *DirectoryService) DeleteDirectory(ctx context.Context, dirPath string, 
 
 		return nil
 	})
+
+	// ========== COMPLETION STAGE ==========
+	if err != nil {
+		// Operation failed
+		if s.eventTrigger != nil {
+			opCtx.Status = "failed"
+			opCtx.ErrorMessage = err.Error()
+			completedAt := time.Now()
+			opCtx.CompletedAt = &completedAt
+
+			completionPayload := s.buildCompletionPayloadForDir(opCtx, user, requestID, dir, events.OperationDelete, false, err.Error())
+			s.eventTrigger.Emit(ctx, "directory.delete.completion.failed", completionPayload)
+		}
+		return err
+	}
+
+	// Operation succeeded
+	if s.eventTrigger != nil {
+		opCtx.Status = "succeeded"
+		completedAt := time.Now()
+		opCtx.CompletedAt = &completedAt
+
+		completionPayload := s.buildCompletionPayloadForDir(opCtx, user, requestID, dir, events.OperationDelete, true, "")
+		s.eventTrigger.Emit(ctx, "directory.delete.completion.succeeded", completionPayload)
+
+		// Also emit legacy directory.deleted event for backward compatibility
+		s.eventTrigger.Emit(ctx, "directory.deleted", completionPayload)
+	}
+
+	return nil
 }
 
 // recursiveDelete recursively deletes all subdirectories and files
@@ -429,4 +677,158 @@ func (s *DirectoryService) GetDirectory(dirPath string) (*models.Directory, erro
 		return nil, err
 	}
 	return &dir, nil
+}
+
+// getUserContext extracts user context from request context
+func (s *DirectoryService) getUserContext(ctx context.Context) events.UserContext {
+	// TODO: Extract from actual auth context
+	// For now, return a default user
+	return events.UserContext{
+		UserID: "system",
+		Role:   "admin",
+		Groups: []string{},
+	}
+}
+
+// getRequestID gets or generates a request ID
+func (s *DirectoryService) getRequestID(ctx context.Context) string {
+	requestID := ctx.Value("requestID")
+	if requestID == nil {
+		return uuid.New().String()
+	}
+	if rid, ok := requestID.(string); ok {
+		return rid
+	}
+	return uuid.New().String()
+}
+
+// buildAuthPayloadForDir builds an authorization event payload for directory operations
+func (s *DirectoryService) buildAuthPayloadForDir(
+	opCtx *events.OperationContext,
+	user events.UserContext,
+	requestID string,
+	name string,
+	operation events.Operation,
+	action events.Action,
+	outcome events.Outcome,
+) *events.AuthorizationEventPayload {
+	now := time.Now()
+	return &events.AuthorizationEventPayload{
+		Event: events.LifecycleEvent{
+			ID:          uuid.New().String(),
+			Category:    events.CategoryDirectory,
+			Operation:   operation,
+			Stage:       events.StageAuthorization,
+			Action:      action,
+			Outcome:     outcome,
+			Timestamp:   now,
+			OperationID: opCtx.OperationID,
+		},
+		Resource: events.DirectoryResource{
+			Type: events.ResourceTypeDirectory,
+			Name: name,
+			Path: opCtx.ResourcePath,
+		},
+		User: events.UserContext{
+			UserID: user.UserID,
+			Role:   user.Role,
+			Groups: user.Groups,
+		},
+		Metadata: events.EventMetadata{
+			RequestID: requestID,
+		},
+	}
+}
+
+// buildValidationPayloadForDir builds a validation event payload for directory operations
+func (s *DirectoryService) buildValidationPayloadForDir(
+	opCtx *events.OperationContext,
+	user events.UserContext,
+	requestID string,
+	name string,
+	operation events.Operation,
+	action events.Action,
+	outcome events.Outcome,
+) *events.ValidationEventPayload {
+	now := time.Now()
+	return &events.ValidationEventPayload{
+		Event: events.LifecycleEvent{
+			ID:          uuid.New().String(),
+			Category:    events.CategoryDirectory,
+			Operation:   operation,
+			Stage:       events.StageValidation,
+			Action:      action,
+			Outcome:     outcome,
+			Timestamp:   now,
+			OperationID: opCtx.OperationID,
+		},
+		Resource: events.DirectoryResource{
+			Type: events.ResourceTypeDirectory,
+			Name: name,
+			Path: opCtx.ResourcePath,
+		},
+		User: events.UserContext{
+			UserID: user.UserID,
+			Role:   user.Role,
+			Groups: user.Groups,
+		},
+		Metadata: events.EventMetadata{
+			RequestID: requestID,
+		},
+	}
+}
+
+// buildCompletionPayloadForDir builds a completion event payload for directory operations
+func (s *DirectoryService) buildCompletionPayloadForDir(
+	opCtx *events.OperationContext,
+	user events.UserContext,
+	requestID string,
+	dir *models.Directory,
+	operation events.Operation,
+	success bool,
+	errorMessage string,
+) *events.CompletionEventPayload {
+	now := time.Now()
+
+	var resource events.DirectoryResource
+	if dir != nil {
+		resource = events.DirectoryResource{
+			Type:      events.ResourceTypeDirectory,
+			ID:        dir.ID,
+			Name:      dir.Name,
+			Path:      dir.Path,
+			CreatedAt: dir.CreatedAt,
+			UpdatedAt: dir.UpdatedAt,
+		}
+	}
+
+	totalDuration := int64(0)
+	if opCtx.CompletedAt != nil {
+		totalDuration = opCtx.CompletedAt.Sub(opCtx.StartedAt).Milliseconds()
+	}
+
+	return &events.CompletionEventPayload{
+		Event: events.LifecycleEvent{
+			ID:          uuid.New().String(),
+			Category:    events.CategoryDirectory,
+			Operation:   operation,
+			Stage:       events.StageCompletion,
+			Timestamp:   now,
+			OperationID: opCtx.OperationID,
+		},
+		Resource: resource,
+		User: events.UserContext{
+			UserID: user.UserID,
+			Role:   user.Role,
+			Groups: user.Groups,
+		},
+		Metadata: events.EventMetadata{
+			RequestID: requestID,
+		},
+		OperationContext:  opCtx,
+		Success:           success,
+		TotalDurationMs:   totalDuration,
+		ErrorMessage:      errorMessage,
+		RollbackPerformed: false,
+	}
 }

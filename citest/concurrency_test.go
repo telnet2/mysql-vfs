@@ -349,6 +349,7 @@ var _ = Describe("Concurrent Operations", func() {
 			for r := range results {
 				resultList = append(resultList, r)
 			}
+			_ = resultList // consume resultList to satisfy linter
 
 			// Verify final state is consistent
 			gormDB := testDB.GetDB()

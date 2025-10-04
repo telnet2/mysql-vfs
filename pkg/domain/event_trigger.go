@@ -186,14 +186,24 @@ func (t *LifecycleEventTrigger) extractFileProperties(payload interface{}) (name
 		return fep.Resource.Name, fep.Resource.SizeBytes, fep.Resource.ContentType
 	}
 
-	// Try AuthorizationEventPayload
+	// Try AuthorizationEventPayload (can be FileResource or DirectoryResource)
 	if aep, ok := payload.(*events.AuthorizationEventPayload); ok {
-		return aep.Resource.Name, aep.Resource.SizeBytes, aep.Resource.ContentType
+		if fileRes, ok := aep.Resource.(events.FileResource); ok {
+			return fileRes.Name, fileRes.SizeBytes, fileRes.ContentType
+		}
+		if dirRes, ok := aep.Resource.(events.DirectoryResource); ok {
+			return dirRes.Name, 0, ""
+		}
 	}
 
-	// Try ValidationEventPayload
+	// Try ValidationEventPayload (can be FileResource or DirectoryResource)
 	if vep, ok := payload.(*events.ValidationEventPayload); ok {
-		return vep.Resource.Name, vep.Resource.SizeBytes, vep.Resource.ContentType
+		if fileRes, ok := vep.Resource.(events.FileResource); ok {
+			return fileRes.Name, fileRes.SizeBytes, fileRes.ContentType
+		}
+		if dirRes, ok := vep.Resource.(events.DirectoryResource); ok {
+			return dirRes.Name, 0, ""
+		}
 	}
 
 	// Try ExecutionEventPayload
@@ -201,9 +211,14 @@ func (t *LifecycleEventTrigger) extractFileProperties(payload interface{}) (name
 		return eep.Resource.Name, eep.Resource.SizeBytes, eep.Resource.ContentType
 	}
 
-	// Try CompletionEventPayload
+	// Try CompletionEventPayload (can be FileResource or DirectoryResource)
 	if cep, ok := payload.(*events.CompletionEventPayload); ok {
-		return cep.Resource.Name, cep.Resource.SizeBytes, cep.Resource.ContentType
+		if fileRes, ok := cep.Resource.(events.FileResource); ok {
+			return fileRes.Name, fileRes.SizeBytes, fileRes.ContentType
+		}
+		if dirRes, ok := cep.Resource.(events.DirectoryResource); ok {
+			return dirRes.Name, 0, ""
+		}
 	}
 
 	return "", 0, ""
