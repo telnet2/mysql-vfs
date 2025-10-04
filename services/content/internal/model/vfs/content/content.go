@@ -5,6 +5,7 @@ package content
 import (
 	"context"
 	"fmt"
+
 	"github.com/apache/thrift/lib/go/thrift"
 	"github.com/telnet2/mysql-vfs/services/content/internal/model/vfs/common"
 )

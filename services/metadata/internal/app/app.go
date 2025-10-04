@@ -7,10 +7,10 @@ import (
 )
 
 type Dependencies struct {
-	DB              *gorm.DB
-	PolicyRegistry  *policy.Registry
-	PolicyEvaluator *policy.Evaluator
-	PolicyValidator *policy.Validator
+	DB                  *gorm.DB
+	PolicyRegistry      *policy.Registry
+	PolicyEvaluator     *policy.Evaluator
+	PolicyValidator     *policy.Validator
 	PolicyTriggerEngine *policy.TriggerEngine
 }
 

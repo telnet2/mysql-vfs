@@ -5,6 +5,7 @@ package metadata
 import (
 	"context"
 	"fmt"
+
 	"github.com/apache/thrift/lib/go/thrift"
 	"github.com/telnet2/mysql-vfs/services/metadata/internal/model/vfs/common"
 )

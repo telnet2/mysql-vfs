@@ -5,6 +5,7 @@ package scheduler
 import (
 	"context"
 	"fmt"
+
 	"github.com/apache/thrift/lib/go/thrift"
 	"github.com/telnet2/mysql-vfs/services/scheduler/internal/model/vfs/common"
 )
