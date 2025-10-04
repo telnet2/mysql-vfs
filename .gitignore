@@ -17,6 +17,9 @@ data/
 coverage.out
 *.log
 
+# Local bootstrap artifacts
+.metadata_admin_password
+
 # Docker artifacts
 .dockerignore
 *.tar

@@ -11,6 +11,7 @@ import (
 
 	hzapp "github.com/cloudwego/hertz/pkg/app"
 	deps "github.com/telnet2/mysql-vfs/services/metadata/internal/app"
+	"github.com/telnet2/mysql-vfs/services/metadata/internal/policy"
 	"github.com/telnet2/mysql-vfs/services/metadata/internal/service"
 )
 
@@ -61,6 +62,12 @@ type updateFileRequest struct {
 	MimeType    *string          `json:"mime_type"`
 	Version     *int64           `json:"version"`
 	Actor       string           `json:"actor"`
+}
+
+type resolvePolicyQuery struct {
+	DirectoryID string `query:"directory_id"`
+	Path        string `query:"path"`
+	Type        string `query:"type"`
 }
 
 func CreateDirectory(ctx context.Context, c *hzapp.RequestContext) {
@@ -185,23 +192,22 @@ func CreateFile(ctx context.Context, c *hzapp.RequestContext) {
 		respondError(c, http.StatusBadRequest, "invalid_payload", err.Error())
 		return
 	}
-	actor := strings.TrimSpace(req.Actor)
-	if actor == "" {
-		actor = "system"
-	}
+	actor := resolveActor(c, req.Actor)
 	versionData, err := buildVersionData(req.StorageMode, req.BlobKey, req.JSONPayload, req.Metadata, req.Checksum, req.Size, req.MimeType, actor)
 	if err != nil {
 		respondError(c, http.StatusBadRequest, "invalid_storage", err.Error())
 		return
 	}
 
-	svc := service.NewFileService(deps.Get().DB)
+	dependencies := deps.Get()
+	svc := service.NewFileService(dependencies.DB, dependencies.PolicyRegistry, dependencies.PolicyEvaluator, dependencies.PolicyValidator)
 	dto, err := svc.Create(ctx, service.CreateFileInput{
 		DirectoryID:  req.DirectoryID,
 		Name:         req.Name,
 		OriginFileID: req.OriginFileID,
 		VersionData:  versionData,
 		RequestID:    getRequestID(c),
+		Actor:        actor,
 	})
 	if err != nil {
 		handleServiceError(c, err)
@@ -212,7 +218,8 @@ func CreateFile(ctx context.Context, c *hzapp.RequestContext) {
 
 func GetFile(ctx context.Context, c *hzapp.RequestContext) {
 	id := c.Param("id")
-	svc := service.NewFileService(deps.Get().DB)
+	dep := deps.Get()
+	svc := service.NewFileService(dep.DB, dep.PolicyRegistry, dep.PolicyEvaluator, dep.PolicyValidator)
 	dto, err := svc.GetByID(ctx, id)
 	if err != nil {
 		handleServiceError(c, err)
@@ -227,7 +234,8 @@ func ResolveFile(ctx context.Context, c *hzapp.RequestContext) {
 		respondError(c, http.StatusBadRequest, "missing_path", "path query parameter is required")
 		return
 	}
-	svc := service.NewFileService(deps.Get().DB)
+	dep := deps.Get()
+	svc := service.NewFileService(dep.DB, dep.PolicyRegistry, dep.PolicyEvaluator, dep.PolicyValidator)
 	dto, err := svc.ResolvePath(ctx, path)
 	if err != nil {
 		handleServiceError(c, err)
@@ -238,7 +246,8 @@ func ResolveFile(ctx context.Context, c *hzapp.RequestContext) {
 
 func ListFileVersions(ctx context.Context, c *hzapp.RequestContext) {
 	id := c.Param("id")
-	svc := service.NewFileService(deps.Get().DB)
+	dep := deps.Get()
+	svc := service.NewFileService(dep.DB, dep.PolicyRegistry, dep.PolicyEvaluator, dep.PolicyValidator)
 	versions, err := svc.ListVersions(ctx, id)
 	if err != nil {
 		handleServiceError(c, err)
@@ -254,15 +263,12 @@ func UpdateFile(ctx context.Context, c *hzapp.RequestContext) {
 		respondError(c, http.StatusBadRequest, "invalid_payload", err.Error())
 		return
 	}
+	actor := resolveActor(c, req.Actor)
 	var versionData *service.FileVersionData
 	if req.StorageMode != nil || req.BlobKey != nil || req.JSONPayload != nil || req.Metadata != nil || req.Checksum != nil || req.Size != nil || req.MimeType != nil {
 		if req.StorageMode == nil {
 			respondError(c, http.StatusBadRequest, "invalid_storage", "storage_mode is required when updating content")
 			return
-		}
-		actor := strings.TrimSpace(req.Actor)
-		if actor == "" {
-			actor = "system"
 		}
 		vd, err := buildVersionData(*req.StorageMode, req.BlobKey, req.JSONPayload, req.Metadata, req.Checksum, req.Size, req.MimeType, actor)
 		if err != nil {
@@ -272,7 +278,8 @@ func UpdateFile(ctx context.Context, c *hzapp.RequestContext) {
 		versionData = &vd
 	}
 
-	svc := service.NewFileService(deps.Get().DB)
+	dep := deps.Get()
+	svc := service.NewFileService(dep.DB, dep.PolicyRegistry, dep.PolicyEvaluator, dep.PolicyValidator)
 	dto, err := svc.Update(ctx, service.UpdateFileInput{
 		FileID:          id,
 		NewName:         req.Name,
@@ -280,6 +287,7 @@ func UpdateFile(ctx context.Context, c *hzapp.RequestContext) {
 		VersionData:     versionData,
 		ExpectedVersion: req.Version,
 		RequestID:       getRequestID(c),
+		Actor:           actor,
 	})
 	if err != nil {
 		handleServiceError(c, err)
@@ -300,11 +308,13 @@ func DeleteFile(ctx context.Context, c *hzapp.RequestContext) {
 			return
 		}
 	}
-	svc := service.NewFileService(deps.Get().DB)
+	dep := deps.Get()
+	svc := service.NewFileService(dep.DB, dep.PolicyRegistry, dep.PolicyEvaluator, dep.PolicyValidator)
 	err := svc.Delete(ctx, service.DeleteFileInput{
 		FileID:          id,
 		ExpectedVersion: version,
 		RequestID:       getRequestID(c),
+		Actor:           resolveActor(c, ""),
 	})
 	if err != nil {
 		handleServiceError(c, err)
@@ -313,18 +323,75 @@ func DeleteFile(ctx context.Context, c *hzapp.RequestContext) {
 	c.Status(http.StatusNoContent)
 }
 
+func ResolvePolicy(ctx context.Context, c *hzapp.RequestContext) {
+	var query resolvePolicyQuery
+	if err := c.BindAndValidate(&query); err != nil {
+		respondError(c, http.StatusBadRequest, "invalid_query", err.Error())
+		return
+	}
+
+	var typeFilter *policy.Type
+	if strings.TrimSpace(query.Type) != "" {
+		typ, ok := policy.ParseType(query.Type)
+		if !ok {
+			respondError(c, http.StatusBadRequest, "invalid_type", "unsupported policy type")
+			return
+		}
+		typeFilter = &typ
+	}
+
+	dep := deps.Get()
+	dirSvc := service.NewDirectoryService(dep.DB)
+	fileSvc := service.NewFileService(dep.DB, dep.PolicyRegistry, dep.PolicyEvaluator, dep.PolicyValidator)
+	resolver := service.NewPolicyResolver(dep.PolicyRegistry, dirSvc, fileSvc)
+	result, err := resolver.Resolve(ctx, query.DirectoryID, query.Path, typeFilter)
+	if err != nil {
+		handleServiceError(c, err)
+		return
+	}
+
+	respondJSON(c, http.StatusOK, map[string]any{
+		"directory_id": result.DirectoryID,
+		"manifests":    result.Manifests,
+		"principals":   result.Principals,
+	})
+}
+
 func handleServiceError(c *hzapp.RequestContext, err error) {
-	switch err {
-	case service.ErrDirectoryNotFound:
+	var schemaErr *policy.SchemaValidationError
+	if errors.As(err, &schemaErr) {
+		details := make([]map[string]any, 0, len(schemaErr.Failures))
+		for _, failure := range schemaErr.Failures {
+			details = append(details, map[string]any{
+				"manifest": failure.Manifest.Name,
+				"errors":   failure.Errors,
+			})
+		}
+		respondJSON(c, http.StatusBadRequest, map[string]any{
+			"error": map[string]any{
+				"code":    "schema_validation_failed",
+				"message": schemaErr.Error(),
+				"details": details,
+			},
+		})
+		return
+	}
+
+	switch {
+	case errors.Is(err, service.ErrDirectoryNotFound):
 		respondError(c, http.StatusNotFound, "directory_not_found", err.Error())
-	case service.ErrFileNotFound:
+	case errors.Is(err, service.ErrFileNotFound):
 		respondError(c, http.StatusNotFound, "file_not_found", err.Error())
-	case service.ErrNameConflict:
+	case errors.Is(err, service.ErrNameConflict):
 		respondError(c, http.StatusConflict, "name_conflict", err.Error())
-	case service.ErrInvalidRequest:
+	case errors.Is(err, service.ErrInvalidRequest):
 		respondError(c, http.StatusBadRequest, "invalid_request", err.Error())
-	case service.ErrVersionConflict:
+	case errors.Is(err, service.ErrVersionConflict):
 		respondError(c, http.StatusConflict, "version_conflict", err.Error())
+	case errors.Is(err, service.ErrPolicyForbidden):
+		respondError(c, http.StatusForbidden, "policy_forbidden", "operation forbidden by policy")
+	case errors.Is(err, service.ErrSchemaValidation):
+		respondError(c, http.StatusBadRequest, "schema_validation_failed", err.Error())
 	default:
 		respondError(c, http.StatusInternalServerError, "internal_error", err.Error())
 	}

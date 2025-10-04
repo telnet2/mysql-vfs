@@ -11,5 +11,8 @@ import (
 func customizedRegister(r *server.Hertz) {
 	r.GET("/ping", handler.Ping)
 
-	// your code ...
+	api := r.Group("/api/v1")
+	api.POST("/cron", handler.RegisterCron)
+	api.GET("/cron", handler.ListCrons)
+	api.POST("/cron/:id/trigger", handler.TriggerCron)
 }

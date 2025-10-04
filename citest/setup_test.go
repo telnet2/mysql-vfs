@@ -35,6 +35,8 @@ var (
 	localC      *localstack.LocalStackContainer
 	metadataEx  *gexec.Session
 	contentEx   *gexec.Session
+	metadataBin string
+	contentBin  string
 	configPath  string
 	metadataURL string
 	contentURL  string
@@ -52,6 +54,13 @@ var _ = BeforeSuite(func() {
 
 	var err error
 	testCtx, cancelCtx = context.WithCancel(context.Background())
+
+	buildStart := time.Now()
+	metadataBin, err = gexec.Build("github.com/telnet2/mysql-vfs/services/metadata")
+	Expect(err).NotTo(HaveOccurred())
+	contentBin, err = gexec.Build("github.com/telnet2/mysql-vfs/services/content")
+	Expect(err).NotTo(HaveOccurred())
+	fmt.Fprintf(GinkgoWriter, "[citest] 🛠  service binaries built in %s\n", time.Since(buildStart))
 
 	section := time.Now()
 	mysqlC, err = mysql.RunContainer(testCtx,
@@ -124,7 +133,8 @@ var _ = BeforeSuite(func() {
 	}
 
 	type serviceConfig struct {
-		relPath   string
+		name      string
+		binPath   string
 		env       map[string]string
 		healthURL string
 		target    **gexec.Session
@@ -132,13 +142,15 @@ var _ = BeforeSuite(func() {
 
 	services := []serviceConfig{
 		{
-			relPath:   "./services/metadata",
+			name:      "metadata",
+			binPath:   metadataBin,
 			env:       metadataEnv,
 			healthURL: fmt.Sprintf("http://127.0.0.1:%d/ping", metadataPort),
 			target:    &metadataEx,
 		},
 		{
-			relPath:   "./services/content",
+			name:      "content",
+			binPath:   contentBin,
 			env:       contentEnv,
 			healthURL: fmt.Sprintf("http://127.0.0.1:%d/ping", contentPort),
 			target:    &contentEx,
@@ -154,11 +166,11 @@ var _ = BeforeSuite(func() {
 			defer wg.Done()
 
 			section := time.Now()
-			session, err := startService(testCtx, svc.relPath, svc.env)
+			session, err := startService(testCtx, svc.binPath, svc.env)
 			Expect(err).NotTo(HaveOccurred())
 			*svc.target = session
 			waitForHTTP(svc.healthURL)
-			fmt.Fprintf(GinkgoWriter, "[citest] ✅ %s ready in %s\n", svc.relPath, time.Since(section))
+			fmt.Fprintf(GinkgoWriter, "[citest] ✅ %s service ready in %s\n", svc.name, time.Since(section))
 		}()
 	}
 	wg.Wait()
@@ -183,6 +195,7 @@ var _ = AfterSuite(func() {
 	if configPath != "" {
 		_ = os.Remove(configPath)
 	}
+	gexec.CleanupBuildArtifacts()
 	fmt.Fprintf(GinkgoWriter, "[citest] ✅ Teardown completed in %s\n", time.Since(start))
 })
 
@@ -265,8 +278,8 @@ func mustGetFreePort() int {
 	return l.Addr().(*net.TCPAddr).Port
 }
 
-func startService(ctx context.Context, relPath string, env map[string]string) (*gexec.Session, error) {
-	cmd := exec.CommandContext(ctx, "go", "run", relPath)
+func startService(ctx context.Context, binPath string, env map[string]string) (*gexec.Session, error) {
+	cmd := exec.CommandContext(ctx, binPath)
 	cmd.Dir = projectRoot()
 	cmd.Env = append(os.Environ(), formatEnv(env)...)
 	return gexec.Start(cmd, GinkgoWriter, GinkgoWriter)
@@ -317,11 +330,21 @@ func stopSession(session *gexec.Session) {
 	if session == nil {
 		return
 	}
+	pid := 0
+	if session.Command != nil && session.Command.Process != nil {
+		pid = session.Command.Process.Pid
+	}
+	start := time.Now()
+	fmt.Printf("[citest] 🔻 Terminate PID %d\n", pid)
 	session.Terminate()
 	if !waitForExit(session, 5*time.Second) {
+		fmt.Printf("[citest] ⚠️ PID %d did not exit within 5s, sending SIGKILL\n", pid)
 		session.Kill()
-		_ = waitForExit(session, 5*time.Second)
+		if !waitForExit(session, 5*time.Second) {
+			fmt.Printf("[citest] ❌ PID %d still running after SIGKILL timeout\n", pid)
+		}
 	}
+	fmt.Printf("[citest] ✅ PID %d stopped in %s\n", pid, time.Since(start))
 }
 
 func waitForExit(session *gexec.Session, timeout time.Duration) bool {

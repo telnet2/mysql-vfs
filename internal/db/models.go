@@ -2,12 +2,15 @@ package db
 
 import (
 	"time"
+
+	"gorm.io/datatypes"
 )
 
 type Directory struct {
 	ID        string     `gorm:"primaryKey;size:36"`
 	ParentID  *string    `gorm:"size:36;index"`
 	Name      string     `gorm:"size:255;not null"`
+	Path      string     `gorm:"size:1024;not null"`
 	PathHash  string     `gorm:"size:64;not null;index:idx_directories_path_hash,unique"`
 	Version   int64      `gorm:"not null"`
 	CreatedAt time.Time  `gorm:"autoCreateTime"`
@@ -19,6 +22,7 @@ type File struct {
 	ID               string  `gorm:"primaryKey;size:36"`
 	DirectoryID      string  `gorm:"size:36;index"`
 	Name             string  `gorm:"size:255;not null"`
+	Path             string  `gorm:"size:1024;not null"`
 	CurrentVersionID string  `gorm:"size:36"`
 	OriginFileID     *string `gorm:"size:36;index"`
 	Version          int64   `gorm:"not null"`
@@ -31,12 +35,14 @@ type File struct {
 }
 
 type FileVersion struct {
-	ID             string    `gorm:"primaryKey;size:36"`
-	FileID         string    `gorm:"size:36;index"`
-	ContentPointer string    `gorm:"size:255"`
-	MetadataJSON   string    `gorm:"type:json"`
-	CreatedBy      string    `gorm:"size:128"`
-	CreatedAt      time.Time `gorm:"autoCreateTime"`
+	ID           string         `gorm:"primaryKey;size:36"`
+	FileID       string         `gorm:"size:36;index"`
+	StorageMode  string         `gorm:"size:32;not null"`
+	BlobKey      *string        `gorm:"size:512"`
+	JSONPayload  datatypes.JSON `gorm:"type:json"`
+	MetadataJSON datatypes.JSON `gorm:"type:json"`
+	CreatedBy    string         `gorm:"size:128"`
+	CreatedAt    time.Time      `gorm:"autoCreateTime"`
 }
 
 type FileChunk struct {
@@ -93,14 +99,17 @@ type WebhookJob struct {
 }
 
 type CronJob struct {
-	ID          string    `gorm:"primaryKey;size:36"`
-	DirectoryID string    `gorm:"size:36;index"`
-	CronExpr    string    `gorm:"size:64"`
-	Payload     string    `gorm:"type:text"`
-	Timezone    *string   `gorm:"size:64"`
-	RequestID   string    `gorm:"size:64;index"`
-	CreatedAt   time.Time `gorm:"autoCreateTime"`
-	UpdatedAt   time.Time `gorm:"autoUpdateTime"`
+	ID          string     `gorm:"primaryKey;size:36"`
+	DirectoryID string     `gorm:"size:36;index"`
+	CronExpr    string     `gorm:"size:64"`
+	Payload     string     `gorm:"type:text"`
+	Timezone    *string    `gorm:"size:64"`
+	RequestID   string     `gorm:"size:64;index"`
+	Status      string     `gorm:"size:32;index"`
+	LastRunAt   *time.Time `gorm:"index"`
+	NextRunAt   *time.Time `gorm:"index"`
+	CreatedAt   time.Time  `gorm:"autoCreateTime"`
+	UpdatedAt   time.Time  `gorm:"autoUpdateTime"`
 }
 
 type CronExecution struct {

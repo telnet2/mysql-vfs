@@ -3,12 +3,16 @@
 package main
 
 import (
+	"context"
 	"log"
+	"time"
 
 	"github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/telnet2/mysql-vfs/internal/config"
 	"github.com/telnet2/mysql-vfs/internal/db"
+	"github.com/telnet2/mysql-vfs/internal/serverutil"
 	"github.com/telnet2/mysql-vfs/services/metadata/internal/app"
+	"github.com/telnet2/mysql-vfs/services/metadata/internal/policy"
 )
 
 func main() {
@@ -25,9 +29,43 @@ func main() {
 		log.Fatalf("failed to connect database: %v", err)
 	}
 
-	app.SetDependencies(app.Dependencies{DB: database})
+	dirRepo := policy.NewGormDirectoryRepository(database)
+	manifestRepo := policy.NewGormManifestRepository(database)
+	loader := policy.NewLoader(dirRepo, manifestRepo)
+	registry := policy.NewRegistry(loader)
+	evaluator := policy.NewEvaluator(registry)
+	validator := policy.NewValidator(registry)
 
-	h := server.New(server.WithHostPorts(settings.Server.Address))
+	app.SetDependencies(app.Dependencies{
+		DB:              database,
+		PolicyRegistry:  registry,
+		PolicyEvaluator: evaluator,
+		PolicyValidator: validator,
+	})
+	if err := app.BootstrapAdmin(context.Background(), app.Get()); err != nil {
+		log.Fatalf("bootstrap admin: %v", err)
+	}
+
+	address := settings.ServiceAddress("metadata")
+	if address == "" {
+		address = ":8081"
+	}
+
+	shutdownTimeout := 4 * time.Second
+	h := server.New(
+		server.WithHostPorts(address),
+		server.WithExitWaitTime(shutdownTimeout),
+	)
+
+	if sqlDB, err := database.DB(); err == nil {
+		h.Engine.OnShutdown = append(h.Engine.OnShutdown, func(ctx context.Context) {
+			if cerr := sqlDB.Close(); cerr != nil {
+				log.Printf("error closing metadata db: %v", cerr)
+			}
+		})
+	}
+
+	serverutil.SetupGracefulShutdown(h, shutdownTimeout, nil)
 
 	register(h)
 	h.Spin()

@@ -3,11 +3,14 @@
 package main
 
 import (
+	"context"
 	"log"
+	"time"
 
 	"github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/telnet2/mysql-vfs/internal/config"
 	"github.com/telnet2/mysql-vfs/internal/db"
+	"github.com/telnet2/mysql-vfs/internal/serverutil"
 	"github.com/telnet2/mysql-vfs/services/scheduler/internal/app"
 )
 
@@ -27,7 +30,26 @@ func main() {
 
 	app.SetDependencies(app.Dependencies{DB: database})
 
-	h := server.New(server.WithHostPorts(settings.Server.Address))
+	address := settings.ServiceAddress("scheduler")
+	if address == "" {
+		address = ":8083"
+	}
+
+	shutdownTimeout := 4 * time.Second
+	h := server.New(
+		server.WithHostPorts(address),
+		server.WithExitWaitTime(shutdownTimeout),
+	)
+
+	if sqlDB, err := database.DB(); err == nil {
+		h.Engine.OnShutdown = append(h.Engine.OnShutdown, func(ctx context.Context) {
+			if cerr := sqlDB.Close(); cerr != nil {
+				log.Printf("error closing scheduler db: %v", cerr)
+			}
+		})
+	}
+
+	serverutil.SetupGracefulShutdown(h, shutdownTimeout, nil)
 
 	register(h)
 	h.Spin()

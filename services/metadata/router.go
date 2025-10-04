@@ -11,5 +11,20 @@ import (
 func customizedRegister(r *server.Hertz) {
 	r.GET("/ping", handler.Ping)
 
-	// your code ...
+	api := r.Group("/api/v1")
+	api.POST("/directories", handler.CreateDirectory)
+	api.GET("/directories", handler.ListDirectory)
+	api.GET("/directories/resolve", handler.ResolveDirectory)
+	api.GET("/directories/:id", handler.GetDirectory)
+	api.PATCH("/directories/:id", handler.UpdateDirectory)
+	api.DELETE("/directories/:id", handler.DeleteDirectory)
+
+	api.POST("/files", handler.CreateFile)
+	api.GET("/files/resolve", handler.ResolveFile)
+	api.GET("/files/:id", handler.GetFile)
+	api.GET("/files/:id/versions", handler.ListFileVersions)
+	api.PATCH("/files/:id", handler.UpdateFile)
+	api.DELETE("/files/:id", handler.DeleteFile)
+
+	api.GET("/policies/resolve", handler.ResolvePolicy)
 }

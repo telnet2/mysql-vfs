@@ -9,6 +9,7 @@ import (
 )
 
 const requestIDHeader = "X-Request-ID"
+const actorHeader = "X-VFS-Actor"
 
 func getRequestID(c *hzapp.RequestContext) string {
 	if v := strings.TrimSpace(string(c.GetHeader(requestIDHeader))); v != "" {
@@ -29,6 +30,16 @@ func respondError(c *hzapp.RequestContext, status int, code string, message stri
 			"message": message,
 		},
 	})
+}
+
+func resolveActor(c *hzapp.RequestContext, fallback string) string {
+	if v := strings.TrimSpace(string(c.GetHeader(actorHeader))); v != "" {
+		return v
+	}
+	if v := strings.TrimSpace(fallback); v != "" {
+		return v
+	}
+	return "system"
 }
 
 func respondJSON(c *hzapp.RequestContext, status int, payload any) {

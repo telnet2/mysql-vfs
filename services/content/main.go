@@ -3,31 +3,54 @@
 package main
 
 import (
+	"context"
 	"log"
+	"time"
 
 	"github.com/cloudwego/hertz/pkg/app/server"
+	"gocloud.dev/blob"
+	_ "gocloud.dev/blob/fileblob"
+	_ "gocloud.dev/blob/s3blob"
+
 	"github.com/telnet2/mysql-vfs/internal/config"
-	"github.com/telnet2/mysql-vfs/internal/db"
+	"github.com/telnet2/mysql-vfs/internal/serverutil"
 	"github.com/telnet2/mysql-vfs/services/content/internal/app"
+	"github.com/telnet2/mysql-vfs/services/content/internal/service"
 )
 
 func main() {
 	settings := config.Load()
-	database, err := db.NewConnection(db.Config{
-		User:     settings.MySQL.User,
-		Password: settings.MySQL.Password,
-		Host:     settings.MySQL.Host,
-		Port:     settings.MySQL.Port,
-		Database: settings.MySQL.Database,
-		Params:   settings.MySQL.Params,
-	})
+
+	ctx := context.Background()
+	bucket, err := blob.OpenBucket(ctx, settings.BlobBucketURL())
 	if err != nil {
-		log.Fatalf("failed to connect database: %v", err)
+		log.Fatalf("failed to open blob bucket: %v", err)
+	}
+	storage := service.NewStorageService(bucket, settings.InlineJSONMaxBytes(), settings.InlineJSONMediaTypes())
+
+	app.SetDependencies(app.Dependencies{
+		Bucket:  bucket,
+		Config:  settings,
+		Storage: storage,
+	})
+
+	address := settings.ServiceAddress("content")
+	if address == "" {
+		address = ":8082"
 	}
 
-	app.SetDependencies(app.Dependencies{DB: database})
+	shutdownTimeout := 4 * time.Second
+	h := server.New(
+		server.WithHostPorts(address),
+		server.WithExitWaitTime(shutdownTimeout),
+	)
+	h.OnShutdown = append(h.OnShutdown, func(ctx context.Context) {
+		if err := bucket.Close(); err != nil {
+			log.Printf("error closing bucket: %v", err)
+		}
+	})
 
-	h := server.New(server.WithHostPorts(settings.Server.Address))
+	serverutil.SetupGracefulShutdown(h, shutdownTimeout, nil)
 
 	register(h)
 	h.Spin()

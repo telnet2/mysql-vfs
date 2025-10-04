@@ -33,6 +33,7 @@ const (
 	requestTimeout  = 15 * time.Second
 	metadataService = "metadata"
 	contentService  = "content"
+	actorHeader     = "X-VFS-Actor"
 )
 
 type directoryDTO struct {
@@ -89,6 +90,44 @@ type fileVersionDTO struct {
 	CreatedAt   time.Time       `json:"created_at"`
 }
 
+type policyManifestDTO struct {
+	Type        string         `json:"type"`
+	Name        string         `json:"name"`
+	SourcePath  string         `json:"source_path"`
+	DirectoryID string         `json:"directory_id"`
+	Scope       string         `json:"scope"`
+	Inheritance string         `json:"inheritance"`
+	AppliesTo   []string       `json:"applies_to,omitempty"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
+}
+
+type policyUserDTO struct {
+	ID          string         `json:"id"`
+	DisplayName string         `json:"display_name,omitempty"`
+	Email       string         `json:"email,omitempty"`
+	Groups      []string       `json:"groups,omitempty"`
+	Attributes  map[string]any `json:"attributes,omitempty"`
+}
+
+type policyGroupDTO struct {
+	ID          string         `json:"id"`
+	DisplayName string         `json:"display_name,omitempty"`
+	Description string         `json:"description,omitempty"`
+	Members     []string       `json:"members,omitempty"`
+	Attributes  map[string]any `json:"attributes,omitempty"`
+}
+
+type principalSetDTO struct {
+	Users  []policyUserDTO  `json:"users,omitempty"`
+	Groups []policyGroupDTO `json:"groups,omitempty"`
+}
+
+type policyResolutionDTO struct {
+	DirectoryID string              `json:"directory_id"`
+	Manifests   []policyManifestDTO `json:"manifests"`
+	Principals  principalSetDTO     `json:"principals"`
+}
+
 type apiError struct {
 	Status  int
 	Code    string
@@ -105,6 +144,7 @@ func (e apiError) Error() string {
 type metadataClient struct {
 	baseURL    string
 	httpClient *http.Client
+	actor      string
 }
 
 type contentClient struct {
@@ -155,6 +195,7 @@ func main() {
 		metadata: &metadataClient{
 			baseURL:    metadataURL,
 			httpClient: &http.Client{Timeout: requestTimeout},
+			actor:      actor,
 		},
 		content: &contentClient{
 			baseURL:    contentURL,
@@ -269,6 +310,8 @@ func (c *cli) run() error {
 			c.handleStat(args)
 		case "history":
 			c.handleHistory(args)
+		case "principals":
+			c.handlePrincipals(args)
 		default:
 			fmt.Fprintf(c.stderr, "unknown command: %s\n", cmd)
 		}
@@ -354,10 +397,9 @@ func (c *cli) close() {
 func (c *cli) commandList() []string {
 	return []string{
 		"help", "exit", "quit", "pwd", "cd", "ls", "import", "cat", "jq",
-		"mkdir", "rmdir", "rm", "xattr", "mv", "cp", "tree", "stat", "history",
+		"mkdir", "rmdir", "rm", "xattr", "mv", "cp", "tree", "stat", "history", "principals",
 	}
 }
-
 func filterByPrefix(items []string, prefix string) []string {
 	res := make([]string, 0, len(items))
 	lower := strings.ToLower(prefix)
@@ -438,6 +480,10 @@ func (c *cli) pathCompletionForCommand(cmd string, argIndex int, current string)
 		}
 	case "mv", "cp":
 		if argIndex == 0 || argIndex == 1 {
+			return c.pathCompletions(current, false)
+		}
+	case "principals":
+		if argIndex == 0 {
 			return c.pathCompletions(current, false)
 		}
 	}
@@ -681,6 +727,12 @@ func (c *cli) handleImport(args []string) {
 	if err != nil {
 		fmt.Fprintf(c.stderr, "import: %v\n", err)
 		return
+	}
+	if isPolicyFilename(remotePath) {
+		if err := c.ensurePolicyAdmin(dir.Path); err != nil {
+			fmt.Fprintf(c.stderr, "import: %v\n", err)
+			return
+		}
 	}
 
 	createReq := createFileRequest{
@@ -958,6 +1010,68 @@ func (c *cli) handleHistory(args []string) {
 	}
 }
 
+func (c *cli) handlePrincipals(args []string) {
+	fs := flag.NewFlagSet("principals", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	var typeFilter string
+	var directoryID string
+	fs.StringVar(&typeFilter, "type", "", "filter by manifest type (user|group)")
+	fs.StringVar(&typeFilter, "t", "", "filter by manifest type (user|group)")
+	fs.StringVar(&directoryID, "directory", "", "resolve using directory id")
+	fs.StringVar(&directoryID, "d", "", "resolve using directory id")
+	if err := fs.Parse(args[1:]); err != nil {
+		fmt.Fprintln(c.stderr, "usage: principals [--type user|group] [--directory <id>] [path]")
+		return
+	}
+
+	typeFilter = strings.ToLower(strings.TrimSpace(typeFilter))
+	if typeFilter != "" && typeFilter != "user" && typeFilter != "group" {
+		fmt.Fprintln(c.stderr, "principals: type must be 'user' or 'group'")
+		return
+	}
+
+	remaining := fs.Args()
+	var targetPath string
+	if strings.TrimSpace(directoryID) != "" {
+		if len(remaining) > 0 {
+			fmt.Fprintln(c.stderr, "usage: principals [--type user|group] [--directory <id>] [path]")
+			return
+		}
+	} else {
+		if len(remaining) > 1 {
+			fmt.Fprintln(c.stderr, "usage: principals [--type user|group] [--directory <id>] [path]")
+			return
+		}
+		if len(remaining) == 1 {
+			targetPath = c.resolvePath(remaining[0])
+		} else {
+			targetPath = c.cwdDir.Path
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+	defer cancel()
+	result, err := c.metadata.ResolvePolicy(ctx, directoryID, targetPath, typeFilter)
+	if err != nil {
+		if apiErr, ok := err.(apiError); ok && apiErr.Status == http.StatusNotFound {
+			fmt.Fprintln(c.stderr, "principals: target not found")
+		} else {
+			fmt.Fprintf(c.stderr, "principals: %v\n", err)
+		}
+		return
+	}
+
+	output := map[string]any{
+		"directory_id": result.DirectoryID,
+		"manifests":    result.Manifests,
+		"users":        result.Principals.Users,
+		"groups":       result.Principals.Groups,
+	}
+	if err := writeJSON(c.stdout, output); err != nil {
+		fmt.Fprintf(c.stderr, "principals: %v\n", err)
+	}
+}
+
 func (c *cli) handleJQ(args []string) {
 	if len(args) < 3 {
 		fmt.Fprintln(c.stderr, "usage: jq <path> <expression>")
@@ -1152,6 +1266,12 @@ func (c *cli) handleRm(args []string) {
 			fmt.Fprintf(c.stderr, "rm: %v\n", err)
 		}
 		return
+	}
+	if isPolicyFilename(file.Name) {
+		if err := c.ensurePolicyAdmin(parentDirectoryPath(file.Path)); err != nil {
+			fmt.Fprintf(c.stderr, "rm: %v\n", err)
+			return
+		}
 	}
 	ctxDelete, cancelDelete := context.WithTimeout(context.Background(), requestTimeout)
 	err = c.metadata.DeleteFile(ctxDelete, file.ID)
@@ -1572,6 +1692,7 @@ func (c *cli) printHelp() {
 	fmt.Fprintln(c.stdout, "  tree [path]          Display directory tree")
 	fmt.Fprintln(c.stdout, "  stat [path]          Show detailed attributes")
 	fmt.Fprintln(c.stdout, "  history <path>       List file version history")
+	fmt.Fprintln(c.stdout, "  principals [options] [path]  Show resolved users and groups")
 }
 
 func (c *cli) resolvePath(input string) string {
@@ -1602,6 +1723,84 @@ func parentDirectoryPath(p string) string {
 		return "/"
 	}
 	return parent
+}
+
+func isPolicyFilename(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(path.Base(name))) {
+	case ".rego", ".jsonschema", ".workflow", ".webhook", ".user", ".group":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeStringList(values []string) []string {
+	result := make([]string, 0, len(values))
+	for _, v := range values {
+		if trimmed := strings.TrimSpace(v); trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
+}
+
+func isAdminGroupName(name string) bool {
+	return strings.EqualFold(name, "admin") || strings.EqualFold(name, "admins")
+}
+
+func groupContains(members []string, actor string) bool {
+	for _, member := range members {
+		if strings.EqualFold(strings.TrimSpace(member), actor) {
+			return true
+		}
+	}
+	return false
+}
+
+func actorHasAdminPrivileges(actor string, principals principalSetDTO) bool {
+	if strings.EqualFold(actor, "system") || strings.EqualFold(actor, "admin") {
+		return true
+	}
+	adminGroups := make(map[string]policyGroupDTO)
+	for _, group := range principals.Groups {
+		if isAdminGroupName(group.ID) {
+			adminGroups[strings.ToLower(strings.TrimSpace(group.ID))] = group
+			if groupContains(group.Members, actor) {
+				return true
+			}
+		}
+	}
+	for _, user := range principals.Users {
+		if !strings.EqualFold(strings.TrimSpace(user.ID), actor) {
+			continue
+		}
+		for _, groupID := range normalizeStringList(user.Groups) {
+			if isAdminGroupName(groupID) {
+				return true
+			}
+			if group, ok := adminGroups[strings.ToLower(groupID)]; ok && groupContains(group.Members, actor) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (c *cli) ensurePolicyAdmin(path string) error {
+	actor := strings.TrimSpace(c.actor)
+	if actor == "" || strings.EqualFold(actor, "system") || strings.EqualFold(actor, "admin") {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+	defer cancel()
+	result, err := c.metadata.ResolvePolicy(ctx, "", normalizePath(path), "")
+	if err != nil {
+		return err
+	}
+	if actorHasAdminPrivileges(actor, result.Principals) {
+		return nil
+	}
+	return fmt.Errorf("admin privileges required for policy file operations")
 }
 
 func (c *cli) lookupDirectory(p string) (directoryDTO, error) {
@@ -1801,6 +2000,28 @@ func (m *metadataClient) ListFileVersions(ctx context.Context, id string) ([]fil
 	return out, nil
 }
 
+func (m *metadataClient) ResolvePolicy(ctx context.Context, directoryID, path, typ string) (policyResolutionDTO, error) {
+	params := url.Values{}
+	if strings.TrimSpace(directoryID) != "" {
+		params.Set("directory_id", directoryID)
+	}
+	if strings.TrimSpace(path) != "" {
+		params.Set("path", path)
+	}
+	if strings.TrimSpace(typ) != "" {
+		params.Set("type", typ)
+	}
+	endpoint := fmt.Sprintf("%s/api/v1/policies/resolve", m.baseURL)
+	if enc := params.Encode(); enc != "" {
+		endpoint += "?" + enc
+	}
+	var out policyResolutionDTO
+	if err := m.do(ctx, http.MethodGet, endpoint, nil, &out); err != nil {
+		return policyResolutionDTO{}, err
+	}
+	return out, nil
+}
+
 func (m *metadataClient) do(ctx context.Context, method, endpoint string, body any, out any) error {
 	var reader io.Reader
 	if body != nil {
@@ -1817,6 +2038,9 @@ func (m *metadataClient) do(ctx context.Context, method, endpoint string, body a
 	req.Header.Set("Accept", "application/json")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	if strings.TrimSpace(m.actor) != "" {
+		req.Header.Set(actorHeader, m.actor)
 	}
 	resp, err := m.httpClient.Do(req)
 	if err != nil {

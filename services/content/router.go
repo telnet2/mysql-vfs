@@ -11,5 +11,7 @@ import (
 func customizedRegister(r *server.Hertz) {
 	r.GET("/ping", handler.Ping)
 
-	// your code ...
+	api := r.Group("/api/v1")
+	api.POST("/content", handler.UploadContent)
+	api.GET("/content/*pointer", handler.DownloadContent)
 }
