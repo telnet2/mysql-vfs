@@ -13,6 +13,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
+	"github.com/telnet2/mysql-vfs/pkg/config"
 	"github.com/telnet2/mysql-vfs/pkg/db"
 	"github.com/telnet2/mysql-vfs/pkg/idempotency"
 	"github.com/telnet2/mysql-vfs/pkg/models"
@@ -33,24 +34,22 @@ type VFSServer struct {
 
 func main() {
 	// Load configuration from environment
-	dsn := getEnv("DB_DSN", "root:root@tcp(localhost:3306)/vfs?charset=utf8mb4&parseTime=True&loc=Local")
-	port := getEnv("PORT", "8080")
-	logLevel := getEnv("LOG_LEVEL", "info")
+	cfg := config.LoadFromEnv()
 
 	// Parse log level
 	gormLogLevel := logger.Info
-	if logLevel == "debug" {
+	if cfg.LogLevel == "debug" {
 		gormLogLevel = logger.Info
-	} else if logLevel == "warn" {
+	} else if cfg.LogLevel == "warn" {
 		gormLogLevel = logger.Warn
-	} else if logLevel == "error" {
+	} else if cfg.LogLevel == "error" {
 		gormLogLevel = logger.Error
 	}
 
 	// Connect to database
 	log.Println("Connecting to database...")
 	database, err := db.Connect(db.Config{
-		DSN:      dsn,
+		DSN:      cfg.DatabaseDSN,
 		LogLevel: gormLogLevel,
 	})
 	if err != nil {
@@ -77,7 +76,7 @@ func main() {
 	dirService := services.NewDirectoryService(database)
 	fileService := services.NewFileService(database, storageService)
 	opaService := services.NewOPAService(database)
-	idempotencyService := idempotency.NewService(database)
+	idempotencyService := idempotency.NewServiceWithTTL(database, cfg.IdempotencyTTL)
 
 	// Start idempotency cleanup worker
 	go idempotencyService.StartCleanupWorker(ctx, 1*time.Hour)
@@ -93,7 +92,7 @@ func main() {
 	}
 
 	// Initialize Hertz server
-	h := server.Default(server.WithHostPorts(":" + port))
+	h := server.Default(server.WithHostPorts(":" + cfg.ServerPort))
 
 	// Register routes
 	h.GET("/health", vfsServer.healthHandler)
@@ -116,7 +115,7 @@ func main() {
 		v1.POST("/files/move", vfsServer.moveFile)
 	}
 
-	log.Printf("VFS Service starting on port %s", port)
+	log.Printf("VFS Service starting on port %s", cfg.ServerPort)
 	h.Spin()
 }
 
@@ -227,6 +226,8 @@ func (s *VFSServer) listDirectory(ctx context.Context, c *app.RequestContext) {
 	path := string(c.Param("path"))
 	if path == "" {
 		path = "/"
+	} else if !strings.HasPrefix(path, "/") {
+		path = "/" + path
 	}
 
 	limit := 100
@@ -274,6 +275,9 @@ func (s *VFSServer) listDirectory(ctx context.Context, c *app.RequestContext) {
 // deleteDirectory deletes a directory
 func (s *VFSServer) deleteDirectory(ctx context.Context, c *app.RequestContext) {
 	path := string(c.Param("path"))
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
 	recursive := c.Query("recursive") == "true"
 
 	// Get request ID and add to context
@@ -353,6 +357,9 @@ func (s *VFSServer) createFile(ctx context.Context, c *app.RequestContext) {
 // getFile retrieves a file
 func (s *VFSServer) getFile(ctx context.Context, c *app.RequestContext) {
 	path := string(c.Param("path"))
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
 
 	file, reader, err := s.fileService.GetFile(ctx, path)
 	if err != nil {
@@ -379,6 +386,9 @@ func (s *VFSServer) getFile(ctx context.Context, c *app.RequestContext) {
 // updateFile updates a file
 func (s *VFSServer) updateFile(ctx context.Context, c *app.RequestContext) {
 	path := string(c.Param("path"))
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
 
 	var req struct {
 		ContentType     string `json:"content_type"`
@@ -427,6 +437,9 @@ func (s *VFSServer) updateFile(ctx context.Context, c *app.RequestContext) {
 // deleteFile deletes a file
 func (s *VFSServer) deleteFile(ctx context.Context, c *app.RequestContext) {
 	path := string(c.Param("path"))
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
 
 	// Get request ID and add to context
 	requestID := idempotency.GetRequestID(c)

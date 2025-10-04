@@ -164,7 +164,8 @@ func (v *Validator) ValidateDirectories(ctx context.Context) ([]ValidationResult
 			  AND d.id != 'root'
 			  AND (
 				(d.parent_id IS NULL AND d.path != CONCAT('/', d.name))
-				OR (d.parent_id IS NOT NULL AND d.path != CONCAT(p.path, '/', d.name))
+				OR (d.parent_id IS NOT NULL AND p.path != '/' AND d.path != CONCAT(p.path, '/', d.name))
+				OR (d.parent_id IS NOT NULL AND p.path = '/' AND d.path != CONCAT('/', d.name))
 			  )
 		`).Scan(&inconsistentPaths).Error
 

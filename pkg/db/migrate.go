@@ -2,6 +2,7 @@ package db
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/telnet2/mysql-vfs/pkg/models"
 	"gorm.io/driver/mysql"
@@ -106,9 +107,13 @@ func addCustomConstraints(db *gorm.DB) error {
 func isConstraintExistsError(err error) bool {
 	// MySQL error code 1061: Duplicate key name
 	// MySQL error code 3822: Duplicate check constraint
-	return err != nil && (
-		err.Error() == "Error 1061" ||
-		err.Error() == "Error 3822")
+	if err == nil {
+		return false
+	}
+	errMsg := err.Error()
+	return strings.Contains(errMsg, "Error 1061") ||
+		strings.Contains(errMsg, "Error 3822") ||
+		strings.Contains(errMsg, "Duplicate check constraint")
 }
 
 // HealthCheck performs a database health check

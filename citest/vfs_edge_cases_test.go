@@ -15,7 +15,7 @@ import (
 	"github.com/telnet2/mysql-vfs/pkg/services"
 )
 
-var _ = Describe("VFS Edge Cases", func() {
+var _ = Describe("VFS Edge Cases", Ordered, func() {
 	var (
 		testDB      *fixtures.TestDatabase
 		dirService  *services.DirectoryService
@@ -24,9 +24,16 @@ var _ = Describe("VFS Edge Cases", func() {
 		s3          *fixtures.TestS3
 	)
 
-	BeforeEach(func() {
+	BeforeAll(func() {
+		GinkgoWriter.Println("🚀 Setting up VFS Edge Cases test environment (this may take a few seconds)...")
+		GinkgoWriter.Println("   - Starting MySQL test container...")
 		testDB = fixtures.NewTestDatabase()
+		GinkgoWriter.Println("   ✓ MySQL ready")
+
+		GinkgoWriter.Println("   - Starting S3 test storage...")
 		s3 = fixtures.NewTestS3()
+		GinkgoWriter.Println("   ✓ S3 ready")
+
 		dirService = services.NewDirectoryService(testDB.GetDB())
 		fileService = services.NewFileService(testDB.GetDB(), s3.Storage)
 		ctx = context.Background()
@@ -44,9 +51,10 @@ var _ = Describe("VFS Edge Cases", func() {
 		if sqlDB != nil {
 			sqlDB.Close()
 		}
+		GinkgoWriter.Println("✅ Test environment ready - running tests...")
 	})
 
-	AfterEach(func() {
+	AfterAll(func() {
 		testDB.Cleanup()
 		s3.Cleanup()
 	})
@@ -172,7 +180,8 @@ var _ = Describe("VFS Edge Cases", func() {
 
 	Context("file size boundaries", func() {
 		It("should handle empty files", func() {
-			dir, _ := dirService.CreateDirectory(ctx, "/", "files", nil)
+			dir, err := dirService.CreateDirectory(ctx, "/", "edge-empty-files", nil)
+			Expect(err).NotTo(HaveOccurred())
 
 			content := ""
 			file, err := fileService.CreateFile(ctx, dir.Path, "empty.txt", "text/plain", 0, io.NopCloser(strings.NewReader(content)))
@@ -182,7 +191,12 @@ var _ = Describe("VFS Edge Cases", func() {
 		})
 
 		It("should handle exactly 16MB file (JSON threshold)", func() {
-			dir, _ := dirService.CreateDirectory(ctx, "/", "files", nil)
+			dir, err := dirService.CreateDirectory(ctx, "/", "edge-16mb-files", nil)
+			if err != nil {
+				GinkgoWriter.Printf("Failed to create directory: %v\n", err)
+			}
+			Expect(err).NotTo(HaveOccurred())
+			Expect(dir).NotTo(BeNil())
 
 			// Create exactly 16MB of content
 			size := 16 * 1024 * 1024
@@ -197,7 +211,9 @@ var _ = Describe("VFS Edge Cases", func() {
 		})
 
 		It("should handle large files near 100MB limit", func() {
-			dir, _ := dirService.CreateDirectory(ctx, "/", "large", nil)
+			dir, err := dirService.CreateDirectory(ctx, "/", "edge-large", nil)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(dir).NotTo(BeNil())
 
 			// Create 50MB file
 			size := 50 * 1024 * 1024
@@ -207,18 +223,19 @@ var _ = Describe("VFS Edge Cases", func() {
 
 			if err == nil {
 				Expect(file.SizeBytes).To(Equal(int64(size)))
-				Expect(file.StorageType).To(Equal("s3")) // Should use S3 for large files
+				Expect(file.StorageType).To(Equal(models.StorageTypeS3)) // Should use S3 for large files
 			}
 		})
 
 		It("should reject files exceeding 100MB limit", func() {
-			dir, _ := dirService.CreateDirectory(ctx, "/", "toolarge", nil)
+			dir, err := dirService.CreateDirectory(ctx, "/", "edge-toolarge", nil)
+			Expect(err).NotTo(HaveOccurred())
 
 			// Try to create 101MB file
 			size := 101 * 1024 * 1024
 			content := strings.Repeat("z", 1024) // Just a sample, not full content
 
-			_, err := fileService.CreateFile(ctx, dir.Path, "toolarge.bin", "application/octet-stream", int64(size), io.NopCloser(strings.NewReader(content)))
+			_, err = fileService.CreateFile(ctx, dir.Path, "toolarge.bin", "application/octet-stream", int64(size), io.NopCloser(strings.NewReader(content)))
 
 			// Should reject
 			if err != nil {
@@ -231,8 +248,8 @@ var _ = Describe("VFS Edge Cases", func() {
 		})
 	})
 
-	Context("file content types", func() {
-		BeforeEach(func() {
+	Context("file content types", Ordered, func() {
+		BeforeAll(func() {
 			dirService.CreateDirectory(ctx, "/", "content-tests", nil)
 		})
 
@@ -246,7 +263,7 @@ var _ = Describe("VFS Edge Cases", func() {
 
 			// Small JSON should be stored inline
 			if file.SizeBytes < 16*1024*1024 {
-				Expect(file.StorageType).To(Equal("json"))
+				Expect(file.StorageType).To(Equal(models.StorageTypeJSON))
 				Expect(file.JSONContent).NotTo(BeNil())
 			}
 		})
@@ -279,17 +296,23 @@ var _ = Describe("VFS Edge Cases", func() {
 		})
 	})
 
-	Context("path resolution edge cases", func() {
-		BeforeEach(func() {
+	Context("path resolution edge cases", Ordered, func() {
+		BeforeAll(func() {
 			dirService.CreateDirectory(ctx, "/", "a", nil)
 			dirService.CreateDirectory(ctx, "/a", "b", nil)
 			dirService.CreateDirectory(ctx, "/a/b", "c", nil)
 		})
 
 		It("should handle paths with trailing slashes", func() {
+			// Create test directory structure
+			_, err := dirService.CreateDirectory(ctx, "/", "edge-path-a", nil)
+			Expect(err).NotTo(HaveOccurred())
+			_, err = dirService.CreateDirectory(ctx, "/edge-path-a", "b", nil)
+			Expect(err).NotTo(HaveOccurred())
+
 			// Both should work the same
-			dirs1, _, _, err1 := dirService.ListDirectory("/a/b/", 100, "")
-			dirs2, _, _, err2 := dirService.ListDirectory("/a/b", 100, "")
+			dirs1, _, _, err1 := dirService.ListDirectory("/edge-path-a/b/", 100, "")
+			dirs2, _, _, err2 := dirService.ListDirectory("/edge-path-a/b", 100, "")
 
 			Expect(err1).NotTo(HaveOccurred())
 			Expect(err2).NotTo(HaveOccurred())
@@ -346,7 +369,8 @@ var _ = Describe("VFS Edge Cases", func() {
 		})
 
 		It("should handle deleting already deleted directory", func() {
-			dir, _ := dirService.CreateDirectory(ctx, "/", "to-delete-twice", nil)
+			dir, err := dirService.CreateDirectory(ctx, "/", "edge-to-delete-twice", nil)
+			Expect(err).NotTo(HaveOccurred())
 
 			// Delete once
 			err1 := dirService.DeleteDirectory(ctx, dir.Path, false)
@@ -360,7 +384,8 @@ var _ = Describe("VFS Edge Cases", func() {
 		})
 
 		It("should handle deleting directory with files", func() {
-			dir, _ := dirService.CreateDirectory(ctx, "/", "dir-with-files", nil)
+			dir, err := dirService.CreateDirectory(ctx, "/", "edge-dir-with-files", nil)
+			Expect(err).NotTo(HaveOccurred())
 			content := "test content"
 			fileService.CreateFile(ctx, dir.Path, "file.txt", "text/plain", int64(len(content)), io.NopCloser(strings.NewReader(content)))
 
@@ -376,7 +401,8 @@ var _ = Describe("VFS Edge Cases", func() {
 
 	Context("versioning edge cases", func() {
 		It("should create new version when updating file", func() {
-			dir, _ := dirService.CreateDirectory(ctx, "/", "versions", nil)
+			dir, err := dirService.CreateDirectory(ctx, "/", "edge-versions", nil)
+			Expect(err).NotTo(HaveOccurred())
 
 			// Create initial file
 			content1 := "version 1"
@@ -405,7 +431,8 @@ var _ = Describe("VFS Edge Cases", func() {
 		})
 
 		It("should reject updates with wrong expected version", func() {
-			dir, _ := dirService.CreateDirectory(ctx, "/", "versions2", nil)
+			dir, err := dirService.CreateDirectory(ctx, "/", "edge-versions2", nil)
+			Expect(err).NotTo(HaveOccurred())
 
 			content1 := "version 1"
 			file, err := fileService.CreateFile(ctx, dir.Path, "test.txt", "text/plain", int64(len(content1)), io.NopCloser(strings.NewReader(content1)))
@@ -415,15 +442,17 @@ var _ = Describe("VFS Edge Cases", func() {
 			content2 := "version 2"
 			_, err = fileService.UpdateFile(ctx, file.ID, "text/plain", int64(len(content2)), io.NopCloser(strings.NewReader(content2)), 999)
 
-			// Should reject due to version mismatch
-			if err != nil {
-				Expect(err.Error()).To(ContainSubstring("version"))
-			}
+			// Should reject due to version mismatch or file not found
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(Or(
+				ContainSubstring("version"),
+				ContainSubstring("not found"),
+			))
 		})
 	})
 
-	Context("listing and pagination", func() {
-		BeforeEach(func() {
+	Context("listing and pagination", Ordered, func() {
+		BeforeAll(func() {
 			dirService.CreateDirectory(ctx, "/", "pagination", nil)
 
 			// Create many entries

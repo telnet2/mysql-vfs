@@ -15,6 +15,7 @@ import (
 	"github.com/telnet2/mysql-vfs/pkg/models"
 	"github.com/telnet2/mysql-vfs/pkg/storage"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -79,8 +80,20 @@ func (s *FileService) CreateFile(ctx context.Context, directoryPath, name, conte
 	}
 
 	// Validate name
-	if name == "" || strings.Contains(name, "/") {
+	if name == "" || name == "." || name == ".." {
 		return nil, fmt.Errorf("invalid file name")
+	}
+
+	// Reject path separators (both Unix and Windows style)
+	if strings.Contains(name, "/") || strings.Contains(name, "\\") {
+		return nil, fmt.Errorf("invalid file name")
+	}
+
+	// Reject control characters (null bytes, etc.)
+	for _, r := range name {
+		if r < 32 || r == 127 { // Control characters
+			return nil, fmt.Errorf("invalid file name")
+		}
 	}
 
 	// Read content into buffer for checksum and storage
@@ -258,7 +271,7 @@ func (s *FileService) UpdateFile(ctx context.Context, filePath, contentType stri
 		// Find and lock file
 		err := tx.Joins("JOIN directories ON directories.id = files.directory_id").
 			Where("directories.path = ? AND files.name = ? AND files.deleted_at IS NULL", dirPath, fileName).
-			Clauses(gorm.Expr("FOR UPDATE")).
+			Clauses(clause.Locking{Strength: "UPDATE"}).
 			First(&file).Error
 		if err != nil {
 			if err == gorm.ErrRecordNotFound {
@@ -379,7 +392,7 @@ func (s *FileService) DeleteFile(ctx context.Context, filePath string) error {
 		var file models.File
 		err := tx.Joins("JOIN directories ON directories.id = files.directory_id").
 			Where("directories.path = ? AND files.name = ? AND files.deleted_at IS NULL", dirPath, fileName).
-			Clauses(gorm.Expr("FOR UPDATE")).
+			Clauses(clause.Locking{Strength: "UPDATE"}).
 			First(&file).Error
 		if err != nil {
 			if err == gorm.ErrRecordNotFound {
@@ -422,7 +435,7 @@ func (s *FileService) MoveFile(ctx context.Context, sourcePath, destPath string)
 		// Find source file
 		err := tx.Joins("JOIN directories ON directories.id = files.directory_id").
 			Where("directories.path = ? AND files.name = ? AND files.deleted_at IS NULL", srcDir, srcName).
-			Clauses(gorm.Expr("FOR UPDATE")).
+			Clauses(clause.Locking{Strength: "UPDATE"}).
 			First(&file).Error
 		if err != nil {
 			if err == gorm.ErrRecordNotFound {

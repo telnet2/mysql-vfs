@@ -11,16 +11,20 @@ import (
 	"github.com/telnet2/mysql-vfs/pkg/models"
 )
 
-var _ = Describe("Cron Scheduler System", func() {
+var _ = Describe("Cron Scheduler System", Ordered, func() {
 	var (
 		testDB *fixtures.TestDatabase
 	)
 
-	BeforeEach(func() {
+	BeforeAll(func() {
+		GinkgoWriter.Println("🚀 Setting up Cron Scheduler System test environment (this may take a few seconds)...")
+		GinkgoWriter.Println("   - Starting MySQL test container...")
 		testDB = fixtures.NewTestDatabase()
+		GinkgoWriter.Println("   ✓ MySQL ready")
+		GinkgoWriter.Println("✅ Test environment ready - running tests...")
 	})
 
-	AfterEach(func() {
+	AfterAll(func() {
 		testDB.Cleanup()
 	})
 
@@ -30,9 +34,10 @@ var _ = Describe("Cron Scheduler System", func() {
 
 			job := &models.CronJob{
 				ID:              uuid.New().String(),
-				Name:            "test-cleanup",
+				Name:            "cron-test-cleanup",
 				CronExpression:  "0 2 * * *", // Daily at 2 AM
 				HandlerType:     "cleanup_idempotency",
+				Payload:         "{}",
 				Timezone:        "UTC",
 				SkipMissedRuns:  true,
 				IsActive:        true,
@@ -54,9 +59,10 @@ var _ = Describe("Cron Scheduler System", func() {
 
 			job1 := &models.CronJob{
 				ID:             uuid.New().String(),
-				Name:           "unique-job",
+				Name:           "cron-unique-job",
 				CronExpression: "* * * * *",
 				HandlerType:    "cleanup_events",
+				Payload:        "{}",
 				CreatedAt:      time.Now(),
 				UpdatedAt:      time.Now(),
 			}
@@ -65,9 +71,10 @@ var _ = Describe("Cron Scheduler System", func() {
 			// Try duplicate name
 			job2 := &models.CronJob{
 				ID:             uuid.New().String(),
-				Name:           "unique-job", // Same name
+				Name:           "cron-unique-job", // Same name
 				CronExpression: "* * * * *",
 				HandlerType:    "vacuum_s3",
+				Payload:        "{}",
 				CreatedAt:      time.Now(),
 				UpdatedAt:      time.Now(),
 			}
@@ -98,6 +105,7 @@ var _ = Describe("Cron Scheduler System", func() {
 					Name:           "job-" + uuid.New().String()[:8],
 					CronExpression: expr,
 					HandlerType:    "cleanup_idempotency",
+					Payload:        "{}",
 					CreatedAt:      time.Now(),
 					UpdatedAt:      time.Now(),
 				}
@@ -112,17 +120,18 @@ var _ = Describe("Cron Scheduler System", func() {
 		})
 	})
 
-	Context("when managing cron executions", func() {
+	Context("when managing cron executions", Ordered, func() {
 		var jobID string
 
-		BeforeEach(func() {
+		BeforeAll(func() {
 			gormDB := testDB.GetDB()
 
 			job := &models.CronJob{
 				ID:             uuid.New().String(),
-				Name:           "test-job",
+				Name:           "cron-exec-test-job",
 				CronExpression: "* * * * *",
 				HandlerType:    "cleanup_idempotency",
+				Payload:        "{}",
 				CreatedAt:      time.Now(),
 				UpdatedAt:      time.Now(),
 			}
@@ -268,17 +277,18 @@ var _ = Describe("Cron Scheduler System", func() {
 		})
 	})
 
-	Context("when managing leases", func() {
+	Context("when managing leases", Ordered, func() {
 		var jobID string
 
-		BeforeEach(func() {
+		BeforeAll(func() {
 			gormDB := testDB.GetDB()
 
 			job := &models.CronJob{
 				ID:             uuid.New().String(),
-				Name:           "lease-test-job",
+				Name:           "cron-lease-test-job",
 				CronExpression: "* * * * *",
 				HandlerType:    "cleanup_idempotency",
+				Payload:        "{}",
 				CreatedAt:      time.Now(),
 				UpdatedAt:      time.Now(),
 			}
@@ -437,17 +447,18 @@ var _ = Describe("Cron Scheduler System", func() {
 		})
 	})
 
-	Context("when handling multiple schedulers", func() {
+	Context("when handling multiple schedulers", Ordered, func() {
 		var jobID string
 
-		BeforeEach(func() {
+		BeforeAll(func() {
 			gormDB := testDB.GetDB()
 
 			job := &models.CronJob{
 				ID:             uuid.New().String(),
-				Name:           "multi-scheduler-job",
+				Name:           "cron-multi-scheduler-job",
 				CronExpression: "* * * * *",
 				HandlerType:    "cleanup_idempotency",
+				Payload:        "{}",
 				CreatedAt:      time.Now(),
 				UpdatedAt:      time.Now(),
 			}

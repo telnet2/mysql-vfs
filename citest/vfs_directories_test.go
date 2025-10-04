@@ -13,15 +13,19 @@ import (
 	"github.com/telnet2/mysql-vfs/pkg/services"
 )
 
-var _ = Describe("VFS Directory Operations", func() {
+var _ = Describe("VFS Directory Operations", Ordered, func() {
 	var (
 		testDB     *fixtures.TestDatabase
 		dirService *services.DirectoryService
 		ctx        context.Context
 	)
 
-	BeforeEach(func() {
+	BeforeAll(func() {
+		GinkgoWriter.Println("🚀 Setting up VFS Directory Operations test environment (this may take a few seconds)...")
+		GinkgoWriter.Println("   - Starting MySQL test container...")
 		testDB = fixtures.NewTestDatabase()
+		GinkgoWriter.Println("   ✓ MySQL ready")
+
 		dirService = services.NewDirectoryService(testDB.GetDB())
 		ctx = context.Background()
 
@@ -38,58 +42,59 @@ var _ = Describe("VFS Directory Operations", func() {
 		if sqlDB != nil {
 			sqlDB.Close()
 		}
+		GinkgoWriter.Println("✅ Test environment ready - running tests...")
 	})
 
-	AfterEach(func() {
+	AfterAll(func() {
 		testDB.Cleanup()
 	})
 
 	Context("when creating directories", func() {
 		It("should create a new directory under root", func() {
-			dir, err := dirService.CreateDirectory(ctx, "/", "projects", nil)
+			dir, err := dirService.CreateDirectory(ctx, "/", "create-root-dir", nil)
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(dir).NotTo(BeNil())
-			Expect(dir.Name).To(Equal("projects"))
-			Expect(dir.Path).To(Equal("/projects"))
+			Expect(dir.Name).To(Equal("create-root-dir"))
+			Expect(dir.Path).To(Equal("/create-root-dir"))
 			Expect(dir.ParentID).To(Equal(stringPtr("root")))
 		})
 
 		It("should create nested directories", func() {
-			// Create /projects
-			projects, err := dirService.CreateDirectory(ctx, "/", "projects", nil)
+			// Create /nested-parent
+			parent, err := dirService.CreateDirectory(ctx, "/", "nested-parent", nil)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(projects).NotTo(BeNil())
+			Expect(parent).NotTo(BeNil())
 
-			// Create /projects/backend
-			backend, err := dirService.CreateDirectory(ctx, "/projects", "backend", nil)
+			// Create /nested-parent/child
+			child, err := dirService.CreateDirectory(ctx, "/nested-parent", "child", nil)
 			Expect(err).NotTo(HaveOccurred())
 
-			Expect(backend.Path).To(Equal("/projects/backend"))
-			Expect(backend.ParentID).To(Equal(&projects.ID))
+			Expect(child.Path).To(Equal("/nested-parent/child"))
+			Expect(child.ParentID).To(Equal(&parent.ID))
 		})
 
 		It("should reject duplicate directory names in same parent", func() {
-			_, err := dirService.CreateDirectory(ctx, "/", "projects", nil)
+			_, err := dirService.CreateDirectory(ctx, "/", "dup-test", nil)
 			Expect(err).NotTo(HaveOccurred())
 
 			// Try to create duplicate
-			_, err = dirService.CreateDirectory(ctx, "/", "projects", nil)
+			_, err = dirService.CreateDirectory(ctx, "/", "dup-test", nil)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("already exists"))
 		})
 
 		It("should allow same directory name in different parents", func() {
-			_, err := dirService.CreateDirectory(ctx, "/", "src", nil)
+			_, err := dirService.CreateDirectory(ctx, "/", "common-name", nil)
 			Expect(err).NotTo(HaveOccurred())
 
-			_, err = dirService.CreateDirectory(ctx, "/", "projects", nil)
+			_, err = dirService.CreateDirectory(ctx, "/", "diff-parent", nil)
 			Expect(err).NotTo(HaveOccurred())
 
-			// Create /projects/src (same name, different parent)
-			src2, err := dirService.CreateDirectory(ctx, "/projects", "src", nil)
+			// Create /diff-parent/common-name (same name, different parent)
+			src2, err := dirService.CreateDirectory(ctx, "/diff-parent", "common-name", nil)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(src2.Path).To(Equal("/projects/src"))
+			Expect(src2.Path).To(Equal("/diff-parent/common-name"))
 		})
 
 		It("should reject invalid directory names", func() {
@@ -102,27 +107,38 @@ var _ = Describe("VFS Directory Operations", func() {
 		})
 	})
 
-	Context("when listing directories", func() {
-		BeforeEach(func() {
+	Context("when listing directories", Ordered, func() {
+		BeforeAll(func() {
 			// Create test hierarchy
-			dirService.CreateDirectory(ctx, "/", "projects", nil)
-			dirService.CreateDirectory(ctx, "/", "documents", nil)
-			dirService.CreateDirectory(ctx, "/projects", "backend", nil)
-			dirService.CreateDirectory(ctx, "/projects", "frontend", nil)
+			_, err := dirService.CreateDirectory(ctx, "/", "list-projects", nil)
+			Expect(err).NotTo(HaveOccurred())
+
+			_, err = dirService.CreateDirectory(ctx, "/", "list-documents", nil)
+			Expect(err).NotTo(HaveOccurred())
+
+			_, err = dirService.CreateDirectory(ctx, "/list-projects", "backend", nil)
+			Expect(err).NotTo(HaveOccurred())
+
+			_, err = dirService.CreateDirectory(ctx, "/list-projects", "frontend", nil)
+			Expect(err).NotTo(HaveOccurred())
 		})
 
 		It("should list directories under root", func() {
 			dirs, _, _, err := dirService.ListDirectory("/", 100, "")
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(len(dirs)).To(Equal(2))
+			// With Ordered tests, we see all directories created by previous tests
+			Expect(len(dirs)).To(BeNumerically(">=", 2))
 
-			names := []string{dirs[0].Name, dirs[1].Name}
-			Expect(names).To(ContainElements("projects", "documents"))
+			var names []string
+			for _, d := range dirs {
+				names = append(names, d.Name)
+			}
+			Expect(names).To(ContainElements("list-projects", "list-documents"))
 		})
 
 		It("should list nested directories", func() {
-			dirs, _, _, err := dirService.ListDirectory("/projects", 100, "")
+			dirs, _, _, err := dirService.ListDirectory("/list-projects", 100, "")
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(len(dirs)).To(Equal(2))
@@ -132,9 +148,9 @@ var _ = Describe("VFS Directory Operations", func() {
 		})
 
 		It("should handle empty directories", func() {
-			dirService.CreateDirectory(ctx, "/", "empty", nil)
+			dirService.CreateDirectory(ctx, "/", "list-empty", nil)
 
-			dirs, files, _, err := dirService.ListDirectory("/empty", 100, "")
+			dirs, files, _, err := dirService.ListDirectory("/list-empty", 100, "")
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(len(dirs)).To(Equal(0))
@@ -144,15 +160,15 @@ var _ = Describe("VFS Directory Operations", func() {
 
 	Context("when deleting directories", func() {
 		It("should delete empty directory", func() {
-			dirService.CreateDirectory(ctx, "/", "temp", nil)
+			dirService.CreateDirectory(ctx, "/", "del-empty", nil)
 
-			err := dirService.DeleteDirectory(ctx, "/temp", false)
+			err := dirService.DeleteDirectory(ctx, "/del-empty", false)
 			Expect(err).NotTo(HaveOccurred())
 
 			// Verify deleted (soft delete)
 			gormDB := testDB.GetDB()
 			var dir models.Directory
-			result := gormDB.Where("path = ?", "/temp").First(&dir)
+			result := gormDB.Where("path = ?", "/del-empty").First(&dir)
 			sqlDB, _ := gormDB.DB()
 			if sqlDB != nil {
 				sqlDB.Close()
@@ -162,27 +178,27 @@ var _ = Describe("VFS Directory Operations", func() {
 		})
 
 		It("should reject deleting non-empty directory without recursive flag", func() {
-			dirService.CreateDirectory(ctx, "/", "projects", nil)
-			dirService.CreateDirectory(ctx, "/projects", "backend", nil)
+			dirService.CreateDirectory(ctx, "/", "del-nonempty", nil)
+			dirService.CreateDirectory(ctx, "/del-nonempty", "child", nil)
 
-			err := dirService.DeleteDirectory(ctx, "/projects", false)
+			err := dirService.DeleteDirectory(ctx, "/del-nonempty", false)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("not empty"))
 		})
 
 		It("should recursively delete directory tree", func() {
-			dirService.CreateDirectory(ctx, "/", "projects", nil)
-			dirService.CreateDirectory(ctx, "/projects", "backend", nil)
-			dirService.CreateDirectory(ctx, "/projects", "frontend", nil)
+			dirService.CreateDirectory(ctx, "/", "del-recursive", nil)
+			dirService.CreateDirectory(ctx, "/del-recursive", "child1", nil)
+			dirService.CreateDirectory(ctx, "/del-recursive", "child2", nil)
 
-			err := dirService.DeleteDirectory(ctx, "/projects", true)
+			err := dirService.DeleteDirectory(ctx, "/del-recursive", true)
 			Expect(err).NotTo(HaveOccurred())
 
 			// Verify all deleted
 			gormDB := testDB.GetDB()
 			var count int64
 			gormDB.Model(&models.Directory{}).
-				Where("path LIKE ?", "/projects%").
+				Where("path LIKE ?", "/del-recursive%").
 				Count(&count)
 			sqlDB, _ := gormDB.DB()
 			if sqlDB != nil {
@@ -199,28 +215,28 @@ var _ = Describe("VFS Directory Operations", func() {
 		})
 	})
 
-	Context("when moving directories", func() {
-		BeforeEach(func() {
-			dirService.CreateDirectory(ctx, "/", "projects", nil)
-			dirService.CreateDirectory(ctx, "/", "archive", nil)
-			dirService.CreateDirectory(ctx, "/projects", "backend", nil)
+	Context("when moving directories", Ordered, func() {
+		BeforeAll(func() {
+			dirService.CreateDirectory(ctx, "/", "move-projects", nil)
+			dirService.CreateDirectory(ctx, "/", "move-archive", nil)
+			dirService.CreateDirectory(ctx, "/move-projects", "backend", nil)
 		})
 
 		It("should move directory to new parent", func() {
-			// Move /projects/backend to /archive/backend
+			// Move /move-projects/backend to /move-archive/backend
 			gormDB := testDB.GetDB()
 
 			// Get backend directory
 			var backend models.Directory
-			gormDB.Where("path = ?", "/projects/backend").First(&backend)
+			gormDB.Where("path = ?", "/move-projects/backend").First(&backend)
 
 			// Get archive directory
 			var archive models.Directory
-			gormDB.Where("path = ?", "/archive").First(&archive)
+			gormDB.Where("path = ?", "/move-archive").First(&archive)
 
 			// Update parent
 			backend.ParentID = &archive.ID
-			backend.Path = "/archive/backend"
+			backend.Path = "/move-archive/backend"
 			gormDB.Save(&backend)
 
 			// Verify
@@ -231,7 +247,7 @@ var _ = Describe("VFS Directory Operations", func() {
 				sqlDB.Close()
 			}
 
-			Expect(moved.Path).To(Equal("/archive/backend"))
+			Expect(moved.Path).To(Equal("/move-archive/backend"))
 			Expect(moved.ParentID).To(Equal(&archive.ID))
 		})
 

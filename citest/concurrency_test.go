@@ -119,12 +119,15 @@ var _ = Describe("Concurrent Operations", func() {
 				successCount++
 			}
 
-			Expect(successCount).To(Equal(concurrency), "All different directories should be created successfully")
+			fmt.Printf("Success count: %d out of %d\n", successCount, concurrency)
 
 			errorList := []error{}
 			for err := range errors {
 				errorList = append(errorList, err)
+				fmt.Printf("  Create error: %v\n", err)
 			}
+
+			Expect(successCount).To(Equal(concurrency), "All different directories should be created successfully")
 			Expect(errorList).To(BeEmpty(), "No errors should occur")
 		})
 

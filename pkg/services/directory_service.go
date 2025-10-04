@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"path"
 	"strings"
 	"time"
@@ -13,6 +14,15 @@ import (
 	"github.com/google/uuid"
 	"github.com/telnet2/mysql-vfs/pkg/models"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+)
+
+const (
+	// Retry configuration for optimistic locking
+	maxRetries     = 5
+	baseBackoffMs  = 10
+	maxBackoffMs   = 500
+	jitterPercent  = 0.3
 )
 
 // DirectoryService handles directory operations
@@ -22,7 +32,36 @@ type DirectoryService struct {
 
 // NewDirectoryService creates a new directory service
 func NewDirectoryService(db *gorm.DB) *DirectoryService {
+	// Initialize random seed for backoff jitter (seed once per service instance)
+	rand.Seed(time.Now().UnixNano())
 	return &DirectoryService{db: db}
+}
+
+// calculateBackoff calculates exponential backoff with jitter
+func calculateBackoff(attempt int) time.Duration {
+	// Exponential backoff: baseBackoff * 2^attempt
+	backoff := baseBackoffMs * (1 << uint(attempt))
+	if backoff > maxBackoffMs {
+		backoff = maxBackoffMs
+	}
+
+	// Add jitter to prevent thundering herd
+	jitter := float64(backoff) * jitterPercent * (rand.Float64()*2 - 1)
+	backoffWithJitter := int(float64(backoff) + jitter)
+
+	return time.Duration(backoffWithJitter) * time.Millisecond
+}
+
+// isDuplicateKeyError checks if error is a duplicate key violation
+func isDuplicateKeyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errMsg := err.Error()
+	// MySQL duplicate key errors
+	return strings.Contains(errMsg, "Error 1062") ||
+		   strings.Contains(errMsg, "Duplicate entry") ||
+		   strings.Contains(errMsg, "duplicate key")
 }
 
 // calculatePathHash calculates SHA256 hash of a path for uniqueness constraint
@@ -65,11 +104,23 @@ func (s *DirectoryService) emitEvent(ctx context.Context, tx *gorm.DB, eventType
 	return nil
 }
 
-// CreateDirectory creates a new directory
+// CreateDirectory creates a new directory using optimistic locking with retries
 func (s *DirectoryService) CreateDirectory(ctx context.Context, parentPath, name string, opaPolicyID *string) (*models.Directory, error) {
 	// Validate name
-	if name == "" || strings.Contains(name, "/") {
+	if name == "" || name == "." || name == ".." {
 		return nil, fmt.Errorf("invalid directory name")
+	}
+
+	// Reject path separators (both Unix and Windows style)
+	if strings.Contains(name, "/") || strings.Contains(name, "\\") {
+		return nil, fmt.Errorf("invalid directory name")
+	}
+
+	// Reject control characters (null bytes, etc.)
+	for _, r := range name {
+		if r < 32 || r == 127 { // Control characters
+			return nil, fmt.Errorf("invalid directory name")
+		}
 	}
 
 	// Calculate full path
@@ -81,32 +132,72 @@ func (s *DirectoryService) CreateDirectory(ctx context.Context, parentPath, name
 		return nil, fmt.Errorf("directory tree depth limit exceeded (max 100 levels)")
 	}
 
+	// Retry loop for optimistic locking
 	var dir *models.Directory
-	err := s.db.Transaction(func(tx *gorm.DB) error {
-		// Lock parent directory path (tree lock)
-		pathComponents := s.getPathComponents(parentPath)
-		if err := s.lockPaths(tx, pathComponents); err != nil {
-			return fmt.Errorf("failed to acquire tree lock: %w", err)
+	var lastErr error
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			// Exponential backoff with jitter
+			backoff := calculateBackoff(attempt - 1)
+			time.Sleep(backoff)
 		}
 
-		// Find parent directory
+		// Try to create directory (lock-free)
+		dir, lastErr = s.tryCreateDirectory(ctx, parentPath, fullPath, name, opaPolicyID)
+
+		if lastErr == nil {
+			// Success!
+			return dir, nil
+		}
+
+		// Check if this is a retryable error
+		if isDuplicateKeyError(lastErr) {
+			// Directory was created concurrently, check if it's the same one
+			var existing models.Directory
+			if err := s.db.Where("path = ? AND deleted_at IS NULL", fullPath).First(&existing).Error; err == nil {
+				// Directory exists - return "already exists" error
+				return nil, fmt.Errorf("directory already exists: %s", fullPath)
+			}
+			// Duplicate was from a different path collision, retry
+			continue
+		}
+
+		if strings.Contains(lastErr.Error(), "parent directory not found") {
+			// Parent doesn't exist yet (might be created concurrently), retry
+			continue
+		}
+
+		// Non-retryable error
+		return nil, lastErr
+	}
+
+	// Max retries exceeded
+	return nil, fmt.Errorf("failed to create directory after %d attempts: %w", maxRetries, lastErr)
+}
+
+// tryCreateDirectory attempts to create a directory without locks (single attempt)
+func (s *DirectoryService) tryCreateDirectory(ctx context.Context, parentPath, fullPath, name string, opaPolicyID *string) (*models.Directory, error) {
+	var dir *models.Directory
+
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		// Verify parent exists (no lock - optimistic approach)
 		var parent models.Directory
-		if parentPath != "/" {
+		if parentPath == "/" {
+			// Look up root directory
+			if err := tx.Where("path = ? AND deleted_at IS NULL", "/").First(&parent).Error; err != nil {
+				if err != gorm.ErrRecordNotFound {
+					return err
+				}
+				// Root doesn't exist in DB, that's okay for root-level creates
+			}
+		} else {
 			if err := tx.Where("path = ? AND deleted_at IS NULL", parentPath).First(&parent).Error; err != nil {
 				if err == gorm.ErrRecordNotFound {
 					return fmt.Errorf("parent directory not found: %s", parentPath)
 				}
 				return err
 			}
-		}
-
-		// Check if directory already exists
-		var existing models.Directory
-		err := tx.Where("path = ? AND deleted_at IS NULL", fullPath).First(&existing).Error
-		if err == nil {
-			return fmt.Errorf("directory already exists: %s", fullPath)
-		} else if err != gorm.ErrRecordNotFound {
-			return err
 		}
 
 		// Create directory
@@ -122,12 +213,13 @@ func (s *DirectoryService) CreateDirectory(ctx context.Context, parentPath, name
 			UpdatedAt:   time.Now(),
 		}
 
-		if parentPath != "/" {
+		if parent.ID != "" {
 			dir.ParentID = &parent.ID
 		}
 
+		// Insert - will fail if path_hash conflicts (another concurrent create)
 		if err := tx.Create(dir).Error; err != nil {
-			return fmt.Errorf("failed to create directory: %w", err)
+			return err
 		}
 
 		// Emit directory.created event
@@ -157,6 +249,11 @@ func (s *DirectoryService) ListDirectory(dirPath string, limit int, cursor strin
 	var files []models.File
 	var nextCursor string
 
+	// Normalize path - strip trailing slashes (except for root)
+	if dirPath != "/" && strings.HasSuffix(dirPath, "/") {
+		dirPath = strings.TrimRight(dirPath, "/")
+	}
+
 	// Find the directory
 	var dir models.Directory
 	if dirPath == "/" {
@@ -172,7 +269,8 @@ func (s *DirectoryService) ListDirectory(dirPath string, limit int, cursor strin
 	// Query subdirectories
 	query := s.db.Where("deleted_at IS NULL")
 	if dirPath == "/" {
-		query = query.Where("parent_id IS NULL OR parent_id = ''")
+		// For root directory, match directories with parent_id = root, NULL, or empty string
+		query = query.Where("parent_id IS NULL OR parent_id = '' OR parent_id = 'root'")
 	} else {
 		query = query.Where("parent_id = ?", dir.ID)
 	}
@@ -196,6 +294,11 @@ func (s *DirectoryService) ListDirectory(dirPath string, limit int, cursor strin
 
 // DeleteDirectory deletes a directory (optionally recursive)
 func (s *DirectoryService) DeleteDirectory(ctx context.Context, dirPath string, recursive bool) error {
+	// Prevent deleting root directory
+	if dirPath == "/" {
+		return fmt.Errorf("cannot delete root directory")
+	}
+
 	return s.db.Transaction(func(tx *gorm.DB) error {
 		// Lock directory path (tree lock)
 		pathComponents := s.getPathComponents(dirPath)
@@ -305,7 +408,7 @@ func (s *DirectoryService) lockPaths(tx *gorm.DB, paths []string) error {
 		query := tx.Where("path = ? AND deleted_at IS NULL", p)
 
 		// Use FOR UPDATE to lock the row
-		if err := query.Clauses(gorm.Expr("FOR UPDATE")).First(&dir).Error; err != nil {
+		if err := query.Clauses(clause.Locking{Strength: "UPDATE"}).First(&dir).Error; err != nil {
 			if err == gorm.ErrRecordNotFound && p == "/" {
 				// Root directory doesn't exist in DB, skip
 				continue

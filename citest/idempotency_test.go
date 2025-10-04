@@ -13,18 +13,23 @@ import (
 	"github.com/telnet2/mysql-vfs/pkg/models"
 )
 
-var _ = Describe("Idempotency System", func() {
+var _ = Describe("Idempotency System", Ordered, func() {
 	var (
 		testDB             *fixtures.TestDatabase
 		idempotencyService *idempotency.Service
 	)
 
-	BeforeEach(func() {
+	BeforeAll(func() {
+		GinkgoWriter.Println("🚀 Setting up Idempotency System test environment (this may take a few seconds)...")
+		GinkgoWriter.Println("   - Starting MySQL test container...")
 		testDB = fixtures.NewTestDatabase()
+		GinkgoWriter.Println("   ✓ MySQL ready")
+
 		idempotencyService = idempotency.NewService(testDB.GetDB())
+		GinkgoWriter.Println("✅ Test environment ready - running tests...")
 	})
 
-	AfterEach(func() {
+	AfterAll(func() {
 		testDB.Cleanup()
 	})
 
@@ -108,7 +113,7 @@ var _ = Describe("Idempotency System", func() {
 	})
 
 	Context("when managing expiration", func() {
-		It("should set correct expiration time", func() {
+		It("should set correct expiration time with default TTL", func() {
 			requestID := uuid.New().String()
 			response := map[string]interface{}{"status": "success"}
 
@@ -120,25 +125,108 @@ var _ = Describe("Idempotency System", func() {
 			record := fixtures.GetIdempotencyRecord(testDB, requestID)
 			Expect(record).NotTo(BeNil())
 
-			expectedEarliest := beforeCache.Add(idempotency.IdempotencyTTL)
-			expectedLatest := afterCache.Add(idempotency.IdempotencyTTL)
+			expectedEarliest := beforeCache.Add(idempotency.DefaultIdempotencyTTL)
+			expectedLatest := afterCache.Add(idempotency.DefaultIdempotencyTTL)
 
 			Expect(record.ExpiresAt.After(expectedEarliest.Add(-1 * time.Second))).To(BeTrue())
 			Expect(record.ExpiresAt.Before(expectedLatest.Add(1 * time.Second))).To(BeTrue())
 		})
 
-		It("should use 24-hour TTL", func() {
-			Expect(idempotency.IdempotencyTTL).To(Equal(24 * time.Hour))
+		It("should use 24-hour default TTL", func() {
+			Expect(idempotency.DefaultIdempotencyTTL).To(Equal(24 * time.Hour))
+		})
+
+		It("should support custom TTL for testing", func() {
+			customTTL := 500 * time.Millisecond
+			testService := idempotency.NewServiceWithTTL(testDB.GetDB(), customTTL)
+
+			requestID := uuid.New().String()
+			response := map[string]interface{}{"test": "custom-ttl"}
+
+			beforeCache := time.Now()
+			err := testService.CacheResponse(requestID, response)
+			Expect(err).NotTo(HaveOccurred())
+			afterCache := time.Now()
+
+			record := fixtures.GetIdempotencyRecord(testDB, requestID)
+			Expect(record).NotTo(BeNil())
+
+			expectedEarliest := beforeCache.Add(customTTL)
+			expectedLatest := afterCache.Add(customTTL)
+
+			Expect(record.ExpiresAt.After(expectedEarliest.Add(-10 * time.Millisecond))).To(BeTrue())
+			Expect(record.ExpiresAt.Before(expectedLatest.Add(10 * time.Millisecond))).To(BeTrue())
+		})
+
+		It("should expire records after TTL with realistic timing (150ms)", func() {
+			// Use a short TTL for realistic testing
+			shortTTL := 150 * time.Millisecond
+			testService := idempotency.NewServiceWithTTL(testDB.GetDB(), shortTTL)
+
+			requestID := uuid.New().String()
+			response := map[string]interface{}{"test": "expiration"}
+
+			// Cache the response
+			err := testService.CacheResponse(requestID, response)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Record should exist immediately
+			record := fixtures.GetIdempotencyRecord(testDB, requestID)
+			Expect(record).NotTo(BeNil())
+			Expect(record.RequestID).To(Equal(requestID))
+
+			// Wait for expiration
+			time.Sleep(200 * time.Millisecond)
+
+			// Cleanup should remove the expired record
+			err = testService.CleanupExpired()
+			Expect(err).NotTo(HaveOccurred())
+
+			// Record should be deleted
+			gormDB := testDB.GetDB()
+			var count int64
+			gormDB.Model(&models.IdempotencyRecord{}).Where("request_id = ?", requestID).Count(&count)
+			sqlDB, _ := gormDB.DB()
+			if sqlDB != nil {
+				sqlDB.Close()
+			}
+			Expect(count).To(Equal(int64(0)))
+		})
+
+		It("should not expire records before TTL (100ms test)", func() {
+			shortTTL := 200 * time.Millisecond
+			testService := idempotency.NewServiceWithTTL(testDB.GetDB(), shortTTL)
+
+			requestID := uuid.New().String()
+			response := map[string]interface{}{"test": "not-expired"}
+
+			err := testService.CacheResponse(requestID, response)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Wait less than TTL
+			time.Sleep(100 * time.Millisecond)
+
+			// Cleanup should NOT remove the record
+			err = testService.CleanupExpired()
+			Expect(err).NotTo(HaveOccurred())
+
+			// Record should still exist
+			record := fixtures.GetIdempotencyRecord(testDB, requestID)
+			Expect(record).NotTo(BeNil())
 		})
 	})
 
-	Context("when cleaning up expired records", func() {
-		BeforeEach(func() {
+	Context("when cleaning up expired records", Ordered, func() {
+		var expiredRecordID string
+		var validRecordID string
+
+		BeforeAll(func() {
 			gormDB := testDB.GetDB()
 
 			// Create expired record
+			expiredRecordID = uuid.New().String()
 			expiredRecord := &models.IdempotencyRecord{
-				RequestID:    uuid.New().String(),
+				RequestID:    expiredRecordID,
 				ResponseHash: "abc123",
 				ResponseBody: `{"expired":true}`,
 				ExpiresAt:    time.Now().Add(-1 * time.Hour), // Expired
@@ -147,8 +235,9 @@ var _ = Describe("Idempotency System", func() {
 			gormDB.Create(expiredRecord)
 
 			// Create valid record
+			validRecordID = uuid.New().String()
 			validRecord := &models.IdempotencyRecord{
-				RequestID:    uuid.New().String(),
+				RequestID:    validRecordID,
 				ResponseHash: "def456",
 				ResponseBody: `{"valid":true}`,
 				ExpiresAt:    time.Now().Add(23 * time.Hour), // Not expired
@@ -163,7 +252,7 @@ var _ = Describe("Idempotency System", func() {
 		})
 
 		It("should remove expired idempotency records", func() {
-			// Count before cleanup
+			// Count before cleanup (with Ordered tests, includes records from previous tests)
 			gormDB := testDB.GetDB()
 			var countBefore int64
 			gormDB.Model(&models.IdempotencyRecord{}).Count(&countBefore)
@@ -172,22 +261,28 @@ var _ = Describe("Idempotency System", func() {
 				sqlDB.Close()
 			}
 
-			Expect(countBefore).To(Equal(int64(2)))
+			Expect(countBefore).To(BeNumerically(">=", 2)) // At least our 2 records
 
 			// Run cleanup
 			err := idempotencyService.CleanupExpired()
 			Expect(err).NotTo(HaveOccurred())
 
-			// Count after cleanup
+			// Verify expired record was deleted
 			gormDB = testDB.GetDB()
-			var countAfter int64
-			gormDB.Model(&models.IdempotencyRecord{}).Count(&countAfter)
+			var expiredRecord models.IdempotencyRecord
+			err = gormDB.Where("request_id = ?", expiredRecordID).First(&expiredRecord).Error
+			Expect(err).To(HaveOccurred()) // Should not be found
+
+			// Verify valid record still exists
+			var validRecord models.IdempotencyRecord
+			err = gormDB.Where("request_id = ?", validRecordID).First(&validRecord).Error
+			Expect(err).NotTo(HaveOccurred()) // Should be found
+			Expect(validRecord.RequestID).To(Equal(validRecordID))
+
 			sqlDB, _ = gormDB.DB()
 			if sqlDB != nil {
 				sqlDB.Close()
 			}
-
-			Expect(countAfter).To(Equal(int64(1))) // Only valid record remains
 		})
 
 		It("should not remove valid records", func() {

@@ -64,8 +64,8 @@ func NewStorageFromEnv(ctx context.Context) (Storage, error) {
 	var bucketURL string
 	if endpoint == "http://localstack:4566" || endpoint == "http://localhost:4566" {
 		// Use awslocal-style URL for LocalStack
-		bucketURL = fmt.Sprintf("s3://%s?endpoint=%s&disableSSL=true&s3ForcePathStyle=true&region=%s",
-			bucket, endpoint, region)
+		bucketURL = fmt.Sprintf("s3://%s?region=%s&endpoint=%s",
+			bucket, region, endpoint)
 	} else {
 		bucketURL = fmt.Sprintf("s3://%s?region=%s", bucket, region)
 	}

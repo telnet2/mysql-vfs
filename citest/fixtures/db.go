@@ -35,6 +35,7 @@ func NewTestDatabase() *TestDatabase {
 
 	req := testcontainers.ContainerRequest{
 		Image:        "mysql:8.0",
+		Name:         fmt.Sprintf("cc-vfs-mysql-%s", uuid.New().String()[:8]),
 		ExposedPorts: []string{"3306/tcp"},
 		Env: map[string]string{
 			"MYSQL_ROOT_PASSWORD": "testpass",

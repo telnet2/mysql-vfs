@@ -16,18 +16,33 @@ import (
 )
 
 const (
-	RequestIDHeader = "X-Request-ID"
-	IdempotencyTTL  = 24 * time.Hour
+	RequestIDHeader    = "X-Request-ID"
+	DefaultIdempotencyTTL = 24 * time.Hour
 )
+
+// For backwards compatibility - will be deprecated
+var IdempotencyTTL = DefaultIdempotencyTTL
 
 // Service handles idempotency logic
 type Service struct {
-	db *gorm.DB
+	db  *gorm.DB
+	ttl time.Duration
 }
 
-// NewService creates a new idempotency service
+// NewService creates a new idempotency service with default 24-hour TTL
 func NewService(db *gorm.DB) *Service {
-	return &Service{db: db}
+	return &Service{
+		db:  db,
+		ttl: DefaultIdempotencyTTL,
+	}
+}
+
+// NewServiceWithTTL creates a new idempotency service with custom TTL (useful for testing)
+func NewServiceWithTTL(db *gorm.DB, ttl time.Duration) *Service {
+	return &Service{
+		db:  db,
+		ttl: ttl,
+	}
 }
 
 // Middleware provides idempotency checking for mutation operations
@@ -101,7 +116,7 @@ func (s *Service) CacheResponse(requestID string, response interface{}) error {
 		RequestID:    requestID,
 		ResponseHash: hashStr,
 		ResponseBody: string(responseBytes),
-		ExpiresAt:    time.Now().Add(IdempotencyTTL),
+		ExpiresAt:    time.Now().Add(s.ttl),
 		CreatedAt:    time.Now(),
 	}
 

@@ -3,12 +3,12 @@ version: '3.8'
 services:
   mysql:
     image: mysql:8.0
-    container_name: vfs-mysql
+    container_name: cc-vfs-mysql
     environment:
       MYSQL_ROOT_PASSWORD: root
       MYSQL_DATABASE: vfs
     ports:
-      - "3306:3306"
+      - "13306:3306"
     volumes:
       - mysql-data:/var/lib/mysql
     healthcheck:
@@ -18,11 +18,11 @@ services:
       retries: 10
       start_period: 30s
     networks:
-      - vfs-network
+      - cc-vfs-network
 
   localstack:
     image: localstack/localstack:latest
-    container_name: vfs-localstack
+    container_name: cc-vfs-localstack
     environment:
       SERVICES: s3
       DEBUG: 1
@@ -40,13 +40,13 @@ services:
       retries: 5
       start_period: 10s
     networks:
-      - vfs-network
+      - cc-vfs-network
 
   vfs-service:
     build:
       context: .
       dockerfile: services/vfs/Dockerfile
-    container_name: vfs-service
+    container_name: cc-vfs-service
     depends_on:
       mysql:
         condition: service_healthy
@@ -55,14 +55,14 @@ services:
     environment:
       DB_DSN: root:root@tcp(mysql:3306)/vfs?charset=utf8mb4&parseTime=True&loc=Local
       S3_ENDPOINT: http://localstack:4566
-      S3_BUCKET: vfs-storage
+      S3_BUCKET: cc-vfs-storage
       AWS_ACCESS_KEY_ID: test
       AWS_SECRET_ACCESS_KEY: test
       AWS_REGION: us-east-1
       PORT: 8080
       LOG_LEVEL: debug
     ports:
-      - "8080:8080"
+      - "18080:8080"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 10s
@@ -70,26 +70,26 @@ services:
       retries: 5
       start_period: 30s
     networks:
-      - vfs-network
+      - cc-vfs-network
     restart: unless-stopped
 
   webhook-daemon:
-    image: adnanh/webhook:latest
-    container_name: vfs-webhook-daemon
+    image: almir/webhook:latest
+    container_name: cc-vfs-webhook-daemon
     volumes:
       - ./deployments/webhook-configs:/etc/webhook:ro
     command: ["-verbose", "-hooks", "/etc/webhook/hooks.json", "-hotreload"]
     ports:
-      - "9000:9000"
+      - "19000:9000"
     networks:
-      - vfs-network
+      - cc-vfs-network
     restart: unless-stopped
 
   webhook-orchestrator:
     build:
       context: .
       dockerfile: services/webhook-orchestrator/Dockerfile
-    container_name: vfs-webhook-orchestrator
+    container_name: cc-vfs-webhook-orchestrator
     depends_on:
       vfs-service:
         condition: service_healthy
@@ -100,14 +100,14 @@ services:
       WEBHOOK_DAEMON_URL: http://webhook-daemon:9000
       LOG_LEVEL: debug
     networks:
-      - vfs-network
+      - cc-vfs-network
     restart: unless-stopped
 
   event-worker:
     build:
       context: .
       dockerfile: services/event-worker/Dockerfile
-    container_name: vfs-event-worker
+    container_name: cc-vfs-event-worker
     depends_on:
       vfs-service:
         condition: service_healthy
@@ -117,7 +117,7 @@ services:
       POLL_INTERVAL: 1s
       LOG_LEVEL: debug
     networks:
-      - vfs-network
+      - cc-vfs-network
     restart: unless-stopped
     deploy:
       replicas: 1
@@ -126,7 +126,7 @@ services:
     build:
       context: .
       dockerfile: services/scheduler/Dockerfile
-    container_name: vfs-scheduler
+    container_name: cc-vfs-scheduler
     depends_on:
       vfs-service:
         condition: service_healthy
@@ -136,7 +136,7 @@ services:
       POLL_INTERVAL: 10s
       LOG_LEVEL: debug
     networks:
-      - vfs-network
+      - cc-vfs-network
     restart: unless-stopped
     deploy:
       replicas: 1
@@ -145,17 +145,17 @@ services:
     build:
       context: .
       dockerfile: cli/Dockerfile
-    container_name: vfs-cli
+    container_name: cc-vfs-cli
     depends_on:
       vfs-service:
         condition: service_healthy
     environment:
-      VFS_SERVICE_URL: http://vfs-service:8080
+      VFS_SERVICE_URL: http://cc-vfs-service:8080
       LOG_LEVEL: info
     stdin_open: true
     tty: true
     networks:
-      - vfs-network
+      - cc-vfs-network
     profiles:
       - cli
 
@@ -164,5 +164,5 @@ volumes:
   localstack-data:
 
 networks:
-  vfs-network:
+  cc-vfs-network:
     driver: bridge
