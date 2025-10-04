@@ -12,11 +12,11 @@ import (
 type SpecialFileType string
 
 const (
-	SpecialFileTypeSchema    SpecialFileType = ".jsonschema"
+	SpecialFileTypeFiles     SpecialFileType = ".files"     // File pattern rules with schemas
 	SpecialFileTypePolicy    SpecialFileType = ".rego"
 	SpecialFileTypeQuota     SpecialFileType = ".quota"
 	SpecialFileTypeLifecycle SpecialFileType = ".lifecycle"
-	SpecialFileTypeWebhook   SpecialFileType = ".webhook"
+	SpecialFileTypeEvents    SpecialFileType = ".events"
 	SpecialFileTypeUser      SpecialFileType = ".user"
 	SpecialFileTypeGroup     SpecialFileType = ".group"
 )
@@ -33,12 +33,12 @@ type SpecialFileDefinition struct {
 
 // SpecialFileRegistry holds all registered special file types
 var SpecialFileRegistry = map[SpecialFileType]*SpecialFileDefinition{
-	SpecialFileTypeSchema: {
-		Name:              SpecialFileTypeSchema,
-		Description:       "JSON Schema for validating files in this directory",
+	SpecialFileTypeFiles: {
+		Name:              SpecialFileTypeFiles,
+		Description:       "File pattern rules with JSON schemas for validation",
 		ContentType:       "application/json",
 		AdminOnly:         true,
-		ValidateFunc:      validateJSONSchema,
+		ValidateFunc:      validateFilesConfig,
 		InheritFromParent: true,
 	},
 	SpecialFileTypePolicy: {
@@ -65,13 +65,13 @@ var SpecialFileRegistry = map[SpecialFileType]*SpecialFileDefinition{
 		ValidateFunc:      validateLifecycleConfig,
 		InheritFromParent: false, // Don't inherit lifecycle policies
 	},
-	SpecialFileTypeWebhook: {
-		Name:              SpecialFileTypeWebhook,
-		Description:       "Webhook configuration for file events",
+	SpecialFileTypeEvents: {
+		Name:              SpecialFileTypeEvents,
+		Description:       "Event handlers for file and directory operations (webhook, log, metrics)",
 		ContentType:       "application/json",
-		AdminOnly:         false, // Regular users can set webhooks
-		ValidateFunc:      validateWebhookConfig,
-		InheritFromParent: false,
+		AdminOnly:         false, // Regular users can set event handlers
+		ValidateFunc:      validateEventsConfig,
+		InheritFromParent: true, // Events inherit and merge from parent
 	},
 	SpecialFileTypeUser: {
 		Name:              SpecialFileTypeUser,
@@ -158,19 +158,59 @@ func SupportsInheritance(filename string) bool {
 	return def.InheritFromParent
 }
 
-// validateJSONSchema validates .jsonschema file content
-func validateJSONSchema(content []byte) error {
-	// Check if it's valid JSON
-	var schemaObj interface{}
-	if err := json.Unmarshal(content, &schemaObj); err != nil {
+// FilesConfig represents the structure of a .files file
+type FilesConfig struct {
+	Rules         []FileRule `json:"rules"`
+	DefaultAction string     `json:"default_action,omitempty"` // "allow" or "deny"
+}
+
+type FileRule struct {
+	Pattern     string                 `json:"pattern"`
+	Type        string                 `json:"type"` // "glob" or "regex"
+	Schema      map[string]interface{} `json:"schema,omitempty"`
+	Description string                 `json:"description,omitempty"`
+}
+
+// validateFilesConfig validates .files file content
+func validateFilesConfig(content []byte) error {
+	var filesConfig FilesConfig
+
+	if err := json.Unmarshal(content, &filesConfig); err != nil {
 		return fmt.Errorf("invalid JSON: %w", err)
 	}
 
-	// Try to compile it as a JSON schema
-	schemaLoader := gojsonschema.NewBytesLoader(content)
-	_, err := gojsonschema.NewSchema(schemaLoader)
-	if err != nil {
-		return fmt.Errorf("invalid JSON schema: %w", err)
+	if len(filesConfig.Rules) == 0 {
+		return fmt.Errorf("at least one rule must be defined")
+	}
+
+	// Validate default action
+	if filesConfig.DefaultAction != "" && filesConfig.DefaultAction != "allow" && filesConfig.DefaultAction != "deny" {
+		return fmt.Errorf("default_action must be 'allow' or 'deny', got: %s", filesConfig.DefaultAction)
+	}
+
+	// Validate each rule
+	for i, rule := range filesConfig.Rules {
+		if rule.Pattern == "" {
+			return fmt.Errorf("rule %d: pattern is required", i)
+		}
+
+		if rule.Type != "glob" && rule.Type != "regex" {
+			return fmt.Errorf("rule %d: type must be 'glob' or 'regex', got: %s", i, rule.Type)
+		}
+
+		// If schema is provided, validate it's a valid JSON schema
+		if rule.Schema != nil {
+			schemaBytes, err := json.Marshal(rule.Schema)
+			if err != nil {
+				return fmt.Errorf("rule %d: invalid schema JSON: %w", i, err)
+			}
+
+			schemaLoader := gojsonschema.NewBytesLoader(schemaBytes)
+			_, err = gojsonschema.NewSchema(schemaLoader)
+			if err != nil {
+				return fmt.Errorf("rule %d: invalid JSON schema: %w", i, err)
+			}
+		}
 	}
 
 	return nil
@@ -262,40 +302,77 @@ func validateLifecycleConfig(content []byte) error {
 	return nil
 }
 
-// WebhookConfig represents the structure of a .webhook file
-type WebhookConfig struct {
-	URL    string   `json:"url"`
-	Events []string `json:"events"`
-	Secret string   `json:"secret,omitempty"`
-}
-
-// validateWebhookConfig validates .webhook file content
-func validateWebhookConfig(content []byte) error {
-	var webhook WebhookConfig
-
-	if err := json.Unmarshal(content, &webhook); err != nil {
-		return fmt.Errorf("invalid webhook JSON: %w", err)
+// validateEventsConfig validates .events file content
+func validateEventsConfig(content []byte) error {
+	// We need to import the events package types, but to avoid circular dependency
+	// we'll do basic JSON validation here
+	var eventsFile struct {
+		Handlers []struct {
+			Name    string   `json:"name"`
+			Events  []string `json:"events"`
+			Type    string   `json:"type"`
+			Enabled *bool    `json:"enabled,omitempty"`
+			Config  interface{} `json:"config"`
+		} `json:"handlers"`
 	}
 
-	if webhook.URL == "" {
-		return fmt.Errorf("webhook URL is required")
+	if err := json.Unmarshal(content, &eventsFile); err != nil {
+		return fmt.Errorf("invalid events JSON: %w", err)
 	}
 
-	if len(webhook.Events) == 0 {
-		return fmt.Errorf("at least one event must be specified")
+	if len(eventsFile.Handlers) == 0 {
+		return fmt.Errorf("at least one handler must be defined")
 	}
 
 	// Validate event types
 	validEvents := map[string]bool{
-		"file.created": true,
-		"file.updated": true,
-		"file.deleted": true,
-		"file.moved":   true,
+		"file.created":      true,
+		"file.updated":      true,
+		"file.deleted":      true,
+		"file.moved":        true,
+		"directory.created": true,
+		"directory.deleted": true,
 	}
 
-	for _, event := range webhook.Events {
-		if !validEvents[event] {
-			return fmt.Errorf("invalid event type: %s", event)
+	// Validate handler types
+	validHandlerTypes := map[string]bool{
+		"webhook": true,
+		"log":     true,
+		"metrics": true,
+	}
+
+	handlerNames := make(map[string]bool)
+	for i, handler := range eventsFile.Handlers {
+		// Validate name
+		if handler.Name == "" {
+			return fmt.Errorf("handler %d: name is required", i)
+		}
+
+		// Check for duplicate names
+		if handlerNames[handler.Name] {
+			return fmt.Errorf("handler %d: duplicate handler name: %s", i, handler.Name)
+		}
+		handlerNames[handler.Name] = true
+
+		// Validate handler type
+		if !validHandlerTypes[handler.Type] {
+			return fmt.Errorf("handler %d: invalid handler type: %s (must be webhook, log, or metrics)", i, handler.Type)
+		}
+
+		// Validate events
+		if len(handler.Events) == 0 {
+			return fmt.Errorf("handler %d: at least one event must be specified", i)
+		}
+
+		for _, event := range handler.Events {
+			if !validEvents[event] {
+				return fmt.Errorf("handler %d: invalid event type: %s", i, event)
+			}
+		}
+
+		// Validate config exists
+		if handler.Config == nil {
+			return fmt.Errorf("handler %d: config is required", i)
 		}
 	}
 
