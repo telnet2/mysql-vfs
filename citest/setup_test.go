@@ -41,6 +41,7 @@ var (
 	metadataURL string
 	contentURL  string
 	bucketName  string
+	mysqlDSN    string
 )
 
 func init() {
@@ -79,6 +80,7 @@ var _ = BeforeSuite(func() {
 
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=True&loc=Local",
 		"vfs", "vfs", mysqlHost, mysqlPort.Port(), "vfs")
+	mysqlDSN = dsn
 	Eventually(func() error {
 		db, err := sql.Open("mysql", dsn)
 		if err != nil {
