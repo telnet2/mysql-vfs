@@ -16,6 +16,7 @@ func TestTypeFromFilename(t *testing.T) {
 		{"webhook", ".webhook", true, TypeWebhook},
 		{"user", ".user", true, TypeUser},
 		{"group", ".group", true, TypeGroup},
+		{"events", ".events", true, TypeEvents},
 		{"non policy", "document.txt", false, ""},
 		{"nested path", "foo/.rego", true, TypeRego},
 	}
@@ -36,6 +37,9 @@ func TestIsSpecialFile(t *testing.T) {
 	if !IsSpecialFile(".workflow") {
 		t.Fatalf("expected .workflow to be special")
 	}
+	if !IsSpecialFile(".events") {
+		t.Fatalf("expected .events to be special")
+	}
 	if IsSpecialFile("notes.txt") {
 		t.Fatalf("expected notes.txt to not be special")
 	}
@@ -50,6 +54,9 @@ func TestParseType(t *testing.T) {
 	}
 	if typ, ok := ParseType("GROUP"); !ok || typ != TypeGroup {
 		t.Fatalf("expected parse group, got %v %v", typ, ok)
+	}
+	if typ, ok := ParseType("events"); !ok || typ != TypeEvents {
+		t.Fatalf("expected parse events, got %v %v", typ, ok)
 	}
 }
 

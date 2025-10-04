@@ -15,6 +15,7 @@ const (
 	TypeWebhook    Type = "webhook"
 	TypeUser       Type = "user"
 	TypeGroup      Type = "group"
+	TypeEvents     Type = "events"
 )
 
 type Scope string
@@ -45,6 +46,7 @@ type Manifest struct {
 	Principals  *PrincipalSet   `json:"principals,omitempty"`
 	Module      string          `json:"module,omitempty"`
 	Schema      json.RawMessage `json:"schema,omitempty"`
+	Events      *EventsConfig   `json:"events,omitempty"`
 }
 
 var specialFiles = map[string]Type{
@@ -54,6 +56,7 @@ var specialFiles = map[string]Type{
 	".webhook":    TypeWebhook,
 	".user":       TypeUser,
 	".group":      TypeGroup,
+	".events":     TypeEvents,
 }
 
 func TypeFromFilename(name string) (Type, bool) {
@@ -76,6 +79,8 @@ func ParseType(name string) (Type, bool) {
 		return TypeUser, true
 	case string(TypeGroup):
 		return TypeGroup, true
+	case string(TypeEvents):
+		return TypeEvents, true
 	default:
 		return "", false
 	}

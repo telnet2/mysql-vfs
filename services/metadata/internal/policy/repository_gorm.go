@@ -42,7 +42,7 @@ func NewGormManifestRepository(db *gorm.DB) *GormManifestRepository {
 	return &GormManifestRepository{db: db}
 }
 
-var policyFilenames = []string{".rego", ".jsonschema", ".workflow", ".webhook", ".user", ".group"}
+var policyFilenames = []string{".rego", ".jsonschema", ".workflow", ".webhook", ".user", ".group", ".events"}
 
 func (r *GormManifestRepository) ListManifests(ctx context.Context, directoryID string) ([]Manifest, error) {
 	var files []db.File
@@ -179,6 +179,25 @@ func (r *GormManifestRepository) ListManifests(ctx context.Context, directoryID 
 					}
 					m.AppliesTo = applies
 				}
+			}
+		} else if t == TypeEvents {
+			version, ok := versionMap[f.CurrentVersionID]
+			if !ok {
+				return nil, fmt.Errorf("policy: missing current version for file %s", f.ID)
+			}
+			if version.StorageMode != "inline_json" {
+				return nil, fmt.Errorf("policy: events manifests must use inline_json storage for file %s", f.ID)
+			}
+			config, overrides, err := ParseEventsManifest([]byte(version.JSONPayload))
+			if err != nil {
+				return nil, err
+			}
+			m.Events = &config
+			if overrides.Scope != nil {
+				m.Scope = *overrides.Scope
+			}
+			if overrides.Inheritance != nil {
+				m.Inheritance = *overrides.Inheritance
 			}
 		}
 		manifests = append(manifests, m)

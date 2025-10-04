@@ -16,9 +16,15 @@
   - [x] Prevent CLI operations on policy files unless actor is admin
   - [x] Integrate policy enforcement into e2e tests
 - [x] Integrate `.rego` authorization evaluation
-- [ ] Integrate `.jsonschema` content validation
+- [x] Integrate `.jsonschema` content validation
 - [ ] Integrate `.workflow` transition enforcement
 - [ ] Add `.webhook` policy evaluation (optional future)
 - [ ] Add `.retention` / `.transform` / `.quota` policy handlers (optional future)
 - [ ] Update webhook service to consume resolved policies
 - [ ] Expand citest coverage for policy inheritance and workflows
+- [ ] Implement `.events` trigger system
+  - [ ] Parse `.events` manifests via policy registry with caching/invalidation
+  - [ ] Evaluate triggers (match filters + optional Rego conditions)
+  - [ ] Enqueue actions into events pipeline with idempotency metadata
+  - [ ] Update workers to dispatch `ext.*` actions (workflow/webhook emitters)
+  - [ ] Add unit/e2e tests covering trigger execution and failure paths
