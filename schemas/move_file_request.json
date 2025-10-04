@@ -1,0 +1,37 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://vfs.example.com/schemas/move_file_request.json",
+  "title": "Move File Request",
+  "description": "Schema for moving or renaming a file in the VFS",
+  "type": "object",
+  "required": ["source_path", "destination_path"],
+  "properties": {
+    "source_path": {
+      "type": "string",
+      "description": "The current full path of the file",
+      "pattern": "^/.*",
+      "minLength": 2,
+      "maxLength": 2048,
+      "examples": ["/documents/old.txt", "/data/file.json"]
+    },
+    "destination_path": {
+      "type": "string",
+      "description": "The new full path for the file",
+      "pattern": "^/.*",
+      "minLength": 2,
+      "maxLength": 2048,
+      "examples": ["/documents/new.txt", "/archive/file.json"]
+    }
+  },
+  "additionalProperties": false,
+  "examples": [
+    {
+      "source_path": "/documents/report.pdf",
+      "destination_path": "/archive/report-2024.pdf"
+    },
+    {
+      "source_path": "/temp/file.txt",
+      "destination_path": "/permanent/file.txt"
+    }
+  ]
+}

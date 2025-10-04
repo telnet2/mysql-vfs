@@ -1,0 +1,44 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://vfs.example.com/schemas/create_directory_request.json",
+  "title": "Create Directory Request",
+  "description": "Schema for creating a new directory in the VFS",
+  "type": "object",
+  "required": ["parent_path", "name"],
+  "properties": {
+    "parent_path": {
+      "type": "string",
+      "description": "The path of the parent directory",
+      "pattern": "^/.*",
+      "minLength": 1,
+      "maxLength": 1024,
+      "examples": ["/", "/projects", "/data/uploads"]
+    },
+    "name": {
+      "type": "string",
+      "description": "The name of the directory to create",
+      "minLength": 1,
+      "maxLength": 255,
+      "pattern": "^[^/\\\\\\x00-\\x1f\\x7f]+$",
+      "examples": ["documents", "my-project", "data_2024"]
+    },
+    "opa_policy_id": {
+      "type": ["string", "null"],
+      "description": "Optional OPA policy ID for access control",
+      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+      "examples": ["550e8400-e29b-41d4-a716-446655440000", null]
+    }
+  },
+  "additionalProperties": false,
+  "examples": [
+    {
+      "parent_path": "/",
+      "name": "projects"
+    },
+    {
+      "parent_path": "/data",
+      "name": "uploads",
+      "opa_policy_id": "550e8400-e29b-41d4-a716-446655440000"
+    }
+  ]
+}

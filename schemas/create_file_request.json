@@ -1,0 +1,69 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://vfs.example.com/schemas/create_file_request.json",
+  "title": "Create File Request",
+  "description": "Schema for creating a new file in the VFS",
+  "type": "object",
+  "required": ["directory_path", "name", "content_type", "content"],
+  "properties": {
+    "directory_path": {
+      "type": "string",
+      "description": "The path of the directory where the file will be created",
+      "pattern": "^/.*",
+      "minLength": 1,
+      "maxLength": 1024,
+      "examples": ["/", "/documents", "/data/uploads"]
+    },
+    "name": {
+      "type": "string",
+      "description": "The name of the file to create",
+      "minLength": 1,
+      "maxLength": 255,
+      "pattern": "^[^/\\\\\\x00-\\x1f\\x7f]+$",
+      "examples": ["document.txt", "report.pdf", "data.json"]
+    },
+    "content_type": {
+      "type": "string",
+      "description": "The MIME type of the file content",
+      "minLength": 1,
+      "maxLength": 255,
+      "pattern": "^[a-z]+/[a-z0-9.+-]+$",
+      "examples": [
+        "text/plain",
+        "application/json",
+        "application/pdf",
+        "image/png"
+      ]
+    },
+    "content": {
+      "type": "string",
+      "description": "The file content (base64 encoded for binary files)",
+      "minLength": 0,
+      "maxLength": 104857600,
+      "examples": ["Hello, World!", "eyJrZXkiOiJ2YWx1ZSJ9"]
+    },
+    "storage_type": {
+      "type": "string",
+      "description": "Optional storage type (mysql or s3)",
+      "enum": ["mysql", "s3"],
+      "default": "mysql",
+      "examples": ["mysql", "s3"]
+    }
+  },
+  "additionalProperties": false,
+  "examples": [
+    {
+      "directory_path": "/documents",
+      "name": "readme.txt",
+      "content_type": "text/plain",
+      "content": "This is a readme file"
+    },
+    {
+      "directory_path": "/data",
+      "name": "config.json",
+      "content_type": "application/json",
+      "content": "{\"database\":\"mysql\"}",
+      "storage_type": "s3"
+    }
+  ]
+}
