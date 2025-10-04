@@ -1,0 +1,25 @@
+# Build artifacts
+bin/
+*.exe
+*.out
+
+# VFS CLI history
+.vfscli/
+
+data/
+
+# Editor and OS files
+.DS_Store
+*.swp
+*.swo
+
+# Generated coverage and logs
+coverage.out
+*.log
+
+# Docker artifacts
+.dockerignore
+*.tar
+
+# Go modules cache (if vendor used)
+vendor/

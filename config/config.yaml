@@ -1,0 +1,29 @@
+services:
+  metadata:
+    address: :8081
+  content:
+    address: :8082
+  scheduler:
+    address: :8083
+  webhook:
+    address: :8084
+mysql:
+  host: droid-mysql
+  port: 3306
+  user: vfs
+  password: vfs
+  database: vfs
+  params: charset=utf8mb4&parseTime=True&loc=Local
+blob:
+  bucket_url: file:///tmp/vfs-blob?no_tmp_dir=true
+storage:
+  inline_json_max_bytes: 10485760
+  inline_json_media_types:
+  - application/json
+  - text/json
+webhook:
+  callback_secret: ''
+  base_url: ''
+cron:
+  scheduler_interval: 5s
+  lock_timeout: 30s
