@@ -22,11 +22,12 @@ func main() {
 	settings := config.Load()
 
 	ctx := context.Background()
-	bucket, err := blob.OpenBucket(ctx, settings.BlobBucketURL())
+	bucketURL := settings.BlobBucketURL()
+	bucket, err := blob.OpenBucket(ctx, bucketURL)
 	if err != nil {
 		log.Fatalf("failed to open blob bucket: %v", err)
 	}
-	storage := service.NewStorageService(bucket, settings.InlineJSONMaxBytes(), settings.InlineJSONMediaTypes())
+	storage := service.NewStorageService(bucket, bucketURL, settings.InlineJSONMaxBytes(), settings.InlineJSONMediaTypes())
 
 	app.SetDependencies(app.Dependencies{
 		Bucket:  bucket,
@@ -43,6 +44,7 @@ func main() {
 	h := server.New(
 		server.WithHostPorts(address),
 		server.WithExitWaitTime(shutdownTimeout),
+		server.WithMaxRequestBodySize(50*1024*1024), // 50MB to support large file uploads
 	)
 	h.OnShutdown = append(h.OnShutdown, func(ctx context.Context) {
 		if err := bucket.Close(); err != nil {

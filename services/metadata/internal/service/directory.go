@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"path"
 	"strings"
 	"time"
@@ -67,6 +68,9 @@ func NewDirectoryService(db *gorm.DB) *DirectoryService {
 func (s *DirectoryService) Create(ctx context.Context, in CreateDirectoryInput) (DirectoryDTO, error) {
 	if strings.TrimSpace(in.Name) == "" {
 		return DirectoryDTO{}, ErrInvalidRequest
+	}
+	if len(in.Name) > 255 {
+		return DirectoryDTO{}, fmt.Errorf("%w: directory name exceeds maximum length of 255 characters", ErrInvalidRequest)
 	}
 
 	var dto DirectoryDTO
@@ -235,6 +239,9 @@ func (s *DirectoryService) Update(ctx context.Context, in UpdateDirectoryInput) 
 		newName := directory.Name
 		if in.NewName != nil && strings.TrimSpace(*in.NewName) != "" {
 			newName = strings.TrimSpace(*in.NewName)
+			if len(newName) > 255 {
+				return fmt.Errorf("%w: directory name exceeds maximum length of 255 characters", ErrInvalidRequest)
+			}
 		}
 
 		if parentPath == "" && newParentID != nil {

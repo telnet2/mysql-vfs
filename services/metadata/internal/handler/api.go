@@ -18,6 +18,7 @@ import (
 const (
 	storageModeInlineJSON = "inline_json"
 	storageModeBlob       = "blob"
+	storageModeS3Blob     = "s3_blob"
 )
 
 type createDirectoryRequest struct {
@@ -180,6 +181,10 @@ func DeleteDirectory(ctx context.Context, c *hzapp.RequestContext) {
 		RequestID:       getRequestID(c),
 		Force:           force,
 	}); err != nil {
+		if errors.Is(err, service.ErrDirectoryNotFound) {
+			respondError(c, http.StatusNotFound, "directory_not_found", err.Error())
+			return
+		}
 		handleServiceError(c, err)
 		return
 	}
@@ -210,6 +215,10 @@ func CreateFile(ctx context.Context, c *hzapp.RequestContext) {
 		Actor:        actor,
 	})
 	if err != nil {
+		if errors.Is(err, service.ErrDirectoryNotFound) {
+			respondError(c, http.StatusBadRequest, "directory_not_found", err.Error())
+			return
+		}
 		handleServiceError(c, err)
 		return
 	}
@@ -290,6 +299,10 @@ func UpdateFile(ctx context.Context, c *hzapp.RequestContext) {
 		Actor:           actor,
 	})
 	if err != nil {
+		if errors.Is(err, service.ErrDirectoryNotFound) {
+			respondError(c, http.StatusBadRequest, "directory_not_found", err.Error())
+			return
+		}
 		handleServiceError(c, err)
 		return
 	}
@@ -421,7 +434,7 @@ func buildVersionData(mode string, blobKey *string, jsonPayload *json.RawMessage
 			mt := "application/json"
 			vd.MimeType = &mt
 		}
-	case storageModeBlob:
+	case storageModeBlob, storageModeS3Blob:
 		if blobKey != nil {
 			trimmed := strings.TrimSpace(*blobKey)
 			if trimmed != "" {

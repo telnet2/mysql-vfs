@@ -110,12 +110,60 @@ func (p *EventProcessor) claimEvent(ctx context.Context) (*db.Event, eventEnvelo
 
 func (p *EventProcessor) processEvent(ctx context.Context, event *db.Event, env eventEnvelope) error {
 	return p.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		now := time.Now()
+		safeData := sanitizeRawJSON(env.Data)
+
+		// Handle direct action-dispatched webhooks emitted by the policy engine.
+		// These come in as "ext.webhook.triggered" with the target URL embedded
+		// under data.action.webhook in the event payload.
+		if env.EventType == "ext.webhook.triggered" && json.Valid(env.Data) {
+			var body map[string]any
+			if err := json.Unmarshal(env.Data, &body); err == nil {
+				if action, ok := body["action"].(map[string]any); ok {
+					if rawURL, ok := action["webhook"].(string); ok && strings.TrimSpace(rawURL) != "" {
+						cfg, err := p.ensureActionConfig(ctx, tx, strings.TrimSpace(rawURL))
+						if err != nil {
+							return err
+						}
+						jobPayload, err := json.Marshal(map[string]any{
+							"event_id":    event.ID,
+							"event_type":  env.EventType,
+							"subject_id":  env.SubjectID,
+							"data":        safeData,
+							"recorded_at": env.RecordedAt,
+							"config_id":   cfg.ID,
+							"scopes": map[string]any{
+								"directories": env.Scopes.Directories,
+								"files":       env.Scopes.Files,
+							},
+						})
+						if err != nil {
+							return err
+						}
+						job := db.WebhookJob{
+							ID:             uuid.NewString(),
+							EventID:        event.ID,
+							ConfigID:       cfg.ID,
+							Payload:        jobPayload,
+							Status:         "pending",
+							RetryCount:     0,
+							NextAttemptAt:  now,
+							IdempotencyKey: hashIdentifier(event.ID + ":" + cfg.ID),
+						}
+						if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "idempotency_key"}}, DoNothing: true}).
+							Create(&job).Error; err != nil {
+							return err
+						}
+					}
+				}
+			}
+		}
+
+		// Also fan-out to subscribed configs (global/directory/file scopes) as usual.
 		configs, err := p.matchingConfigs(ctx, tx, env)
 		if err != nil {
 			return err
 		}
-
-		now := time.Now()
 		for _, cfg := range configs {
 			if !allowsEvent(cfg, env.EventType) {
 				continue
@@ -124,7 +172,7 @@ func (p *EventProcessor) processEvent(ctx context.Context, event *db.Event, env 
 				"event_id":    event.ID,
 				"event_type":  env.EventType,
 				"subject_id":  env.SubjectID,
-				"data":        json.RawMessage(env.Data),
+				"data":        safeData,
 				"recorded_at": env.RecordedAt,
 				"config_id":   cfg.ID,
 				"scopes": map[string]any{
@@ -197,6 +245,16 @@ func hashIdentifier(value string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+func sanitizeRawJSON(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return json.RawMessage("null")
+	}
+	if json.Valid(raw) {
+		return raw
+	}
+	return json.RawMessage("null")
+}
+
 func allowsEvent(cfg db.WebhookConfig, eventType string) bool {
 	if strings.TrimSpace(cfg.EventTypes) == "" {
 		return true
@@ -211,4 +269,36 @@ func allowsEvent(cfg db.WebhookConfig, eventType string) bool {
 		}
 	}
 	return false
+}
+
+// ensureActionConfig ensures there is a WebhookConfig row for a direct-action webhook URL.
+// It creates a stable deterministic ID based on the URL to avoid duplicates under concurrency.
+func (p *EventProcessor) ensureActionConfig(ctx context.Context, tx *gorm.DB, url string) (db.WebhookConfig, error) {
+	url = strings.TrimSpace(url)
+	if url == "" {
+		return db.WebhookConfig{}, errors.New("empty webhook url")
+	}
+	sum := sha256.Sum256([]byte(strings.ToLower(url)))
+	id := "act_" + hex.EncodeToString(sum[:])
+
+	cfg := db.WebhookConfig{
+		ID:         id,
+		ScopeType:  "action",
+		ScopeID:    nil,
+		EventTypes: "*",
+		TargetURL:  url,
+		Secret:     "",
+	}
+	// Insert if not exists; id is primary key so this dedupes safely.
+	if err := tx.WithContext(ctx).
+		Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, DoNothing: true}).
+		Create(&cfg).Error; err != nil {
+		return db.WebhookConfig{}, err
+	}
+
+	var out db.WebhookConfig
+	if err := tx.WithContext(ctx).Where("id = ?", id).First(&out).Error; err != nil {
+		return db.WebhookConfig{}, err
+	}
+	return out, nil
 }

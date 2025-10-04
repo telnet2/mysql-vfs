@@ -12,6 +12,7 @@ import (
 	"github.com/telnet2/mysql-vfs/internal/db"
 	"github.com/telnet2/mysql-vfs/internal/serverutil"
 	"github.com/telnet2/mysql-vfs/services/scheduler/internal/app"
+	"github.com/telnet2/mysql-vfs/services/scheduler/internal/worker"
 )
 
 func main() {
@@ -49,7 +50,16 @@ func main() {
 		})
 	}
 
-	serverutil.SetupGracefulShutdown(h, shutdownTimeout, nil)
+	// Start background workers (workflow event processor)
+	bgCtx, cancel := context.WithCancel(context.Background())
+	evp := worker.NewEventProcessor(database)
+	go evp.Start(bgCtx)
+
+	// Ensure workers are signaled on graceful shutdown
+	serverutil.SetupGracefulShutdown(h, shutdownTimeout, func(ctx context.Context) error {
+		cancel()
+		return nil
+	})
 
 	register(h)
 	h.Spin()

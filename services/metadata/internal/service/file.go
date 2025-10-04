@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,6 +23,7 @@ import (
 const (
 	storageModeInlineJSON = "inline_json"
 	storageModeBlob       = "blob"
+	storageModeS3Blob     = "s3_blob"
 )
 
 type PolicyRegistry interface {
@@ -554,6 +557,9 @@ func (s *FileService) Create(ctx context.Context, in CreateFileInput) (FileDTO, 
 	if strings.TrimSpace(in.Name) == "" {
 		return FileDTO{}, ErrInvalidRequest
 	}
+	if len(in.Name) > 255 {
+		return FileDTO{}, fmt.Errorf("%w: file name exceeds maximum length of 255 characters", ErrInvalidRequest)
+	}
 	if policy.IsSpecialFile(in.Name) {
 		if err := s.ensurePolicyAdmin(ctx, in.DirectoryID, in.Actor); err != nil {
 			return FileDTO{}, err
@@ -587,54 +593,7 @@ func (s *FileService) Create(ctx context.Context, in CreateFileInput) (FileDTO, 
 			Where("directory_id = ? AND name = ? AND deleted_at IS NULL", in.DirectoryID, in.Name).
 			First(&existing).Error
 		if err == nil {
-			existing.Version++
-			existing.OriginFileID = in.OriginFileID
-			if err := s.storeFileVersion(tx, &existing, in.VersionData, true); err != nil {
-				return err
-			}
-			if err := tx.Model(&db.File{}).
-				Where("id = ?", existing.ID).
-				Updates(map[string]any{
-					"origin_file_id": existing.OriginFileID,
-					"path":           existing.Path,
-					"version":        existing.Version,
-				}).Error; err != nil {
-				return err
-			}
-			if err := tx.Where("id = ?", existing.ID).First(&existing).Error; err != nil {
-				return err
-			}
-			version, err := s.loadVersionByID(tx, existing.CurrentVersionID)
-			if err != nil {
-				return err
-			}
-			dto = mapFile(existing, version)
-			if policy.IsSpecialFile(existing.Name) {
-				invalidateDirs[existing.DirectoryID] = struct{}{}
-			}
-			if _, err := persistEvent(ctx, tx, EventPayload{
-				EventType: "file.updated",
-				SubjectID: existing.ID,
-				RequestID: in.RequestID,
-				Data:      dto,
-				Scopes: ScopeSet{
-					DirectoryIDs: []string{existing.DirectoryID},
-					FileIDs:      []string{existing.ID},
-				},
-			}); err != nil {
-				return err
-			}
-			triggerPayload := map[string]any{
-				"file":       dto,
-				"attributes": createAttrs,
-			}
-			if version != nil {
-				triggerPayload["version"] = buildVersionPayload(version)
-			}
-			if err := s.triggerFileEvents(ctx, tx, "file.updated", in.Actor, in.RequestID, existing, version, createAttrs, triggerPayload); err != nil {
-				return err
-			}
-			return nil
+			return fmt.Errorf("%w: file %q already exists in directory %q", ErrInvalidRequest, in.Name, directory.Path)
 		}
 		if err != nil && err != gorm.ErrRecordNotFound {
 			return err
@@ -746,6 +705,9 @@ func (s *FileService) Update(ctx context.Context, in UpdateFileInput) (FileDTO, 
 
 		if in.NewName != nil && strings.TrimSpace(*in.NewName) != "" && *in.NewName != file.Name {
 			newName := strings.TrimSpace(*in.NewName)
+			if len(newName) > 255 {
+				return fmt.Errorf("%w: file name exceeds maximum length of 255 characters", ErrInvalidRequest)
+			}
 			var count int64
 			if err := tx.Model(&db.File{}).
 				Where("directory_id = ? AND name = ? AND id <> ? AND deleted_at IS NULL", file.DirectoryID, newName, file.ID).
@@ -1045,19 +1007,54 @@ func validateVersionData(data FileVersionData) error {
 	switch data.StorageMode {
 	case storageModeInlineJSON:
 		if len(data.JSONPayload) == 0 {
-			return errors.New("inline_json storage requires json payload")
+			return fmt.Errorf("%w: inline_json storage requires json payload", ErrInvalidRequest)
 		}
-	case storageModeBlob:
+		var inline map[string]any
+		if err := json.Unmarshal(data.JSONPayload, &inline); err != nil {
+			return fmt.Errorf("%w: inline_json payload must be a JSON object", ErrInvalidRequest)
+		}
+		if data.Checksum != nil {
+			expected := strings.TrimSpace(*data.Checksum)
+			if expected == "" {
+				return fmt.Errorf("%w: checksum required for inline_json payload", ErrInvalidRequest)
+			}
+			sum := sha256.Sum256(data.JSONPayload)
+			actual := hex.EncodeToString(sum[:])
+			if !strings.EqualFold(expected, actual) {
+				return fmt.Errorf("%w: checksum mismatch for inline_json payload", ErrInvalidRequest)
+			}
+		}
+		if data.Size != nil {
+			size := int64(len(data.JSONPayload))
+			if *data.Size != size {
+				return fmt.Errorf("%w: size mismatch for inline_json payload", ErrInvalidRequest)
+			}
+		}
+	case storageModeBlob, storageModeS3Blob:
 		if data.BlobKey == nil || strings.TrimSpace(*data.BlobKey) == "" {
-			return errors.New("blob storage requires blob key")
+			return fmt.Errorf("%w: blob storage requires blob key", ErrInvalidRequest)
+		}
+		if data.Checksum == nil || !isValidHexChecksum(strings.TrimSpace(*data.Checksum)) {
+			return fmt.Errorf("%w: blob storage requires 64-character hex checksum", ErrInvalidRequest)
+		}
+		if data.Size == nil || *data.Size < 0 {
+			return fmt.Errorf("%w: blob storage requires non-negative size", ErrInvalidRequest)
 		}
 	default:
-		return errors.New("unknown storage mode")
+		return fmt.Errorf("%w: unknown storage mode", ErrInvalidRequest)
 	}
 	if strings.TrimSpace(data.Actor) == "" {
-		return errors.New("actor required for version")
+		return fmt.Errorf("%w: actor required for version", ErrInvalidRequest)
 	}
 	return nil
+}
+
+func isValidHexChecksum(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
 
 func mapFile(f db.File, version *db.FileVersion) FileDTO {
@@ -1071,7 +1068,7 @@ func mapFile(f db.File, version *db.FileVersion) FileDTO {
 			if len(version.JSONPayload) > 0 {
 				inline = json.RawMessage([]byte(version.JSONPayload))
 			}
-		case storageModeBlob:
+		case storageModeBlob, storageModeS3Blob:
 			blobKey = version.BlobKey
 		}
 	}

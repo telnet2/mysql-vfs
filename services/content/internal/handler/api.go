@@ -34,7 +34,7 @@ func UploadContent(ctx context.Context, c *hzapp.RequestContext) {
 	d := deps.Get()
 	storage := d.Storage
 	if storage == nil {
-		storage = service.NewStorageService(d.Bucket, d.Config.InlineJSONMaxBytes(), d.Config.InlineJSONMediaTypes())
+		storage = service.NewStorageService(d.Bucket, d.Config.BlobBucketURL(), d.Config.InlineJSONMaxBytes(), d.Config.InlineJSONMediaTypes())
 	}
 	result, err := storage.Store(ctx, service.StoreRequest{
 		Data:     payload,
@@ -75,7 +75,7 @@ func DownloadContent(ctx context.Context, c *hzapp.RequestContext) {
 	d := deps.Get()
 	storage := d.Storage
 	if storage == nil {
-		storage = service.NewStorageService(d.Bucket, d.Config.InlineJSONMaxBytes(), d.Config.InlineJSONMediaTypes())
+		storage = service.NewStorageService(d.Bucket, d.Config.BlobBucketURL(), d.Config.InlineJSONMaxBytes(), d.Config.InlineJSONMediaTypes())
 	}
 	result, err := storage.Load(ctx, blobKey)
 	if err != nil {

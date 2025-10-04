@@ -19,6 +19,7 @@ import (
 const (
 	storageModeInlineJSON = "inline_json"
 	storageModeBlob       = "blob"
+	storageModeS3Blob     = "s3_blob"
 )
 
 type StoreRequest struct {
@@ -46,9 +47,10 @@ type StorageService struct {
 	Bucket              *blob.Bucket
 	InlineJSONMaxBytes  int64
 	InlineJSONMediaType map[string]struct{}
+	BucketURL           string
 }
 
-func NewStorageService(bucket *blob.Bucket, inlineMax int64, inlineMedia []string) *StorageService {
+func NewStorageService(bucket *blob.Bucket, bucketURL string, inlineMax int64, inlineMedia []string) *StorageService {
 	mt := make(map[string]struct{}, len(inlineMedia))
 	for _, item := range inlineMedia {
 		if trimmed := strings.TrimSpace(strings.ToLower(item)); trimmed != "" {
@@ -57,6 +59,7 @@ func NewStorageService(bucket *blob.Bucket, inlineMax int64, inlineMedia []strin
 	}
 	return &StorageService{
 		Bucket:              bucket,
+		BucketURL:           bucketURL,
 		InlineJSONMaxBytes:  inlineMax,
 		InlineJSONMediaType: mt,
 	}
@@ -84,8 +87,15 @@ func (s *StorageService) Store(ctx context.Context, req StoreRequest) (StoreResu
 	if err != nil {
 		return StoreResult{}, err
 	}
+
+	// Determine storage mode based on bucket URL
+	storageMode := storageModeBlob
+	if strings.HasPrefix(s.BucketURL, "s3://") {
+		storageMode = storageModeS3Blob
+	}
+
 	return StoreResult{
-		StorageMode: storageModeBlob,
+		StorageMode: storageMode,
 		BlobKey:     &blobKey,
 		Checksum:    checksum,
 		Size:        size,

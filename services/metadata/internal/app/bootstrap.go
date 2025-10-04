@@ -12,7 +12,9 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 
+	"github.com/telnet2/mysql-vfs/internal/db"
 	"github.com/telnet2/mysql-vfs/services/metadata/internal/service"
 )
 
@@ -133,6 +135,25 @@ func upsertPolicyFile(ctx context.Context, fs *service.FileService, directoryID,
 	if _, err := fs.Create(ctx, input); err != nil {
 		if errors.Is(err, service.ErrPolicyForbidden) {
 			return fmt.Errorf("policy permission denied for %s", name)
+		}
+		if errors.Is(err, service.ErrInvalidRequest) && strings.Contains(err.Error(), "already exists") {
+			var existing db.File
+			if lookupErr := fs.DB.WithContext(ctx).
+				Where("directory_id = ? AND name = ? AND deleted_at IS NULL", directoryID, name).
+				First(&existing).Error; lookupErr != nil {
+				if errors.Is(lookupErr, gorm.ErrRecordNotFound) {
+					return fmt.Errorf("bootstrap lookup %s: %w", name, lookupErr)
+				}
+				return lookupErr
+			}
+			versionData := input.VersionData
+			_, updateErr := fs.Update(ctx, service.UpdateFileInput{
+				FileID:      existing.ID,
+				VersionData: &versionData,
+				RequestID:   uuid.NewString(),
+				Actor:       "system",
+			})
+			return updateErr
 		}
 		return err
 	}

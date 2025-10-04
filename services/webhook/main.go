@@ -12,6 +12,7 @@ import (
 	"github.com/telnet2/mysql-vfs/internal/db"
 	"github.com/telnet2/mysql-vfs/internal/serverutil"
 	"github.com/telnet2/mysql-vfs/services/webhook/internal/app"
+	"github.com/telnet2/mysql-vfs/services/webhook/internal/worker"
 )
 
 func main() {
@@ -49,7 +50,18 @@ func main() {
 		})
 	}
 
-	serverutil.SetupGracefulShutdown(h, shutdownTimeout, nil)
+	// Start background workers (event processor and webhook dispatcher)
+	bgCtx, cancel := context.WithCancel(context.Background())
+	evt := worker.NewEventProcessor(database)
+	dsp := worker.NewDispatcher(database)
+	go evt.Start(bgCtx)
+	go dsp.Start(bgCtx)
+
+	// Ensure workers are signaled on graceful shutdown
+	serverutil.SetupGracefulShutdown(h, shutdownTimeout, func(ctx context.Context) error {
+		cancel()
+		return nil
+	})
 
 	register(h)
 	h.Spin()

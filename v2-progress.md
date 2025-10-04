@@ -17,14 +17,15 @@
   - [x] Integrate policy enforcement into e2e tests
 - [x] Integrate `.rego` authorization evaluation
 - [x] Integrate `.jsonschema` content validation
-- [ ] Integrate `.workflow` transition enforcement
-- [ ] Add `.webhook` policy evaluation (optional future)
-- [ ] Add `.retention` / `.transform` / `.quota` policy handlers (optional future)
-- [ ] Update webhook service to consume resolved policies
-- [ ] Expand citest coverage for policy inheritance and workflows
-- [ ] Implement `.events` trigger system
+- [ ] Implement `.events` trigger system  
   - [x] Parse `.events` manifests via policy registry with caching/invalidation
   - [x] Evaluate triggers (match filters + optional Rego conditions)
   - [x] Enqueue actions into events pipeline with idempotency metadata
-  - [ ] Update workers to dispatch `ext.*` actions (workflow/webhook emitters)
-  - [ ] Add unit/e2e tests covering trigger execution and failure paths
+  - [x] Update workers to dispatch `ext.*` actions (workflow/webhook emitters)
+  - [x] Add unit tests covering trigger execution and failure paths
+  - [ ] Add e2e tests covering trigger execution and failure paths
+<!-- - [ ] Integrate `.workflow` transition enforcement -->
+<!-- - [ ] Add `.webhook` policy evaluation (optional future) -->
+<!-- - [ ] Add `.retention` / `.transform` / `.quota` policy handlers (optional future) -->
+- [ ] Update webhook service to consume resolved policies
+<!-- - [ ] Expand citest coverage for policy inheritance and workflows -->

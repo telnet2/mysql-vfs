@@ -78,10 +78,8 @@ var _ = Describe("Virtual filesystem end-to-end", Ordered, func() {
 				jsonBytes, err := json.Marshal(payload)
 				Expect(err).NotTo(HaveOccurred())
 				upload := uploadContent(contentClient, t.name, "application/json", jsonBytes)
-				metadataClient.POST("/api/v1/files").
+				metadataClient.PATCH("/api/v1/files/" + fileID).
 					WithJSON(map[string]any{
-						"directory_id": dirID,
-						"name":         t.name,
 						"storage_mode": upload.Value("storage_mode").String().Raw(),
 						"json_payload": upload.Value("json_payload").Raw(),
 						"checksum":     upload.Value("checksum").String().Raw(),
@@ -89,7 +87,7 @@ var _ = Describe("Virtual filesystem end-to-end", Ordered, func() {
 						"mime_type":    upload.Value("mime_type").String().Raw(),
 						"actor":        fmt.Sprintf("citest-%d", i),
 					}).
-					Expect().Status(201)
+					Expect().Status(200)
 			}()
 		}
 		wg.Wait()
