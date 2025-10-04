@@ -469,12 +469,12 @@ export AUTH_PROVIDER=headers
 
 ---
 
-## Phase 5: Lifecycle Event System 🔄 PLANNED
+## Phase 5: Lifecycle Event System ✅ COMPLETE
 
 ### Objective
 Redesign event system to track complete operation lifecycle with authorization-first approach, substages, and veto capabilities.
 
-### Implementation Status: 📋 Design Complete, Implementation Pending
+### Implementation Status: ✅ 95% Complete (Core complete, remaining operations pending)
 
 #### Architecture Design ✅
 
@@ -526,63 +526,76 @@ Examples:
 - Metrics/logging events: async (non-blocking)
 - Completion events: async (operation already done)
 
-#### Components to Implement
+#### Components Implemented
 
-**1. Enhanced Event Types** ⏳
-- Location: `pkg/events/lifecycle_types.go` (new)
-- EventStage enum with all lifecycle stages
-- EventContext with operation tracking
+**1. Enhanced Event Types** ✅
+- Location: `pkg/events/lifecycle_types.go`
+- EventStage, Operation, EventCategory enums
+- OperationContext with full lifecycle tracking
 - Stage-specific payloads:
   - `AuthorizationEventPayload` - Policy name, decision, reason
   - `ValidationEventPayload` - Validation type, violations
   - `ExecutionEventPayload` - Transaction ID, affected rows
-- Status: Design complete, implementation pending
+  - `CompletionEventPayload` - Success/failure with operation context
+- Commits: `a306fe4`
 
-**2. Event Trigger System** ⏳
-- Location: `pkg/events/trigger.go` (new)
+**2. Event Trigger System** ✅
+- Location: `pkg/events/event_trigger.go`, `pkg/domain/event_trigger.go`
 - `EventTrigger` interface:
   - `Emit()` - Async event dispatch
   - `EmitSync()` - Synchronous with veto support
-  - `CreateContext()` - Initialize event context
-- `OperationInterceptor` - Wraps operations with lifecycle events
-- Status: Design complete, implementation pending
+  - `EmitWithOperation()` - With operation context
+  - `EmitSyncWithOperation()` - Sync with context
+- `LifecycleEventTrigger` implementation with worker pool
+- `WildcardPatternMatcher` for pattern matching
+- Commits: `a306fe4`
 
-**3. Handler Response Protocol** ⏳
-- Location: `pkg/events/handlers/handler.go` (update)
-- `HandlerResponse` type:
-  - Actions: continue, abort, retry, skip
-  - Reason for audit trail
-  - Metadata for context
-- All handlers return response instead of just error
-- Status: Design complete, implementation pending
+**3. Handler Response Protocol** ✅
+- Location: `pkg/events/event_trigger.go`, `pkg/events/handlers/handler.go`
+- `HandlerResponse` type with:
+  - Success/veto/message/code fields
+  - Helper functions: `SuccessResponse()`, `VetoResponse()`, `ErrorResponse()`
+- `VetoError` for operation abortion
+- All handlers updated to return `HandlerResponse`
+- Commits: `a306fe4`
 
-**4. Handler Updates for Veto** ⏳
-- Webhook handler: Parse HTTP status for veto (4xx/5xx = abort)
-- Log handler: Always return continue
-- Metrics handler: Always return continue
+**4. Handler Updates for Veto** ✅
+- Webhook handler: Veto via HTTP 403/401 or JSON `{veto: true}`
+- Webhook handler: `on_timeout` and `on_error` configuration
+- Log handler: Returns `SuccessResponse()`
+- Metrics handler: Returns `SuccessResponse()`
 - Configuration fields: `synchronous`, `veto_enabled`, `timeout_ms`
-- Status: Design complete, implementation pending
+- Commits: `a306fe4`
 
-**5. FileService Integration** ⏳
-- Location: `pkg/domain/file_service.go` (update)
-- Integrate lifecycle events in correct order:
-  1. `operation.started`
-  2. `authorization.started` → substages → `authorization.{succeeded|failed}`
-  3. `validation.started` → substages → `validation.{succeeded|failed}`
-  4. `execution.started` → substages → `execution.{succeeded|failed}`
-  5. `operation.{completed|failed}`
-- Handle veto responses at each stage
-- Status: Design complete, implementation pending
+**5. FileService Integration** ✅
+- Location: `pkg/services/file_service.go`
+- CreateFile with full lifecycle events:
+  1. `file.create.authorization.started/succeeded`
+  2. `file.create.validation.{size,name,schema}.{checking,succeeded,failed}`
+  3. `file.create.execution` (database operations)
+  4. `file.create.completion.{succeeded,failed}`
+- Helper methods: `buildAuthPayload()`, `buildValidationPayload()`, `buildCompletionPayload()`
+- Veto support throughout the flow
+- Commits: `b8fc4d7`
 
-**6. Enhanced .events Configuration** ⏳
-- Support new fields:
-  - `synchronous: boolean` - Whether handler blocks operation
-  - `veto_enabled: boolean` - Whether handler can abort
-  - `timeout_ms: number` - Timeout for synchronous handlers
-  - `on_timeout: action` - What to do on timeout (abort/continue)
-  - `on_error: action` - What to do on error (abort/continue)
-- Wildcard pattern support in events array
-- Status: Design complete, implementation pending
+**6. Enhanced .events Configuration** ✅
+- Updated EventHandler type (`pkg/events/types.go`):
+  - `synchronous: boolean` - Handler blocks operation
+  - `veto_enabled: boolean` - Handler can abort
+  - Events array supports strings (for wildcards)
+- WebhookConfig fields:
+  - `on_timeout` - abort/allow on timeout
+  - `on_error` - abort/allow on error
+- Wildcard pattern matching fully implemented
+- Commits: `a306fe4`
+
+**7. Main Service Wiring** ✅
+- Location: `services/vfs/main.go`
+- EventsLoader initialization
+- Handler registry with webhook/log/metrics
+- LifecycleEventTrigger with concurrency control
+- FileService wired with lifecycle events
+- Commits: `b8fc4d7`
 
 #### Example .events Configuration
 
@@ -753,13 +766,17 @@ Examples:
 | Webhook Handler | ✅ Complete | 100% |
 | Log Handler | ✅ Complete | 100% |
 | Metrics Handler | ✅ Complete | 100% |
-| Event Emitters Integration | ⏳ Pending | 0% |
+| Event Emitters Integration | 🚧 Partial | 20% |
 | Lifecycle Event System Design | ✅ Complete | 100% |
-| Lifecycle Event Implementation | ⏳ Pending | 0% |
-| Documentation | 🚧 Partial | 50% |
+| Lifecycle Event Implementation | ✅ Complete | 95% |
+| Pattern Matching (Wildcards) | ✅ Complete | 100% |
+| Veto Capability | ✅ Complete | 100% |
+| CreateFile Lifecycle Events | ✅ Complete | 100% |
+| Remaining Operations (Update/Delete/Move/Dir) | ⏳ Pending | 0% |
+| Documentation | 🚧 Partial | 60% |
 | Tests | ⏳ Not Started | 0% |
 
-**Overall v2.1 Progress: 85%** (Core infrastructure + lifecycle design complete, implementation and tests pending)
+**Overall v2.1 Progress: 92%** (Core complete, remaining ops + tests pending)
 
 ---
 
@@ -853,18 +870,20 @@ Examples:
 
 ### Immediate (v2.1.0)
 
-1. **Complete Lifecycle Event System (Phase 5)**
-   - [ ] Implement enhanced EventType system with lifecycle stages
-   - [ ] Implement EventContext with operation tracking
-   - [ ] Implement EventTrigger interface (Emit, EmitSync)
-   - [ ] Implement OperationInterceptor pattern
-   - [ ] Update Handler interface to return HandlerResponse
-   - [ ] Update webhook handler for veto support (parse HTTP status)
-   - [ ] Update log/metrics handlers with response protocol
-   - [ ] Integrate into FileService with correct order (auth → validation → execution)
-   - [ ] Implement wildcard pattern matching for events
-   - [ ] Add substage tracking for authorization, validation, execution
-   - [ ] Wire up EventTrigger in services/main
+1. **Complete Lifecycle Event System (Phase 5)** ✅
+   - [x] Implement enhanced EventType system with lifecycle stages
+   - [x] Implement EventContext with operation tracking
+   - [x] Implement EventTrigger interface (Emit, EmitSync)
+   - [x] Implement OperationInterceptor pattern (via LifecycleEventTrigger)
+   - [x] Update Handler interface to return HandlerResponse
+   - [x] Update webhook handler for veto support (parse HTTP status)
+   - [x] Update log/metrics handlers with response protocol
+   - [x] Integrate into FileService.CreateFile with correct order (auth → validation → execution)
+   - [x] Implement wildcard pattern matching for events
+   - [x] Add substage tracking for authorization, validation, execution
+   - [x] Wire up EventTrigger in services/main
+   - [ ] Add lifecycle events to UpdateFile, DeleteFile, MoveFile
+   - [ ] Add lifecycle events to CreateDirectory, DeleteDirectory
 
 2. **Testing**
    - [ ] Update tests from `.jsonschema` to `.files`
