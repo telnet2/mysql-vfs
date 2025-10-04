@@ -35,12 +35,38 @@ go build -o vfs-cli
 
 ## Configuration
 
-Set the VFS service URL via environment variable:
+### Environment Variables
 
 ```bash
+# VFS service URL
 export VFS_SERVICE_URL=http://localhost:8080
+
+# Authentication token (from .user file or super user token)
+export VFS_AUTH_TOKEN=your-token-here
+
+# Start CLI
 ./vfs-cli
 ```
+
+### Authentication
+
+The CLI supports the new hybrid authentication system:
+
+```bash
+# Option 1: Use super user token (bootstrap/emergency)
+export VFS_AUTH_TOKEN=$SUPER_USER_TOKEN
+./vfs-cli
+
+# Option 2: Use token from .user file (production)
+export VFS_AUTH_TOKEN=admin-token-from-user-file
+./vfs-cli
+
+# Option 3: Header-based auth (dev only)
+# No token needed if AUTH_PROVIDER=headers and AUTH_ALLOW_ANONYMOUS=true
+./vfs-cli
+```
+
+The token is sent in the `Authorization: Bearer <token>` header for all requests.
 
 ## Available Commands
 

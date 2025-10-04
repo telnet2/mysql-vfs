@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/telnet2/mysql-vfs/pkg/domain"
 	"github.com/telnet2/mysql-vfs/pkg/models"
 	"github.com/telnet2/mysql-vfs/pkg/storage"
 	"gorm.io/gorm"
@@ -26,8 +27,9 @@ const (
 
 // FileService handles file operations
 type FileService struct {
-	db      *gorm.DB
-	storage storage.Storage
+	db           *gorm.DB
+	storage      storage.Storage
+	schemaLoader *domain.SchemaLoader
 }
 
 // NewFileService creates a new file service
@@ -35,6 +37,15 @@ func NewFileService(db *gorm.DB, storage storage.Storage) *FileService {
 	return &FileService{
 		db:      db,
 		storage: storage,
+	}
+}
+
+// NewFileServiceWithValidation creates a new file service with schema validation
+func NewFileServiceWithValidation(db *gorm.DB, storage storage.Storage, schemaLoader *domain.SchemaLoader) *FileService {
+	return &FileService{
+		db:           db,
+		storage:      storage,
+		schemaLoader: schemaLoader,
 	}
 }
 
@@ -126,6 +137,16 @@ func (s *FileService) CreateFile(ctx context.Context, directoryPath, name, conte
 			return fmt.Errorf("file already exists: %s", name)
 		} else if err != gorm.ErrRecordNotFound {
 			return err
+		}
+
+		// Validate content against schema (if SchemaLoader is configured and content is JSON)
+		// Skip validation for special files (they don't validate against themselves)
+		isSpecialFile := strings.HasPrefix(name, ".")
+		if s.schemaLoader != nil && contentType == "application/json" && !isSpecialFile {
+			if validationErr := s.schemaLoader.ValidateContent(ctx, directoryPath, contentBytes); validationErr != nil {
+				// Return validation error to caller (will include detailed error messages)
+				return validationErr
+			}
 		}
 
 		// Determine storage type

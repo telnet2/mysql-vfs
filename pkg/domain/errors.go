@@ -41,4 +41,16 @@ var (
 
 	// ErrNotFound is a generic not found error
 	ErrNotFound = errors.New("not found")
+
+	// ErrPermissionDenied is returned when user lacks required permissions
+	ErrPermissionDenied = errors.New("permission denied")
+
+	// ErrUnknownSpecialFileType is returned for unrecognized special file types
+	ErrUnknownSpecialFileType = errors.New("unknown special file type")
+
+	// ErrInvalidSpecialFileContent is returned when special file content is invalid
+	ErrInvalidSpecialFileContent = errors.New("invalid special file content")
+
+	// ErrQuotaExceeded is returned when resource quota is exceeded
+	ErrQuotaExceeded = errors.New("quota exceeded")
 )

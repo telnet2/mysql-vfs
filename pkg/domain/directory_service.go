@@ -20,9 +20,8 @@ const (
 
 // CreateDirectoryRequest represents a request to create a directory
 type CreateDirectoryRequest struct {
-	ParentPath  string
-	Name        string
-	OPAPolicyID *string
+	ParentPath string
+	Name       string
 }
 
 // DirectoryService contains pure business logic for directory operations
@@ -93,14 +92,13 @@ func (s *DirectoryService) CreateDirectory(ctx context.Context, req CreateDirect
 	// Create directory entity
 	now := time.Now()
 	dir := &models.Directory{
-		ID:          uuid.New().String(),
-		Name:        req.Name,
-		Path:        fullPath,
-		PathHash:    calculatePathHash(fullPath),
-		Version:     1,
-		OPAPolicyID: req.OPAPolicyID,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ID:        uuid.New().String(),
+		Name:      req.Name,
+		Path:      fullPath,
+		PathHash:  calculatePathHash(fullPath),
+		Version:   1,
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 
 	if parent != nil {

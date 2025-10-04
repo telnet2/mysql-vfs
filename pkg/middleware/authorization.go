@@ -7,7 +7,8 @@ import (
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/telnet2/mysql-vfs/pkg/services"
+	"github.com/open-policy-agent/opa/rego"
+	"github.com/telnet2/mysql-vfs/pkg/domain"
 )
 
 // UserContext represents the user making the request
@@ -18,9 +19,9 @@ type UserContext struct {
 	Groups   []string
 }
 
-// AuthorizationMiddleware checks access permissions using OPA
+// AuthorizationMiddleware checks access permissions using .rego policies
 type AuthorizationMiddleware struct {
-	opaService     *services.OPAService
+	policyLoader   *domain.PolicyLoader
 	timeout        time.Duration
 	skipRoutes     map[string]bool // Routes that don't require authorization
 	extractUserCtx func(*app.RequestContext) (*UserContext, error)
@@ -28,7 +29,7 @@ type AuthorizationMiddleware struct {
 
 // AuthorizationConfig configures the authorization middleware
 type AuthorizationConfig struct {
-	OPAService     *services.OPAService
+	PolicyLoader   *domain.PolicyLoader
 	Timeout        time.Duration
 	SkipRoutes     []string
 	ExtractUserCtx func(*app.RequestContext) (*UserContext, error)
@@ -50,7 +51,7 @@ func NewAuthorizationMiddleware(config AuthorizationConfig) *AuthorizationMiddle
 	}
 
 	return &AuthorizationMiddleware{
-		opaService:     config.OPAService,
+		policyLoader:   config.PolicyLoader,
 		timeout:        config.Timeout,
 		skipRoutes:     skipRoutes,
 		extractUserCtx: config.ExtractUserCtx,
@@ -88,8 +89,31 @@ func (m *AuthorizationMiddleware) Handler() app.HandlerFunc {
 		authCtx, cancel := context.WithTimeout(ctx, m.timeout)
 		defer cancel()
 
-		// Check authorization via OPA
-		// Build input for OPA
+		// Load .rego policy for the resource path
+		// Extract directory path from resource path
+		dirPath := extractDirectoryPath(resourcePath)
+
+		// Load the .rego policy (with inheritance)
+		regoPolicy, err := m.policyLoader.LoadPolicy(authCtx, dirPath)
+		if err != nil {
+			if err == domain.ErrNotFound {
+				// No policy found - allow by default (or fail closed based on requirements)
+				// For now, fail closed for security
+				c.JSON(403, map[string]string{
+					"error": "forbidden: no authorization policy found",
+				})
+				c.Abort()
+				return
+			}
+			// Fail closed on errors
+			c.JSON(500, map[string]string{
+				"error": fmt.Sprintf("failed to load authorization policy: %v", err),
+			})
+			c.Abort()
+			return
+		}
+
+		// Build input for OPA evaluation
 		input := map[string]interface{}{
 			"user": map[string]interface{}{
 				"id":       userCtx.UserID,
@@ -104,19 +128,14 @@ func (m *AuthorizationMiddleware) Handler() app.HandlerFunc {
 			"action": action,
 		}
 
-		allowed, err := m.opaService.Evaluate(authCtx, "vfs/authz/allow", input)
-		if err != nil {
-			// Fail closed on errors
-			c.JSON(500, map[string]string{
-				"error": fmt.Sprintf("authorization check failed: %v", err),
-			})
-			c.Abort()
-			return
-		}
+		// TODO: Implement actual REGO evaluation using OPA engine
+		// For now, this is a placeholder that allows all requests
+		// In the next phase, we'll use github.com/open-policy-agent/opa
+		allowed := evaluateRegoPolicy(regoPolicy, input)
 
 		if !allowed {
 			c.JSON(403, map[string]string{
-				"error": "forbidden: access denied",
+				"error": "forbidden: access denied by policy",
 			})
 			c.Abort()
 			return
@@ -129,24 +148,52 @@ func (m *AuthorizationMiddleware) Handler() app.HandlerFunc {
 	}
 }
 
-// defaultUserContextExtractor is the default user context extractor
-// In production, this should extract from JWT or session
+// defaultUserContextExtractor extracts user context from the request context
+// This works with the generic auth middleware or external auth headers
 func defaultUserContextExtractor(c *app.RequestContext) (*UserContext, error) {
-	// Extract from headers (placeholder implementation)
-	userID := string(c.GetHeader("X-User-ID"))
-	username := string(c.GetHeader("X-Username"))
+	// Get context from Hertz request context
+	ctx := c
 
-	if userID == "" {
-		// For now, allow anonymous access with default user
-		userID = "anonymous"
-		username = "anonymous"
+	// Try to get from auth middleware context first
+	userID, hasUserID := ctx.Value(UserIDKey).(string)
+	role, hasRole := ctx.Value(UserRoleKey).(string)
+	groups, _ := ctx.Value(UserGroupsKey).([]string)
+
+	// If not found, try from headers (for external auth via reverse proxy)
+	if !hasUserID {
+		userID = string(c.GetHeader("X-User-ID"))
+		if userID == "" {
+			userID = "anonymous"
+		}
+	}
+
+	// Build roles array
+	roles := []string{}
+	if hasRole && role != "" {
+		roles = append(roles, role)
+	} else if roleHeader := string(c.GetHeader("X-User-Role")); roleHeader != "" {
+		roles = append(roles, roleHeader)
+	} else {
+		roles = append(roles, "user") // default role
+	}
+
+	// Get groups from header if not in context
+	if groups == nil || len(groups) == 0 {
+		if groupHeader := string(c.GetHeader("X-User-Groups")); groupHeader != "" {
+			groups = strings.Split(groupHeader, ",")
+		}
+	}
+
+	username := string(c.GetHeader("X-Username"))
+	if username == "" {
+		username = userID
 	}
 
 	return &UserContext{
 		UserID:   userID,
 		Username: username,
-		Roles:    []string{"user"},
-		Groups:   []string{},
+		Roles:    roles,
+		Groups:   groups,
 	}, nil
 }
 
@@ -192,4 +239,65 @@ func determineResourceType(route string) string {
 		return "directory"
 	}
 	return "unknown"
+}
+
+// extractDirectoryPath extracts the directory path from a resource path
+func extractDirectoryPath(resourcePath string) string {
+	// If the resource is a file, get its directory
+	// For now, use simple logic - can be enhanced based on actual path structure
+	if strings.Contains(resourcePath, "/files/") {
+		// Extract directory from file path
+		parts := strings.Split(resourcePath, "/files/")
+		if len(parts) > 0 {
+			return parts[0]
+		}
+	}
+
+	// For directory operations, use the path directly
+	if strings.Contains(resourcePath, "/directories/") {
+		parts := strings.Split(resourcePath, "/directories/")
+		if len(parts) > 1 {
+			return "/" + parts[1]
+		}
+	}
+
+	// Default to root
+	return "/"
+}
+
+// evaluateRegoPolicy evaluates a Rego policy against input using OPA
+func evaluateRegoPolicy(regoPolicy string, input map[string]interface{}) bool {
+	// Create a new Rego query
+	// The policy should define a rule named "allow" in the package "vfs.authz"
+	ctx := context.Background()
+
+	// Compile the Rego policy
+	query, err := rego.New(
+		rego.Query("data.vfs.authz.allow"),
+		rego.Module("policy.rego", regoPolicy),
+	).PrepareForEval(ctx)
+
+	if err != nil {
+		// Policy compilation failed - fail closed
+		return false
+	}
+
+	// Evaluate the policy with the input
+	results, err := query.Eval(ctx, rego.EvalInput(input))
+	if err != nil {
+		// Evaluation failed - fail closed
+		return false
+	}
+
+	// Check if the policy allows the request
+	// The "allow" rule should return a boolean value
+	if len(results) > 0 && len(results[0].Expressions) > 0 {
+		allowed, ok := results[0].Expressions[0].Value.(bool)
+		if ok {
+			return allowed
+		}
+	}
+
+	// Default deny if no clear allow decision
+	return false
 }

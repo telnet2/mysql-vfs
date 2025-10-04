@@ -59,7 +59,7 @@ var _ = Describe("Concurrent Operations", func() {
 				go func(idx int) {
 					defer wg.Done()
 
-					dir, err := dirService.CreateDirectory(ctx, "/", "concurrent-test", nil)
+					dir, err := dirService.CreateDirectory(ctx, "/", "concurrent-test")
 					if err != nil {
 						errors <- err
 					} else {
@@ -100,7 +100,7 @@ var _ = Describe("Concurrent Operations", func() {
 					defer wg.Done()
 
 					name := fmt.Sprintf("dir-%d", idx)
-					dir, err := dirService.CreateDirectory(ctx, "/", name, nil)
+					dir, err := dirService.CreateDirectory(ctx, "/", name)
 					if err != nil {
 						errors <- err
 					} else {
@@ -133,7 +133,7 @@ var _ = Describe("Concurrent Operations", func() {
 
 		It("should handle concurrent nested directory creation", func() {
 			// Create parent first
-			parent, err := dirService.CreateDirectory(ctx, "/", "parent", nil)
+			parent, err := dirService.CreateDirectory(ctx, "/", "parent")
 			Expect(err).NotTo(HaveOccurred())
 
 			const concurrency = 10
@@ -148,7 +148,7 @@ var _ = Describe("Concurrent Operations", func() {
 					defer wg.Done()
 
 					name := fmt.Sprintf("child-%d", idx)
-					dir, err := dirService.CreateDirectory(ctx, parent.Path, name, nil)
+					dir, err := dirService.CreateDirectory(ctx, parent.Path, name)
 					if err != nil {
 						errors <- err
 					} else {
@@ -174,9 +174,9 @@ var _ = Describe("Concurrent Operations", func() {
 	Context("when deleting directories concurrently", func() {
 		BeforeEach(func() {
 			// Create test hierarchy
-			dirService.CreateDirectory(ctx, "/", "to-delete-1", nil)
-			dirService.CreateDirectory(ctx, "/", "to-delete-2", nil)
-			dirService.CreateDirectory(ctx, "/", "to-delete-3", nil)
+			dirService.CreateDirectory(ctx, "/", "to-delete-1")
+			dirService.CreateDirectory(ctx, "/", "to-delete-2")
+			dirService.CreateDirectory(ctx, "/", "to-delete-3")
 		})
 
 		It("should handle concurrent deletions", func() {
@@ -211,7 +211,7 @@ var _ = Describe("Concurrent Operations", func() {
 		It("should prevent deleting parent while child is being created", func() {
 			// This tests the tree locking mechanism
 			// Create parent
-			parent, err := dirService.CreateDirectory(ctx, "/", "parent-lock", nil)
+			parent, err := dirService.CreateDirectory(ctx, "/", "parent-lock")
 			Expect(err).NotTo(HaveOccurred())
 
 			const concurrency = 5
@@ -226,7 +226,7 @@ var _ = Describe("Concurrent Operations", func() {
 					defer wg.Done()
 
 					name := fmt.Sprintf("child-%d", idx)
-					_, err := dirService.CreateDirectory(ctx, parent.Path, name, nil)
+					_, err := dirService.CreateDirectory(ctx, parent.Path, name)
 					if err != nil {
 						createErrors <- err
 					}
@@ -285,10 +285,10 @@ var _ = Describe("Concurrent Operations", func() {
 	Context("when updating directories concurrently", func() {
 		It("should handle concurrent moves", func() {
 			// Create test structure
-			dirService.CreateDirectory(ctx, "/", "source", nil)
-			dirService.CreateDirectory(ctx, "/", "dest1", nil)
-			dirService.CreateDirectory(ctx, "/", "dest2", nil)
-			item, err := dirService.CreateDirectory(ctx, "/source", "item", nil)
+			dirService.CreateDirectory(ctx, "/", "source")
+			dirService.CreateDirectory(ctx, "/", "dest1")
+			dirService.CreateDirectory(ctx, "/", "dest2")
+			item, err := dirService.CreateDirectory(ctx, "/source", "item")
 			Expect(err).NotTo(HaveOccurred())
 
 			// Try to move to different destinations concurrently
@@ -370,7 +370,7 @@ var _ = Describe("Concurrent Operations", func() {
 	Context("when handling race conditions", func() {
 		It("should maintain consistency during concurrent operations", func() {
 			// Create initial structure
-			root, err := dirService.CreateDirectory(ctx, "/", "race-test", nil)
+			root, err := dirService.CreateDirectory(ctx, "/", "race-test")
 			Expect(err).NotTo(HaveOccurred())
 
 			const concurrency = 20
@@ -385,13 +385,13 @@ var _ = Describe("Concurrent Operations", func() {
 					switch idx % 3 {
 					case 0:
 						// Create
-						dirService.CreateDirectory(ctx, root.Path, fmt.Sprintf("item-%d", idx), nil)
+						dirService.CreateDirectory(ctx, root.Path, fmt.Sprintf("item-%d", idx))
 					case 1:
 						// List
 						dirService.ListDirectory(root.Path, 100, "")
 					case 2:
 						// Create and delete
-						dir, err := dirService.CreateDirectory(ctx, root.Path, fmt.Sprintf("temp-%d", idx), nil)
+						dir, err := dirService.CreateDirectory(ctx, root.Path, fmt.Sprintf("temp-%d", idx))
 						if err == nil {
 							dirService.DeleteDirectory(ctx, dir.Path, false)
 						}

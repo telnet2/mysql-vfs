@@ -22,6 +22,49 @@ type Config struct {
 	S3Bucket   string
 	S3Region   string
 	S3Endpoint string
+
+	// Authentication
+	Auth AuthConfig
+
+	// Special Files Cache
+	SchemaCacheTTL time.Duration
+	PolicyCacheTTL time.Duration
+	QuotaCacheTTL  time.Duration
+}
+
+// AuthConfig holds authentication configuration
+type AuthConfig struct {
+	// Provider type: jwt, oauth, mtls, proxy, headers (dev only), custom
+	Provider string
+
+	// JWT Configuration
+	JWTSecret string
+	JWTIssuer string
+
+	// OAuth Configuration
+	OAuthIntrospectionURL string
+	OAuthClientID         string
+	OAuthClientSecret     string
+
+	// Proxy Configuration (reverse proxy with HMAC)
+	ProxySharedSecret string
+
+	// mTLS Configuration
+	MTLSCAFile   string
+	MTLSCertFile string
+	MTLSKeyFile  string
+
+	// Optional: allow anonymous access (no auth required)
+	AllowAnonymous bool
+
+	// Super User (environment-based, always works)
+	SuperUserToken string // Token that grants super user access
+	SuperUserID    string // User ID for super user (default: "super-admin")
+	SuperUserRole  string // Role for super user (default: "super-admin")
+
+	// File-based auth (.user files)
+	FileAuthDirectory string // Directory containing .user file (default: "/")
+	UserCacheTTL      time.Duration
 }
 
 // LoadFromEnv loads configuration from environment variables
@@ -34,6 +77,31 @@ func LoadFromEnv() *Config {
 		S3Bucket:       getEnv("S3_BUCKET", "cc-vfs-files"),
 		S3Region:       getEnv("S3_REGION", "us-east-1"),
 		S3Endpoint:     getEnv("S3_ENDPOINT", "http://localhost:4566"),
+
+		// Authentication
+		Auth: AuthConfig{
+			Provider:              getEnv("AUTH_PROVIDER", "headers"), // headers=dev only, jwt=production, file=.user files
+			JWTSecret:             getEnv("AUTH_JWT_SECRET", ""),
+			JWTIssuer:             getEnv("AUTH_JWT_ISSUER", ""),
+			OAuthIntrospectionURL: getEnv("AUTH_OAUTH_INTROSPECTION_URL", ""),
+			OAuthClientID:         getEnv("AUTH_OAUTH_CLIENT_ID", ""),
+			OAuthClientSecret:     getEnv("AUTH_OAUTH_CLIENT_SECRET", ""),
+			ProxySharedSecret:     getEnv("AUTH_PROXY_SHARED_SECRET", ""),
+			MTLSCAFile:            getEnv("AUTH_MTLS_CA_FILE", ""),
+			MTLSCertFile:          getEnv("AUTH_MTLS_CERT_FILE", ""),
+			MTLSKeyFile:           getEnv("AUTH_MTLS_KEY_FILE", ""),
+			AllowAnonymous:        getEnvBool("AUTH_ALLOW_ANONYMOUS", false),
+			SuperUserToken:        getEnv("SUPER_USER_TOKEN", ""),
+			SuperUserID:           getEnv("SUPER_USER_ID", "super-admin"),
+			SuperUserRole:         getEnv("SUPER_USER_ROLE", "super-admin"),
+			FileAuthDirectory:     getEnv("FILE_AUTH_DIRECTORY", "/"),
+			UserCacheTTL:          getEnvDuration("USER_CACHE_TTL_SECONDS", 5*time.Minute),
+		},
+
+		// Special Files Cache
+		SchemaCacheTTL: getEnvDuration("SCHEMA_CACHE_TTL_SECONDS", 5*time.Minute),
+		PolicyCacheTTL: getEnvDuration("POLICY_CACHE_TTL_SECONDS", 5*time.Minute),
+		QuotaCacheTTL:  getEnvDuration("QUOTA_CACHE_TTL_SECONDS", 5*time.Minute),
 	}
 }
 
@@ -50,6 +118,16 @@ func getEnvDuration(key string, defaultValue time.Duration) time.Duration {
 	if value := os.Getenv(key); value != "" {
 		if seconds, err := strconv.Atoi(value); err == nil {
 			return time.Duration(seconds) * time.Second
+		}
+	}
+	return defaultValue
+}
+
+// getEnvBool retrieves a boolean from environment variable or returns default
+func getEnvBool(key string, defaultValue bool) bool {
+	if value := os.Getenv(key); value != "" {
+		if b, err := strconv.ParseBool(value); err == nil {
+			return b
 		}
 	}
 	return defaultValue

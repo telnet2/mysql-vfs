@@ -51,7 +51,7 @@ var _ = Describe("VFS Directory Operations", Ordered, func() {
 
 	Context("when creating directories", func() {
 		It("should create a new directory under root", func() {
-			dir, err := dirService.CreateDirectory(ctx, "/", "create-root-dir", nil)
+			dir, err := dirService.CreateDirectory(ctx, "/", "create-root-dir")
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(dir).NotTo(BeNil())
@@ -62,12 +62,12 @@ var _ = Describe("VFS Directory Operations", Ordered, func() {
 
 		It("should create nested directories", func() {
 			// Create /nested-parent
-			parent, err := dirService.CreateDirectory(ctx, "/", "nested-parent", nil)
+			parent, err := dirService.CreateDirectory(ctx, "/", "nested-parent")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(parent).NotTo(BeNil())
 
 			// Create /nested-parent/child
-			child, err := dirService.CreateDirectory(ctx, "/nested-parent", "child", nil)
+			child, err := dirService.CreateDirectory(ctx, "/nested-parent", "child")
 			Expect(err).NotTo(HaveOccurred())
 
 			Expect(child.Path).To(Equal("/nested-parent/child"))
@@ -75,24 +75,24 @@ var _ = Describe("VFS Directory Operations", Ordered, func() {
 		})
 
 		It("should reject duplicate directory names in same parent", func() {
-			_, err := dirService.CreateDirectory(ctx, "/", "dup-test", nil)
+			_, err := dirService.CreateDirectory(ctx, "/", "dup-test")
 			Expect(err).NotTo(HaveOccurred())
 
 			// Try to create duplicate
-			_, err = dirService.CreateDirectory(ctx, "/", "dup-test", nil)
+			_, err = dirService.CreateDirectory(ctx, "/", "dup-test")
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("already exists"))
 		})
 
 		It("should allow same directory name in different parents", func() {
-			_, err := dirService.CreateDirectory(ctx, "/", "common-name", nil)
+			_, err := dirService.CreateDirectory(ctx, "/", "common-name")
 			Expect(err).NotTo(HaveOccurred())
 
-			_, err = dirService.CreateDirectory(ctx, "/", "diff-parent", nil)
+			_, err = dirService.CreateDirectory(ctx, "/", "diff-parent")
 			Expect(err).NotTo(HaveOccurred())
 
 			// Create /diff-parent/common-name (same name, different parent)
-			src2, err := dirService.CreateDirectory(ctx, "/diff-parent", "common-name", nil)
+			src2, err := dirService.CreateDirectory(ctx, "/diff-parent", "common-name")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(src2.Path).To(Equal("/diff-parent/common-name"))
 		})
@@ -101,7 +101,7 @@ var _ = Describe("VFS Directory Operations", Ordered, func() {
 			invalidNames := []string{"", ".", "..", "name/with/slash", "name\x00null"}
 
 			for _, name := range invalidNames {
-				_, err := dirService.CreateDirectory(ctx, "/", name, nil)
+				_, err := dirService.CreateDirectory(ctx, "/", name)
 				Expect(err).To(HaveOccurred(), "should reject name: %s", name)
 			}
 		})
@@ -110,16 +110,16 @@ var _ = Describe("VFS Directory Operations", Ordered, func() {
 	Context("when listing directories", Ordered, func() {
 		BeforeAll(func() {
 			// Create test hierarchy
-			_, err := dirService.CreateDirectory(ctx, "/", "list-projects", nil)
+			_, err := dirService.CreateDirectory(ctx, "/", "list-projects")
 			Expect(err).NotTo(HaveOccurred())
 
-			_, err = dirService.CreateDirectory(ctx, "/", "list-documents", nil)
+			_, err = dirService.CreateDirectory(ctx, "/", "list-documents")
 			Expect(err).NotTo(HaveOccurred())
 
-			_, err = dirService.CreateDirectory(ctx, "/list-projects", "backend", nil)
+			_, err = dirService.CreateDirectory(ctx, "/list-projects", "backend")
 			Expect(err).NotTo(HaveOccurred())
 
-			_, err = dirService.CreateDirectory(ctx, "/list-projects", "frontend", nil)
+			_, err = dirService.CreateDirectory(ctx, "/list-projects", "frontend")
 			Expect(err).NotTo(HaveOccurred())
 		})
 
@@ -148,7 +148,7 @@ var _ = Describe("VFS Directory Operations", Ordered, func() {
 		})
 
 		It("should handle empty directories", func() {
-			dirService.CreateDirectory(ctx, "/", "list-empty", nil)
+			dirService.CreateDirectory(ctx, "/", "list-empty")
 
 			dirs, files, _, err := dirService.ListDirectory("/list-empty", 100, "")
 
@@ -160,7 +160,7 @@ var _ = Describe("VFS Directory Operations", Ordered, func() {
 
 	Context("when deleting directories", func() {
 		It("should delete empty directory", func() {
-			dirService.CreateDirectory(ctx, "/", "del-empty", nil)
+			dirService.CreateDirectory(ctx, "/", "del-empty")
 
 			err := dirService.DeleteDirectory(ctx, "/del-empty", false)
 			Expect(err).NotTo(HaveOccurred())
@@ -178,8 +178,8 @@ var _ = Describe("VFS Directory Operations", Ordered, func() {
 		})
 
 		It("should reject deleting non-empty directory without recursive flag", func() {
-			dirService.CreateDirectory(ctx, "/", "del-nonempty", nil)
-			dirService.CreateDirectory(ctx, "/del-nonempty", "child", nil)
+			dirService.CreateDirectory(ctx, "/", "del-nonempty")
+			dirService.CreateDirectory(ctx, "/del-nonempty", "child")
 
 			err := dirService.DeleteDirectory(ctx, "/del-nonempty", false)
 			Expect(err).To(HaveOccurred())
@@ -187,9 +187,9 @@ var _ = Describe("VFS Directory Operations", Ordered, func() {
 		})
 
 		It("should recursively delete directory tree", func() {
-			dirService.CreateDirectory(ctx, "/", "del-recursive", nil)
-			dirService.CreateDirectory(ctx, "/del-recursive", "child1", nil)
-			dirService.CreateDirectory(ctx, "/del-recursive", "child2", nil)
+			dirService.CreateDirectory(ctx, "/", "del-recursive")
+			dirService.CreateDirectory(ctx, "/del-recursive", "child1")
+			dirService.CreateDirectory(ctx, "/del-recursive", "child2")
 
 			err := dirService.DeleteDirectory(ctx, "/del-recursive", true)
 			Expect(err).NotTo(HaveOccurred())
@@ -217,9 +217,9 @@ var _ = Describe("VFS Directory Operations", Ordered, func() {
 
 	Context("when moving directories", Ordered, func() {
 		BeforeAll(func() {
-			dirService.CreateDirectory(ctx, "/", "move-projects", nil)
-			dirService.CreateDirectory(ctx, "/", "move-archive", nil)
-			dirService.CreateDirectory(ctx, "/move-projects", "backend", nil)
+			dirService.CreateDirectory(ctx, "/", "move-projects")
+			dirService.CreateDirectory(ctx, "/", "move-archive")
+			dirService.CreateDirectory(ctx, "/move-projects", "backend")
 		})
 
 		It("should move directory to new parent", func() {
@@ -253,9 +253,9 @@ var _ = Describe("VFS Directory Operations", Ordered, func() {
 
 		It("should prevent circular parent relationships", func() {
 			// Create hierarchy: /a/b/c
-			a, _ := dirService.CreateDirectory(ctx, "/", "a", nil)
-			_, _ = dirService.CreateDirectory(ctx, "/a", "b", nil)
-			c, _ := dirService.CreateDirectory(ctx, "/a/b", "c", nil)
+			a, _ := dirService.CreateDirectory(ctx, "/", "a")
+			_, _ = dirService.CreateDirectory(ctx, "/a", "b")
+			c, _ := dirService.CreateDirectory(ctx, "/a/b", "c")
 
 			gormDB := testDB.GetDB()
 

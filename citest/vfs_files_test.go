@@ -140,7 +140,7 @@ var _ = Describe("VFS File Operations", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			// Create directory
-			dirService.CreateDirectory(ctx, "/", "docs", nil)
+			dirService.CreateDirectory(ctx, "/", "docs")
 
 			// Create file with same name in /docs
 			file2, err := fileService.CreateFile(

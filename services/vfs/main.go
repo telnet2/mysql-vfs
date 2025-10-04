@@ -15,8 +15,11 @@ import (
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"github.com/telnet2/mysql-vfs/pkg/config"
 	"github.com/telnet2/mysql-vfs/pkg/db"
+	"github.com/telnet2/mysql-vfs/pkg/domain"
 	"github.com/telnet2/mysql-vfs/pkg/idempotency"
+	"github.com/telnet2/mysql-vfs/pkg/middleware"
 	"github.com/telnet2/mysql-vfs/pkg/models"
+	gormrepo "github.com/telnet2/mysql-vfs/pkg/repository/gorm"
 	"github.com/telnet2/mysql-vfs/pkg/services"
 	"github.com/telnet2/mysql-vfs/pkg/storage"
 	"gorm.io/gorm"
@@ -24,12 +27,14 @@ import (
 )
 
 type VFSServer struct {
-	db              *gorm.DB
-	storage         storage.Storage
-	dirService      *services.DirectoryService
-	fileService     *services.FileService
-	opaService      *services.OPAService
+	db                 *gorm.DB
+	storage            storage.Storage
+	dirService         *services.DirectoryService
+	fileService        *services.FileService
 	idempotencyService *idempotency.Service
+	schemaLoader       *domain.SchemaLoader
+	policyLoader       *domain.PolicyLoader
+	quotaLoader        *domain.QuotaLoader
 }
 
 func main() {
@@ -72,10 +77,18 @@ func main() {
 	}
 	log.Println("Storage initialized successfully")
 
+	// Initialize repositories
+	fileRepo := gormrepo.NewGormFileRepository(database)
+	dirRepo := gormrepo.NewGormDirectoryRepository(database)
+
+	// Initialize loaders with caching (from config)
+	schemaLoader := domain.NewSchemaLoader(fileRepo, dirRepo, cfg.SchemaCacheTTL)
+	policyLoader := domain.NewPolicyLoader(fileRepo, dirRepo, cfg.PolicyCacheTTL)
+	quotaLoader := domain.NewQuotaLoader(fileRepo, dirRepo, cfg.QuotaCacheTTL)
+
 	// Initialize services
 	dirService := services.NewDirectoryService(database)
-	fileService := services.NewFileService(database, storageService)
-	opaService := services.NewOPAService(database)
+	fileService := services.NewFileServiceWithValidation(database, storageService, schemaLoader)
 	idempotencyService := idempotency.NewServiceWithTTL(database, cfg.IdempotencyTTL)
 
 	// Start idempotency cleanup worker
@@ -87,35 +100,57 @@ func main() {
 		storage:            storageService,
 		dirService:         dirService,
 		fileService:        fileService,
-		opaService:         opaService,
 		idempotencyService: idempotencyService,
+		schemaLoader:       schemaLoader,
+		policyLoader:       policyLoader,
+		quotaLoader:        quotaLoader,
 	}
 
 	// Initialize Hertz server
 	h := server.Default(server.WithHostPorts(":" + cfg.ServerPort))
 
-	// Register routes
+	// Initialize authentication from config
+	authExtractor, err := middleware.NewAuthExtractorFromConfig(cfg.Auth, fileRepo, dirRepo)
+	if err != nil {
+		log.Fatalf("Failed to initialize auth: %v", err)
+	}
+
+	authMiddleware := middleware.NewAuthMiddleware(authExtractor, cfg.Auth.AllowAnonymous)
+
+	// Initialize authorization middleware
+	authzMiddleware := middleware.NewAuthorizationMiddleware(middleware.AuthorizationConfig{
+		PolicyLoader: policyLoader,
+		Timeout:      200 * time.Millisecond,
+		SkipRoutes:   []string{"/health", "/ready"},
+	})
+
+	// Public routes (no auth required)
 	h.GET("/health", vfsServer.healthHandler)
 	h.GET("/ready", vfsServer.readyHandler)
 
-	// API v1 routes with idempotency middleware
+	// API v1 routes
 	v1 := h.Group("/api/v1")
 	v1.Use(idempotencyService.Middleware())
-	{
-		// Directory routes
-		v1.POST("/directories", vfsServer.createDirectory)
-		v1.GET("/directories/*path", vfsServer.listDirectory)
-		v1.DELETE("/directories/*path", vfsServer.deleteDirectory)
+	v1.Use(authMiddleware.Handler())   // Authentication (JWT, OAuth, etc.)
+	v1.Use(authzMiddleware.Handler())  // Authorization (OPA policies)
 
-		// File routes
-		v1.POST("/files", vfsServer.createFile)
-		v1.GET("/files/*path", vfsServer.getFile)
-		v1.PUT("/files/*path", vfsServer.updateFile)
-		v1.DELETE("/files/*path", vfsServer.deleteFile)
-		v1.POST("/files/move", vfsServer.moveFile)
-	}
+	// Directory routes
+	v1.POST("/directories", vfsServer.createDirectory)
+	v1.GET("/directories/*path", vfsServer.listDirectory)
+	v1.DELETE("/directories/*path", vfsServer.deleteDirectory)
+
+	// File routes
+	v1.POST("/files", vfsServer.createFile)
+	v1.GET("/files/*path", vfsServer.getFile)
+	v1.PUT("/files/*path", vfsServer.updateFile)
+	v1.DELETE("/files/*path", vfsServer.deleteFile)
+	v1.POST("/files/move", vfsServer.moveFile)
 
 	log.Printf("VFS Service starting on port %s", cfg.ServerPort)
+	log.Printf("Authentication: %s", cfg.Auth.Provider)
+	log.Printf("Authorization: ENABLED (OPA policies via .rego files)")
+	log.Printf("Schema validation: ENABLED (.jsonschema files)")
+	log.Printf("Cache TTL - Schema: %v, Policy: %v, Quota: %v", cfg.SchemaCacheTTL, cfg.PolicyCacheTTL, cfg.QuotaCacheTTL)
 	h.Spin()
 }
 
@@ -178,9 +213,8 @@ func (s *VFSServer) readyHandler(ctx context.Context, c *app.RequestContext) {
 // createDirectory creates a new directory
 func (s *VFSServer) createDirectory(ctx context.Context, c *app.RequestContext) {
 	var req struct {
-		ParentPath  string  `json:"parent_path"`
-		Name        string  `json:"name"`
-		OPAPolicyID *string `json:"opa_policy_id"`
+		ParentPath string `json:"parent_path"`
+		Name       string `json:"name"`
 	}
 
 	if err := c.BindJSON(&req); err != nil {
@@ -196,7 +230,7 @@ func (s *VFSServer) createDirectory(ctx context.Context, c *app.RequestContext) 
 		ctx = context.WithValue(ctx, "requestID", requestID)
 	}
 
-	dir, err := s.dirService.CreateDirectory(ctx, req.ParentPath, req.Name, req.OPAPolicyID)
+	dir, err := s.dirService.CreateDirectory(ctx, req.ParentPath, req.Name)
 	if err != nil {
 		c.JSON(consts.StatusBadRequest, map[string]string{
 			"error": err.Error(),
@@ -206,12 +240,11 @@ func (s *VFSServer) createDirectory(ctx context.Context, c *app.RequestContext) 
 
 	// Cache response for idempotency
 	response := map[string]interface{}{
-		"id":            dir.ID,
-		"name":          dir.Name,
-		"path":          dir.Path,
-		"parent_id":     dir.ParentID,
-		"opa_policy_id": dir.OPAPolicyID,
-		"created_at":    dir.CreatedAt,
+		"id":         dir.ID,
+		"name":       dir.Name,
+		"path":       dir.Path,
+		"parent_id":  dir.ParentID,
+		"created_at": dir.CreatedAt,
 	}
 
 	if requestID != "" {

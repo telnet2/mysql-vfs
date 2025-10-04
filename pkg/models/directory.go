@@ -14,7 +14,6 @@ type Directory struct {
 	Path         string         `gorm:"type:text;not null"` // Changed to text, use path_hash for uniqueness
 	PathHash     string         `gorm:"type:char(64);not null;uniqueIndex"` // SHA256 hash for uniqueness
 	Version      int64          `gorm:"not null;default:1"`
-	OPAPolicyID  *string        `gorm:"type:char(36)"`
 	CreatedAt    time.Time      `gorm:"not null"`
 	UpdatedAt    time.Time      `gorm:"not null"`
 	DeletedAt    gorm.DeletedAt `gorm:"index"`
@@ -23,7 +22,6 @@ type Directory struct {
 	Parent   *Directory  `gorm:"-"`
 	Children []Directory `gorm:"-"`
 	Files    []File      `gorm:"-"`
-	OPAPolicy *OPAPolicy `gorm:"-"`
 }
 
 func (Directory) TableName() string {

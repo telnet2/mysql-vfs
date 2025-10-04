@@ -60,27 +60,27 @@ var _ = Describe("End-to-End VFS Workflow", Ordered, func() {
 			By("Creating nested directory structure: /projects/app/src and /projects/app/docs")
 
 			// Create /projects
-			projectsDir, err := dirService.CreateDirectory(ctx, "/", "projects", nil)
+			projectsDir, err := dirService.CreateDirectory(ctx, "/", "projects")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(projectsDir.Path).To(Equal("/projects"))
 
 			// Create /projects/app
-			appDir, err := dirService.CreateDirectory(ctx, "/projects", "app", nil)
+			appDir, err := dirService.CreateDirectory(ctx, "/projects", "app")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(appDir.Path).To(Equal("/projects/app"))
 
 			// Create /projects/app/src
-			srcDir, err := dirService.CreateDirectory(ctx, "/projects/app", "src", nil)
+			srcDir, err := dirService.CreateDirectory(ctx, "/projects/app", "src")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(srcDir.Path).To(Equal("/projects/app/src"))
 
 			// Create /projects/app/docs
-			docsDir, err := dirService.CreateDirectory(ctx, "/projects/app", "docs", nil)
+			docsDir, err := dirService.CreateDirectory(ctx, "/projects/app", "docs")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(docsDir.Path).To(Equal("/projects/app/docs"))
 
 			// Create /projects/app/tests
-			testsDir, err := dirService.CreateDirectory(ctx, "/projects/app", "tests", nil)
+			testsDir, err := dirService.CreateDirectory(ctx, "/projects/app", "tests")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(testsDir.Path).To(Equal("/projects/app/tests"))
 
@@ -392,7 +392,7 @@ func TestAdd(t *testing.T) {
 	Describe("Complex File Operations", func() {
 		It("should handle large file uploads and modifications", func() {
 			By("Creating a directory for large files")
-			dataDir, err := dirService.CreateDirectory(ctx, "/", "data", nil)
+			dataDir, err := dirService.CreateDirectory(ctx, "/", "data")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(dataDir.Path).To(Equal("/data"))
 

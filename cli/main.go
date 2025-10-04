@@ -21,6 +21,20 @@ func main() {
 	vfsClient := client.NewClient(vfsServiceURL)
 	sess := session.NewSession()
 
+	// Load auth token (priority: env var > saved file)
+	token := os.Getenv("VFS_AUTH_TOKEN")
+	if token == "" {
+		// Fall back to saved token file
+		if savedToken, err := commands.LoadToken(); err == nil && savedToken != "" {
+			token = savedToken
+		}
+	}
+
+	if token != "" {
+		vfsClient.SetAuthToken(token)
+		sess.SetAuthToken(token)
+	}
+
 	// Check connectivity
 	fmt.Println("=== VFS CLI ===")
 	fmt.Printf("Connecting to: %s\n", vfsServiceURL)
@@ -38,17 +52,20 @@ func main() {
 
 	// Initialize commands
 	cmdMap := map[string]commands.Command{
-		"ls":     &commands.LsCommand{},
-		"cd":     &commands.CdCommand{},
-		"pwd":    &commands.PwdCommand{},
-		"mkdir":  &commands.MkdirCommand{},
-		"rmdir":  &commands.RmdirCommand{},
-		"cat":    &commands.CatCommand{},
-		"import": &commands.ImportCommand{},
-		"rm":     &commands.RmCommand{},
-		"mv":     &commands.MvCommand{},
-		"jq":     &commands.JqCommand{},
-		"help":   commands.NewHelpCommand(nil),
+		"ls":            &commands.LsCommand{},
+		"cd":            &commands.CdCommand{},
+		"pwd":           &commands.PwdCommand{},
+		"mkdir":         &commands.MkdirCommand{},
+		"rmdir":         &commands.RmdirCommand{},
+		"cat":           &commands.CatCommand{},
+		"import":        &commands.ImportCommand{},
+		"rm":            &commands.RmCommand{},
+		"mv":            &commands.MvCommand{},
+		"jq":            &commands.JqCommand{},
+		"create-schema": &commands.CreateSchemaCommand{},
+		"create-policy": &commands.CreatePolicyCommand{},
+		"create-quota":  &commands.CreateQuotaCommand{},
+		"help":          commands.NewHelpCommand(nil),
 	}
 
 	// Create command context

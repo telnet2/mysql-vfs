@@ -135,7 +135,7 @@ func (r *GormFileRepository) GetLatestVersion(ctx context.Context, fileID string
 	var version models.FileVersion
 	err := r.db.WithContext(ctx).
 		Where("file_id = ?", fileID).
-		Order("version DESC").
+		Order("version_number DESC").
 		First(&version).Error
 	if err == gorm.ErrRecordNotFound {
 		return nil, repository.ErrNotFound

@@ -65,7 +65,7 @@ var _ = Describe("VFS Edge Cases", Ordered, func() {
 			path := "/"
 			for i := 1; i <= 10; i++ {
 				name := "level" + string(rune('0'+i))
-				dir, err := dirService.CreateDirectory(ctx, path, name, nil)
+				dir, err := dirService.CreateDirectory(ctx, path, name)
 				Expect(err).NotTo(HaveOccurred())
 				path = dir.Path
 			}
@@ -88,7 +88,7 @@ var _ = Describe("VFS Edge Cases", Ordered, func() {
 			// Try to create 105 levels
 			for i := 1; i <= 105; i++ {
 				name := "d" + string(rune('0'+i%10))
-				dir, err := dirService.CreateDirectory(ctx, path, name, nil)
+				dir, err := dirService.CreateDirectory(ctx, path, name)
 				if err != nil {
 					lastErr = err
 					break
@@ -114,14 +114,14 @@ var _ = Describe("VFS Edge Cases", Ordered, func() {
 			}
 
 			for _, name := range unicodeNames {
-				dir, err := dirService.CreateDirectory(ctx, "/", name, nil)
+				dir, err := dirService.CreateDirectory(ctx, "/", name)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(dir.Name).To(Equal(name))
 			}
 		})
 
 		It("should handle names with spaces", func() {
-			dir, err := dirService.CreateDirectory(ctx, "/", "my directory", nil)
+			dir, err := dirService.CreateDirectory(ctx, "/", "my directory")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(dir.Name).To(Equal("my directory"))
 
@@ -146,7 +146,7 @@ var _ = Describe("VFS Edge Cases", Ordered, func() {
 			}
 
 			for _, name := range invalidNames {
-				_, err := dirService.CreateDirectory(ctx, "/", name, nil)
+				_, err := dirService.CreateDirectory(ctx, "/", name)
 				Expect(err).To(HaveOccurred(), "Should reject name: %s", name)
 			}
 		})
@@ -159,7 +159,7 @@ var _ = Describe("VFS Edge Cases", Ordered, func() {
 			}
 
 			for _, name := range reservedNames {
-				_, err := dirService.CreateDirectory(ctx, "/", name, nil)
+				_, err := dirService.CreateDirectory(ctx, "/", name)
 				Expect(err).To(HaveOccurred(), "Should reject reserved name: %s", name)
 			}
 		})
@@ -168,7 +168,7 @@ var _ = Describe("VFS Edge Cases", Ordered, func() {
 			// Create 255-character name (common filesystem limit)
 			longName := strings.Repeat("a", 255)
 
-			dir, err := dirService.CreateDirectory(ctx, "/", longName, nil)
+			dir, err := dirService.CreateDirectory(ctx, "/", longName)
 			if err != nil {
 				// If there's a length limit, that's fine
 				Expect(err.Error()).To(ContainSubstring("name"))
@@ -180,7 +180,7 @@ var _ = Describe("VFS Edge Cases", Ordered, func() {
 
 	Context("file size boundaries", func() {
 		It("should handle empty files", func() {
-			dir, err := dirService.CreateDirectory(ctx, "/", "edge-empty-files", nil)
+			dir, err := dirService.CreateDirectory(ctx, "/", "edge-empty-files")
 			Expect(err).NotTo(HaveOccurred())
 
 			content := ""
@@ -191,7 +191,7 @@ var _ = Describe("VFS Edge Cases", Ordered, func() {
 		})
 
 		It("should handle exactly 16MB file (JSON threshold)", func() {
-			dir, err := dirService.CreateDirectory(ctx, "/", "edge-16mb-files", nil)
+			dir, err := dirService.CreateDirectory(ctx, "/", "edge-16mb-files")
 			if err != nil {
 				GinkgoWriter.Printf("Failed to create directory: %v\n", err)
 			}
@@ -211,7 +211,7 @@ var _ = Describe("VFS Edge Cases", Ordered, func() {
 		})
 
 		It("should handle large files near 100MB limit", func() {
-			dir, err := dirService.CreateDirectory(ctx, "/", "edge-large", nil)
+			dir, err := dirService.CreateDirectory(ctx, "/", "edge-large")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(dir).NotTo(BeNil())
 
@@ -228,7 +228,7 @@ var _ = Describe("VFS Edge Cases", Ordered, func() {
 		})
 
 		It("should reject files exceeding 100MB limit", func() {
-			dir, err := dirService.CreateDirectory(ctx, "/", "edge-toolarge", nil)
+			dir, err := dirService.CreateDirectory(ctx, "/", "edge-toolarge")
 			Expect(err).NotTo(HaveOccurred())
 
 			// Try to create 101MB file
@@ -250,7 +250,7 @@ var _ = Describe("VFS Edge Cases", Ordered, func() {
 
 	Context("file content types", Ordered, func() {
 		BeforeAll(func() {
-			dirService.CreateDirectory(ctx, "/", "content-tests", nil)
+			dirService.CreateDirectory(ctx, "/", "content-tests")
 		})
 
 		It("should handle JSON content correctly", func() {
@@ -298,16 +298,16 @@ var _ = Describe("VFS Edge Cases", Ordered, func() {
 
 	Context("path resolution edge cases", Ordered, func() {
 		BeforeAll(func() {
-			dirService.CreateDirectory(ctx, "/", "a", nil)
-			dirService.CreateDirectory(ctx, "/a", "b", nil)
-			dirService.CreateDirectory(ctx, "/a/b", "c", nil)
+			dirService.CreateDirectory(ctx, "/", "a")
+			dirService.CreateDirectory(ctx, "/a", "b")
+			dirService.CreateDirectory(ctx, "/a/b", "c")
 		})
 
 		It("should handle paths with trailing slashes", func() {
 			// Create test directory structure
-			_, err := dirService.CreateDirectory(ctx, "/", "edge-path-a", nil)
+			_, err := dirService.CreateDirectory(ctx, "/", "edge-path-a")
 			Expect(err).NotTo(HaveOccurred())
-			_, err = dirService.CreateDirectory(ctx, "/edge-path-a", "b", nil)
+			_, err = dirService.CreateDirectory(ctx, "/edge-path-a", "b")
 			Expect(err).NotTo(HaveOccurred())
 
 			// Both should work the same
@@ -338,8 +338,8 @@ var _ = Describe("VFS Edge Cases", Ordered, func() {
 
 	Context("deletion edge cases", func() {
 		It("should prevent deleting non-empty directory without recursive flag", func() {
-			parent, _ := dirService.CreateDirectory(ctx, "/", "parent", nil)
-			dirService.CreateDirectory(ctx, parent.Path, "child", nil)
+			parent, _ := dirService.CreateDirectory(ctx, "/", "parent")
+			dirService.CreateDirectory(ctx, parent.Path, "child")
 
 			err := dirService.DeleteDirectory(ctx, parent.Path, false)
 
@@ -348,9 +348,9 @@ var _ = Describe("VFS Edge Cases", Ordered, func() {
 		})
 
 		It("should allow deleting directory with recursive flag", func() {
-			parent, _ := dirService.CreateDirectory(ctx, "/", "parent-rec", nil)
-			dirService.CreateDirectory(ctx, parent.Path, "child1", nil)
-			dirService.CreateDirectory(ctx, parent.Path, "child2", nil)
+			parent, _ := dirService.CreateDirectory(ctx, "/", "parent-rec")
+			dirService.CreateDirectory(ctx, parent.Path, "child1")
+			dirService.CreateDirectory(ctx, parent.Path, "child2")
 
 			err := dirService.DeleteDirectory(ctx, parent.Path, true)
 
@@ -369,7 +369,7 @@ var _ = Describe("VFS Edge Cases", Ordered, func() {
 		})
 
 		It("should handle deleting already deleted directory", func() {
-			dir, err := dirService.CreateDirectory(ctx, "/", "edge-to-delete-twice", nil)
+			dir, err := dirService.CreateDirectory(ctx, "/", "edge-to-delete-twice")
 			Expect(err).NotTo(HaveOccurred())
 
 			// Delete once
@@ -384,7 +384,7 @@ var _ = Describe("VFS Edge Cases", Ordered, func() {
 		})
 
 		It("should handle deleting directory with files", func() {
-			dir, err := dirService.CreateDirectory(ctx, "/", "edge-dir-with-files", nil)
+			dir, err := dirService.CreateDirectory(ctx, "/", "edge-dir-with-files")
 			Expect(err).NotTo(HaveOccurred())
 			content := "test content"
 			fileService.CreateFile(ctx, dir.Path, "file.txt", "text/plain", int64(len(content)), io.NopCloser(strings.NewReader(content)))
@@ -401,7 +401,7 @@ var _ = Describe("VFS Edge Cases", Ordered, func() {
 
 	Context("versioning edge cases", func() {
 		It("should create new version when updating file", func() {
-			dir, err := dirService.CreateDirectory(ctx, "/", "edge-versions", nil)
+			dir, err := dirService.CreateDirectory(ctx, "/", "edge-versions")
 			Expect(err).NotTo(HaveOccurred())
 
 			// Create initial file
@@ -431,7 +431,7 @@ var _ = Describe("VFS Edge Cases", Ordered, func() {
 		})
 
 		It("should reject updates with wrong expected version", func() {
-			dir, err := dirService.CreateDirectory(ctx, "/", "edge-versions2", nil)
+			dir, err := dirService.CreateDirectory(ctx, "/", "edge-versions2")
 			Expect(err).NotTo(HaveOccurred())
 
 			content1 := "version 1"
@@ -453,11 +453,11 @@ var _ = Describe("VFS Edge Cases", Ordered, func() {
 
 	Context("listing and pagination", Ordered, func() {
 		BeforeAll(func() {
-			dirService.CreateDirectory(ctx, "/", "pagination", nil)
+			dirService.CreateDirectory(ctx, "/", "pagination")
 
 			// Create many entries
 			for i := 1; i <= 50; i++ {
-				dirService.CreateDirectory(ctx, "/pagination", "dir"+string(rune('0'+i%10)), nil)
+				dirService.CreateDirectory(ctx, "/pagination", "dir"+string(rune('0'+i%10)))
 			}
 		})
 
@@ -488,7 +488,7 @@ var _ = Describe("VFS Edge Cases", Ordered, func() {
 		})
 
 		It("should handle empty directory listing", func() {
-			emptyDir, _ := dirService.CreateDirectory(ctx, "/", "empty-dir", nil)
+			emptyDir, _ := dirService.CreateDirectory(ctx, "/", "empty-dir")
 
 			dirs, files, _, err := dirService.ListDirectory(emptyDir.Path, 100, "")
 

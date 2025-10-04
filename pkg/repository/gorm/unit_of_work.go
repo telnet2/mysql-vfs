@@ -9,19 +9,19 @@ import (
 
 // GormUnitOfWork implements the UnitOfWork interface using GORM
 type GormUnitOfWork struct {
-	db              *gorm.DB
-	dirRepo         *GormDirectoryRepository
-	fileRepo        *GormFileRepository
-	eventRepo       *GormEventRepository
+	db        *gorm.DB
+	dirRepo   *GormDirectoryRepository
+	fileRepo  *GormFileRepository
+	eventRepo *GormEventRepository
 }
 
 // NewGormUnitOfWork creates a new GORM unit of work
 func NewGormUnitOfWork(db *gorm.DB) *GormUnitOfWork {
 	return &GormUnitOfWork{
-		db:              db,
-		dirRepo:         NewGormDirectoryRepository(db),
-		fileRepo:        NewGormFileRepository(db),
-		eventRepo:       NewGormEventRepository(db),
+		db:        db,
+		dirRepo:   NewGormDirectoryRepository(db),
+		fileRepo:  NewGormFileRepository(db),
+		eventRepo: NewGormEventRepository(db),
 	}
 }
 

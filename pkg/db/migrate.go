@@ -34,7 +34,6 @@ func Connect(cfg Config) (*gorm.DB, error) {
 func AutoMigrate(db *gorm.DB) error {
 	// Define all models in dependency order
 	modelsToMigrate := []interface{}{
-		&models.OPAPolicy{},
 		&models.Directory{},
 		&models.File{},
 		&models.FileVersion{},

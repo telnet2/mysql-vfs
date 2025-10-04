@@ -22,20 +22,18 @@ func NewDirectoryHandler(domainService *domain.DirectoryService) *DirectoryHandl
 
 // CreateDirectoryRequest represents the request to create a directory
 type CreateDirectoryRequest struct {
-	ParentPath  string  `json:"parent_path"`
-	Name        string  `json:"name"`
-	OPAPolicyID *string `json:"opa_policy_id,omitempty"`
+	ParentPath string `json:"parent_path"`
+	Name       string `json:"name"`
 }
 
 // DirectoryResponse represents a directory in API responses
 type DirectoryResponse struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Path        string    `json:"path"`
-	ParentID    *string   `json:"parent_id,omitempty"`
-	OPAPolicyID *string   `json:"opa_policy_id,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Path      string    `json:"path"`
+	ParentID  *string   `json:"parent_id,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // ListDirectoryResponse represents a list of directories
@@ -58,9 +56,8 @@ func (h *DirectoryHandler) CreateDirectory(ctx context.Context, c *app.RequestCo
 
 	// Call domain service
 	domainReq := domain.CreateDirectoryRequest{
-		ParentPath:  req.ParentPath,
-		Name:        req.Name,
-		OPAPolicyID: req.OPAPolicyID,
+		ParentPath: req.ParentPath,
+		Name:       req.Name,
 	}
 
 	dir, err := h.domainService.CreateDirectory(ctx, domainReq)
@@ -75,13 +72,12 @@ func (h *DirectoryHandler) CreateDirectory(ctx context.Context, c *app.RequestCo
 
 	// Format response
 	response := DirectoryResponse{
-		ID:          dir.ID,
-		Name:        dir.Name,
-		Path:        dir.Path,
-		ParentID:    dir.ParentID,
-		OPAPolicyID: dir.OPAPolicyID,
-		CreatedAt:   dir.CreatedAt,
-		UpdatedAt:   dir.UpdatedAt,
+		ID:        dir.ID,
+		Name:      dir.Name,
+		Path:      dir.Path,
+		ParentID:  dir.ParentID,
+		CreatedAt: dir.CreatedAt,
+		UpdatedAt: dir.UpdatedAt,
 	}
 
 	c.JSON(201, response)
@@ -122,13 +118,12 @@ func (h *DirectoryHandler) ListDirectory(ctx context.Context, c *app.RequestCont
 	directories := make([]DirectoryResponse, len(dirs))
 	for i, dir := range dirs {
 		directories[i] = DirectoryResponse{
-			ID:          dir.ID,
-			Name:        dir.Name,
-			Path:        dir.Path,
-			ParentID:    dir.ParentID,
-			OPAPolicyID: dir.OPAPolicyID,
-			CreatedAt:   dir.CreatedAt,
-			UpdatedAt:   dir.UpdatedAt,
+			ID:        dir.ID,
+			Name:      dir.Name,
+			Path:      dir.Path,
+			ParentID:  dir.ParentID,
+			CreatedAt: dir.CreatedAt,
+			UpdatedAt: dir.UpdatedAt,
 		}
 	}
 
@@ -197,13 +192,12 @@ func (h *DirectoryHandler) GetDirectory(ctx context.Context, c *app.RequestConte
 
 	// Format response
 	response := DirectoryResponse{
-		ID:          dir.ID,
-		Name:        dir.Name,
-		Path:        dir.Path,
-		ParentID:    dir.ParentID,
-		OPAPolicyID: dir.OPAPolicyID,
-		CreatedAt:   dir.CreatedAt,
-		UpdatedAt:   dir.UpdatedAt,
+		ID:        dir.ID,
+		Name:      dir.Name,
+		Path:      dir.Path,
+		ParentID:  dir.ParentID,
+		CreatedAt: dir.CreatedAt,
+		UpdatedAt: dir.UpdatedAt,
 	}
 
 	c.JSON(200, response)

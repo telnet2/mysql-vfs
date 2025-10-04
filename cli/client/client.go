@@ -124,29 +124,26 @@ func (c *Client) ListDirectory(path string, limit int, cursor string) (*ListDire
 
 // CreateDirectoryRequest is the request to create a directory
 type CreateDirectoryRequest struct {
-	ParentPath  string  `json:"parent_path"`
-	Name        string  `json:"name"`
-	OPAPolicyID *string `json:"opa_policy_id,omitempty"`
+	ParentPath string `json:"parent_path"`
+	Name       string `json:"name"`
 }
 
 // CreateDirectoryResponse is the response from creating a directory
 type CreateDirectoryResponse struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Path        string    `json:"path"`
-	ParentID    *string   `json:"parent_id"`
-	OPAPolicyID *string   `json:"opa_policy_id"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Path      string    `json:"path"`
+	ParentID  *string   `json:"parent_id"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // CreateDirectory creates a new directory
-func (c *Client) CreateDirectory(parentPath, name string, opaPolicyID *string) (*CreateDirectoryResponse, error) {
+func (c *Client) CreateDirectory(parentPath, name string) (*CreateDirectoryResponse, error) {
 	requestID := uuid.New().String()
 
 	req := CreateDirectoryRequest{
-		ParentPath:  parentPath,
-		Name:        name,
-		OPAPolicyID: opaPolicyID,
+		ParentPath: parentPath,
+		Name:       name,
 	}
 
 	resp, err := c.request("POST", "/api/v1/directories", req, requestID)
@@ -353,4 +350,141 @@ func (c *Client) HealthCheck() (bool, error) {
 	defer resp.Body.Close()
 
 	return resp.StatusCode == http.StatusOK, nil
+}
+
+// LoginRequest is the request to login
+type LoginRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+// LoginResponse is the response from login
+type LoginResponse struct {
+	Token string       `json:"token"`
+	User  UserResponse `json:"user"`
+}
+
+// UserResponse represents a user in API responses
+type UserResponse struct {
+	ID       string `json:"id"`
+	Username string `json:"username"`
+	Email    string `json:"email"`
+	FullName string `json:"full_name,omitempty"`
+	Role     string `json:"role"`
+	IsActive bool   `json:"is_active"`
+}
+
+// Login authenticates a user and returns a token
+func (c *Client) Login(username, password string) (*LoginResponse, error) {
+	requestID := uuid.New().String()
+
+	req := LoginRequest{
+		Username: username,
+		Password: password,
+	}
+
+	resp, err := c.request("POST", "/api/v1/auth/login", req, requestID)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("login failed: %s (status: %d)", string(body), resp.StatusCode)
+	}
+
+	var result LoginResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	// Automatically set the auth token
+	c.SetAuthToken(result.Token)
+
+	return &result, nil
+}
+
+// GetCurrentUser gets the currently authenticated user
+func (c *Client) GetCurrentUser() (*UserResponse, error) {
+	requestID := uuid.New().String()
+
+	resp, err := c.request("GET", "/api/v1/auth/me", nil, requestID)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to get current user: %s (status: %d)", string(body), resp.StatusCode)
+	}
+
+	var result UserResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &result, nil
+}
+
+// CreateUserRequest is the request to create a user (admin only)
+type CreateUserRequest struct {
+	Username string `json:"username"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
+	FullName string `json:"full_name,omitempty"`
+	Role     string `json:"role,omitempty"`
+}
+
+// CreateUser creates a new user (admin only)
+func (c *Client) CreateUser(req CreateUserRequest) (*UserResponse, error) {
+	requestID := uuid.New().String()
+
+	resp, err := c.request("POST", "/api/v1/admin/users", req, requestID)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to create user: %s (status: %d)", string(body), resp.StatusCode)
+	}
+
+	var result UserResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &result, nil
+}
+
+// ListUsersResponse is the response from listing users
+type ListUsersResponse struct {
+	Users      []UserResponse `json:"users"`
+	NextCursor *string        `json:"next_cursor,omitempty"`
+}
+
+// ListUsers lists all users (admin only)
+func (c *Client) ListUsers() (*ListUsersResponse, error) {
+	requestID := uuid.New().String()
+
+	resp, err := c.request("GET", "/api/v1/admin/users", nil, requestID)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to list users: %s (status: %d)", string(body), resp.StatusCode)
+	}
+
+	var result ListUsersResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &result, nil
 }

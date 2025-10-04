@@ -105,7 +105,7 @@ func (s *DirectoryService) emitEvent(ctx context.Context, tx *gorm.DB, eventType
 }
 
 // CreateDirectory creates a new directory using optimistic locking with retries
-func (s *DirectoryService) CreateDirectory(ctx context.Context, parentPath, name string, opaPolicyID *string) (*models.Directory, error) {
+func (s *DirectoryService) CreateDirectory(ctx context.Context, parentPath, name string) (*models.Directory, error) {
 	// Validate name
 	if name == "" || name == "." || name == ".." {
 		return nil, fmt.Errorf("invalid directory name")
@@ -144,7 +144,7 @@ func (s *DirectoryService) CreateDirectory(ctx context.Context, parentPath, name
 		}
 
 		// Try to create directory (lock-free)
-		dir, lastErr = s.tryCreateDirectory(ctx, parentPath, fullPath, name, opaPolicyID)
+		dir, lastErr = s.tryCreateDirectory(ctx, parentPath, fullPath, name)
 
 		if lastErr == nil {
 			// Success!
@@ -177,7 +177,7 @@ func (s *DirectoryService) CreateDirectory(ctx context.Context, parentPath, name
 }
 
 // tryCreateDirectory attempts to create a directory without locks (single attempt)
-func (s *DirectoryService) tryCreateDirectory(ctx context.Context, parentPath, fullPath, name string, opaPolicyID *string) (*models.Directory, error) {
+func (s *DirectoryService) tryCreateDirectory(ctx context.Context, parentPath, fullPath, name string) (*models.Directory, error) {
 	var dir *models.Directory
 
 	err := s.db.Transaction(func(tx *gorm.DB) error {
@@ -203,14 +203,13 @@ func (s *DirectoryService) tryCreateDirectory(ctx context.Context, parentPath, f
 		// Create directory
 		pathHash := calculatePathHash(fullPath)
 		dir = &models.Directory{
-			ID:          uuid.New().String(),
-			Name:        name,
-			Path:        fullPath,
-			PathHash:    pathHash,
-			Version:     1,
-			OPAPolicyID: opaPolicyID,
-			CreatedAt:   time.Now(),
-			UpdatedAt:   time.Now(),
+			ID:        uuid.New().String(),
+			Name:      name,
+			Path:      fullPath,
+			PathHash:  pathHash,
+			Version:   1,
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
 		}
 
 		if parent.ID != "" {
@@ -224,11 +223,10 @@ func (s *DirectoryService) tryCreateDirectory(ctx context.Context, parentPath, f
 
 		// Emit directory.created event
 		if err := s.emitEvent(ctx, tx, "directory.created", dir.ID, map[string]interface{}{
-			"directory_id":   dir.ID,
-			"name":           dir.Name,
-			"path":           dir.Path,
-			"parent_id":      dir.ParentID,
-			"opa_policy_id":  dir.OPAPolicyID,
+			"directory_id": dir.ID,
+			"name":         dir.Name,
+			"path":         dir.Path,
+			"parent_id":    dir.ParentID,
 		}); err != nil {
 			return err
 		}

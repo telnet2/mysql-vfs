@@ -170,7 +170,7 @@ func (c *MkdirCommand) Execute(ctx *Context, args []string) error {
 	name := args[0]
 	parentPath := ctx.Session.GetCurrentDirectory()
 
-	resp, err := ctx.Client.CreateDirectory(parentPath, name, nil)
+	resp, err := ctx.Client.CreateDirectory(parentPath, name)
 	if err != nil {
 		return err
 	}
@@ -433,6 +433,50 @@ func (c *JqCommand) Help() string {
 	return "jq <path> <expression> - Query JSON file with jq"
 }
 
+// LoginCommand authenticates a user
+// SaveToken saves the auth token to a file (for external auth providers)
+func SaveToken(token string) error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+
+	vfsDir := filepath.Join(homeDir, ".vfs")
+	if err := os.MkdirAll(vfsDir, 0700); err != nil {
+		return err
+	}
+
+	tokenFile := filepath.Join(vfsDir, "token")
+	return os.WriteFile(tokenFile, []byte(token), 0600)
+}
+
+// LoadToken loads the auth token from a file
+func LoadToken() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+
+	tokenFile := filepath.Join(homeDir, ".vfs", "token")
+	data, err := os.ReadFile(tokenFile)
+	if err != nil {
+		return "", err
+	}
+
+	return strings.TrimSpace(string(data)), nil
+}
+
+// RemoveToken removes the saved auth token
+func RemoveToken() error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+
+	tokenFile := filepath.Join(homeDir, ".vfs", "token")
+	return os.Remove(tokenFile)
+}
+
 // HelpCommand shows help
 type HelpCommand struct {
 	commands map[string]Command
@@ -445,22 +489,132 @@ func NewHelpCommand(commands map[string]Command) *HelpCommand {
 func (c *HelpCommand) Execute(ctx *Context, args []string) error {
 	fmt.Fprintln(ctx.Stdout, "Available commands:")
 	fmt.Fprintln(ctx.Stdout, "")
-	fmt.Fprintln(ctx.Stdout, "  ls [-r] [path]             List directory contents")
-	fmt.Fprintln(ctx.Stdout, "  cd [path]                  Change directory")
-	fmt.Fprintln(ctx.Stdout, "  pwd                        Print working directory")
-	fmt.Fprintln(ctx.Stdout, "  mkdir <name>               Create directory")
-	fmt.Fprintln(ctx.Stdout, "  rmdir [-r] <path>          Remove directory")
-	fmt.Fprintln(ctx.Stdout, "  import <local> <vfs>       Import file to VFS")
-	fmt.Fprintln(ctx.Stdout, "  cat <path>                 Display file contents")
-	fmt.Fprintln(ctx.Stdout, "  jq <path> <expression>     Query JSON file")
-	fmt.Fprintln(ctx.Stdout, "  mv <src> <dst>             Move/rename file")
-	fmt.Fprintln(ctx.Stdout, "  rm <path>                  Remove file")
-	fmt.Fprintln(ctx.Stdout, "  help                       Show this help")
-	fmt.Fprintln(ctx.Stdout, "  exit                       Exit CLI")
+	fmt.Fprintln(ctx.Stdout, "Files & Directories:")
+	fmt.Fprintln(ctx.Stdout, "  ls [-r] [path]                     List directory contents")
+	fmt.Fprintln(ctx.Stdout, "  cd [path]                          Change directory")
+	fmt.Fprintln(ctx.Stdout, "  pwd                                Print working directory")
+	fmt.Fprintln(ctx.Stdout, "  mkdir <name>                       Create directory")
+	fmt.Fprintln(ctx.Stdout, "  rmdir [-r] <path>                  Remove directory")
+	fmt.Fprintln(ctx.Stdout, "  import <local> <vfs>               Import file to VFS")
+	fmt.Fprintln(ctx.Stdout, "  cat <path>                         Display file contents")
+	fmt.Fprintln(ctx.Stdout, "  jq <path> <expression>             Query JSON file")
+	fmt.Fprintln(ctx.Stdout, "  mv <src> <dst>                     Move/rename file")
+	fmt.Fprintln(ctx.Stdout, "  rm <path>                          Remove file")
+	fmt.Fprintln(ctx.Stdout, "")
+	fmt.Fprintln(ctx.Stdout, "Authentication:")
+	fmt.Fprintln(ctx.Stdout, "  login <username> <password>        Authenticate with VFS")
+	fmt.Fprintln(ctx.Stdout, "  logout                             Clear authentication")
+	fmt.Fprintln(ctx.Stdout, "  whoami                             Show current user")
+	fmt.Fprintln(ctx.Stdout, "")
+	fmt.Fprintln(ctx.Stdout, "Admin:")
+	fmt.Fprintln(ctx.Stdout, "  create-user <user> <email> <pw>    Create new user (admin)")
+	fmt.Fprintln(ctx.Stdout, "  list-users                         List all users (admin)")
+	fmt.Fprintln(ctx.Stdout, "")
+	fmt.Fprintln(ctx.Stdout, "Special Files:")
+	fmt.Fprintln(ctx.Stdout, "  create-schema <dir> <file>         Create .jsonschema (admin)")
+	fmt.Fprintln(ctx.Stdout, "  create-policy <dir> <file>         Create .rego policy (admin)")
+	fmt.Fprintln(ctx.Stdout, "  create-quota <dir> <file>          Create .quota config (admin)")
+	fmt.Fprintln(ctx.Stdout, "")
+	fmt.Fprintln(ctx.Stdout, "Other:")
+	fmt.Fprintln(ctx.Stdout, "  help                               Show this help")
+	fmt.Fprintln(ctx.Stdout, "  exit                               Exit CLI")
 	fmt.Fprintln(ctx.Stdout, "")
 	return nil
 }
 
 func (c *HelpCommand) Help() string {
 	return "help - Show available commands"
+}
+
+// CreateSchemaCommand creates a .jsonschema special file
+type CreateSchemaCommand struct{}
+
+func (c *CreateSchemaCommand) Execute(ctx *Context, args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: create-schema <directory_path> <local_schema_file>")
+	}
+
+	dirPath := ctx.Session.ResolvePath(args[0])
+	localPath := args[1]
+
+	// Read schema file
+	content, err := os.ReadFile(localPath)
+	if err != nil {
+		return fmt.Errorf("failed to read schema file: %w", err)
+	}
+
+	// Create .jsonschema file in the directory
+	_, err = ctx.Client.CreateFile(dirPath, ".jsonschema", "application/json", string(content))
+	if err != nil {
+		return fmt.Errorf("failed to create schema: %w", err)
+	}
+
+	fmt.Fprintf(ctx.Stdout, "✓ Schema created at %s/.jsonschema\n", dirPath)
+	return nil
+}
+
+func (c *CreateSchemaCommand) Help() string {
+	return "create-schema <directory_path> <local_schema_file> - Create a .jsonschema file in a directory"
+}
+
+// CreatePolicyCommand creates a .rego special file
+type CreatePolicyCommand struct{}
+
+func (c *CreatePolicyCommand) Execute(ctx *Context, args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: create-policy <directory_path> <local_rego_file>")
+	}
+
+	dirPath := ctx.Session.ResolvePath(args[0])
+	localPath := args[1]
+
+	// Read policy file
+	content, err := os.ReadFile(localPath)
+	if err != nil {
+		return fmt.Errorf("failed to read policy file: %w", err)
+	}
+
+	// Create .rego file in the directory
+	_, err = ctx.Client.CreateFile(dirPath, ".rego", "text/plain", string(content))
+	if err != nil {
+		return fmt.Errorf("failed to create policy: %w", err)
+	}
+
+	fmt.Fprintf(ctx.Stdout, "✓ Policy created at %s/.rego\n", dirPath)
+	return nil
+}
+
+func (c *CreatePolicyCommand) Help() string {
+	return "create-policy <directory_path> <local_rego_file> - Create a .rego policy file in a directory"
+}
+
+// CreateQuotaCommand creates a .quota special file
+type CreateQuotaCommand struct{}
+
+func (c *CreateQuotaCommand) Execute(ctx *Context, args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: create-quota <directory_path> <local_quota_file>")
+	}
+
+	dirPath := ctx.Session.ResolvePath(args[0])
+	localPath := args[1]
+
+	// Read quota config
+	content, err := os.ReadFile(localPath)
+	if err != nil {
+		return fmt.Errorf("failed to read quota file: %w", err)
+	}
+
+	// Create .quota file in the directory
+	_, err = ctx.Client.CreateFile(dirPath, ".quota", "application/json", string(content))
+	if err != nil {
+		return fmt.Errorf("failed to create quota: %w", err)
+	}
+
+	fmt.Fprintf(ctx.Stdout, "✓ Quota created at %s/.quota\n", dirPath)
+	return nil
+}
+
+func (c *CreateQuotaCommand) Help() string {
+	return "create-quota <directory_path> <local_quota_file> - Create a .quota config file in a directory"
 }
