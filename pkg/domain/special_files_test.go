@@ -80,6 +80,29 @@ func TestRequiresAdmin(t *testing.T) {
 	}
 }
 
+func TestIsSystemAdmin(t *testing.T) {
+	tests := []struct {
+		name     string
+		userRole string
+		want     bool
+	}{
+		{"system-admin role", "system-admin", true},
+		{"admin role", "admin", false},
+		{"user role", "user", false},
+		{"readonly role", "readonly", false},
+		{"empty role", "", false},
+		{"random role", "developer", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsSystemAdmin(tt.userRole); got != tt.want {
+				t.Errorf("IsSystemAdmin(%q) = %v, want %v", tt.userRole, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSupportsInheritance(t *testing.T) {
 	tests := []struct {
 		name     string

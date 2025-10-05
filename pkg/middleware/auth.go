@@ -17,9 +17,6 @@ const (
 	// UserRoleKey is the context key for user role
 	UserRoleKey ContextKey = "user_role"
 
-	// UserGroupsKey is the context key for user groups
-	UserGroupsKey ContextKey = "user_groups"
-
 	// UserMetadataKey is the context key for additional user metadata
 	UserMetadataKey ContextKey = "user_metadata"
 )
@@ -32,7 +29,6 @@ type AuthExtractor func(token string) (AuthContext, error)
 type AuthContext struct {
 	UserID   string
 	Role     string
-	Groups   []string
 	Metadata map[string]interface{} // Additional custom fields
 }
 
@@ -103,7 +99,6 @@ func (m *AuthMiddleware) Handler() app.HandlerFunc {
 		// Store auth context in request context
 		ctx = context.WithValue(ctx, UserIDKey, authContext.UserID)
 		ctx = context.WithValue(ctx, UserRoleKey, authContext.Role)
-		ctx = context.WithValue(ctx, UserGroupsKey, authContext.Groups)
 		ctx = context.WithValue(ctx, UserMetadataKey, authContext.Metadata)
 
 		c.Next(ctx)
@@ -151,12 +146,6 @@ func GetUserRole(ctx context.Context) (string, bool) {
 	return role, ok
 }
 
-// GetUserGroups extracts the user groups from context
-func GetUserGroups(ctx context.Context) ([]string, bool) {
-	groups, ok := ctx.Value(UserGroupsKey).([]string)
-	return groups, ok
-}
-
 // GetUserMetadata extracts custom user metadata from context
 func GetUserMetadata(ctx context.Context) (map[string]interface{}, bool) {
 	metadata, ok := ctx.Value(UserMetadataKey).(map[string]interface{})
@@ -167,4 +156,10 @@ func GetUserMetadata(ctx context.Context) (map[string]interface{}, bool) {
 func IsAdmin(ctx context.Context) bool {
 	role, ok := GetUserRole(ctx)
 	return ok && role == "admin"
+}
+
+// IsSystemAdmin checks if the user in context is a system admin
+func IsSystemAdmin(ctx context.Context) bool {
+	role, ok := GetUserRole(ctx)
+	return ok && role == "system-admin"
 }

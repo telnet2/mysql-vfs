@@ -66,7 +66,7 @@ func (s *FileService) CreateFile(ctx context.Context, req CreateFileRequest) (*m
 // createSpecialFile handles creation of special files (.jsonschema, .rego, etc.)
 func (s *FileService) createSpecialFile(ctx context.Context, req CreateFileRequest) (*models.File, error) {
 	// Check admin permissions
-	if RequiresAdmin(req.Name) && req.UserRole != "admin" {
+	if RequiresAdmin(req.Name) && !IsSystemAdmin(req.UserRole) {
 		return nil, ErrPermissionDenied
 	}
 
@@ -226,7 +226,7 @@ func (s *FileService) UpdateFile(ctx context.Context, fileID string, newContent 
 	// Check if this is a special file
 	if IsSpecialFile(file.Name) {
 		// Check admin permissions
-		if RequiresAdmin(file.Name) && userRole != "admin" {
+		if RequiresAdmin(file.Name) && !IsSystemAdmin(userRole) {
 			return nil, ErrPermissionDenied
 		}
 

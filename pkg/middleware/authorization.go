@@ -15,8 +15,7 @@ import (
 type UserContext struct {
 	UserID   string
 	Username string
-	Roles    []string
-	Groups   []string
+	Role     string
 }
 
 // AuthorizationMiddleware checks access permissions using .rego policies
@@ -79,6 +78,14 @@ func (m *AuthorizationMiddleware) Handler() app.HandlerFunc {
 			return
 		}
 
+		// System admin bypasses all rego authorization
+		if userCtx.Role == "system-admin" {
+			ctx = context.WithValue(ctx, "authorized", true)
+			ctx = context.WithValue(ctx, "user_context", userCtx)
+			c.Next(ctx)
+			return
+		}
+
 		// Extract resource path from request
 		resourcePath := extractResourcePath(c)
 
@@ -118,8 +125,7 @@ func (m *AuthorizationMiddleware) Handler() app.HandlerFunc {
 			"user": map[string]interface{}{
 				"id":       userCtx.UserID,
 				"username": userCtx.Username,
-				"roles":    userCtx.Roles,
-				"groups":   userCtx.Groups,
+				"role":     userCtx.Role,
 			},
 			"resource": map[string]interface{}{
 				"path": resourcePath,
@@ -157,7 +163,6 @@ func defaultUserContextExtractor(c *app.RequestContext) (*UserContext, error) {
 	// Try to get from auth middleware context first
 	userID, hasUserID := ctx.Value(UserIDKey).(string)
 	role, hasRole := ctx.Value(UserRoleKey).(string)
-	groups, _ := ctx.Value(UserGroupsKey).([]string)
 
 	// If not found, try from headers (for external auth via reverse proxy)
 	if !hasUserID {
@@ -167,20 +172,12 @@ func defaultUserContextExtractor(c *app.RequestContext) (*UserContext, error) {
 		}
 	}
 
-	// Build roles array
-	roles := []string{}
-	if hasRole && role != "" {
-		roles = append(roles, role)
-	} else if roleHeader := string(c.GetHeader("X-User-Role")); roleHeader != "" {
-		roles = append(roles, roleHeader)
-	} else {
-		roles = append(roles, "user") // default role
-	}
-
-	// Get groups from header if not in context
-	if groups == nil || len(groups) == 0 {
-		if groupHeader := string(c.GetHeader("X-User-Groups")); groupHeader != "" {
-			groups = strings.Split(groupHeader, ",")
+	// Get role
+	if !hasRole || role == "" {
+		if roleHeader := string(c.GetHeader("X-User-Role")); roleHeader != "" {
+			role = roleHeader
+		} else {
+			role = "user" // default role
 		}
 	}
 
@@ -192,8 +189,7 @@ func defaultUserContextExtractor(c *app.RequestContext) (*UserContext, error) {
 	return &UserContext{
 		UserID:   userID,
 		Username: username,
-		Roles:    roles,
-		Groups:   groups,
+		Role:     role,
 	}, nil
 }
 

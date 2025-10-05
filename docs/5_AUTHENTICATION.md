@@ -72,7 +72,7 @@ VFS v2 uses a **pluggable authentication architecture** with centralized configu
 | **mTLS** | ✅ Very High | Banking, Government | 🚧 TODO |
 | **Proxy+HMAC** | ⚠️ Medium | Reverse proxy integration | ✅ Implemented |
 | **Headers** | ❌ Unsafe | Development only | ✅ Implemented |
-| **Super User** | ✅ Always Available | Bootstrap & Emergency Access | ✅ Implemented |
+| **System Admin** | ✅ Always Available | Bootstrap & Emergency Access | ✅ Implemented |
 
 ---
 
@@ -103,10 +103,10 @@ type AuthConfig struct {
     MTLSCertFile string
     MTLSKeyFile  string
 
-    // Super User (ALWAYS checked first - hybrid auth)
-    SuperUserToken string  // Token for super user access
-    SuperUserID    string  // User ID (default: "super-admin")
-    SuperUserRole  string  // Role (default: "super-admin")
+    // System Admin (ALWAYS checked first - hybrid auth)
+    SystemAdminToken string  // Token for system admin access
+    SystemAdminID    string  // User ID (default: "system-admin")
+    SystemAdminRole  string  // Role (default: "admin")
 
     // File-based auth (.user files)
     FileAuthDirectory string        // Directory with .user file (default: "/")
@@ -120,10 +120,10 @@ type AuthConfig struct {
 ### Environment Variables
 
 ```bash
-# ============ SUPER USER (Always Checked First) ============
-SUPER_USER_TOKEN=your-super-secret-token-change-me  # Emergency access token
-SUPER_USER_ID=super-admin                          # Default user ID
-SUPER_USER_ROLE=super-admin                        # Default role
+# ============ SYSTEM ADMIN (Always Checked First) ============
+SYSTEM_ADMIN_TOKEN=your-super-secret-token-change-me  # Emergency access token
+SYSTEM_ADMIN_ID=system-admin                           # Default user ID
+SYSTEM_ADMIN_ROLE=admin                                # Default role
 
 # ============ Choose Auth Provider ============
 AUTH_PROVIDER=file  # file, jwt, oauth, mtls, proxy, headers
@@ -211,22 +211,22 @@ v1.Use(authMiddleware.Handler())
 
 ## Security Model
 
-### Hybrid Auth (Super User + Provider)
+### Hybrid Auth (System Admin + Provider)
 
-**IMPORTANT:** VFS v2 uses **hybrid authentication** - super user is ALWAYS checked first, regardless of provider.
+**IMPORTANT:** VFS v2 uses **hybrid authentication** - system admin is ALWAYS checked first, regardless of provider.
 
 **How it works:**
-1. Every request checks if token matches `SUPER_USER_TOKEN`
-2. If match → Grant super user access (UserID=`SUPER_USER_ID`, Role=`SUPER_USER_ROLE`)
+1. Every request checks if token matches `SYSTEM_ADMIN_TOKEN`
+2. If match → Grant system admin access (UserID=`SYSTEM_ADMIN_ID`, Role=`SYSTEM_ADMIN_ROLE`)
 3. If no match → Fall back to configured provider (file, jwt, oauth, etc.)
 
 **Use cases:**
-- ✅ **Bootstrap:** Create initial `.user` file with super user token
+- ✅ **Bootstrap:** Create initial `.user` file with system admin token
 - ✅ **Emergency Access:** Recover from corrupted `.user` files
 - ✅ **Admin Override:** Always have admin access regardless of auth provider
 
 **Security:**
-- ⚠️ Super user token must be LONG and RANDOM (min 32 chars)
+- ⚠️ System admin token must be LONG and RANDOM (min 32 chars)
 - ⚠️ Store in secure secret management (Vault, AWS Secrets Manager)
 - ⚠️ Rotate regularly
 - ⚠️ Never commit to git
@@ -234,11 +234,11 @@ v1.Use(authMiddleware.Handler())
 **Example:**
 ```bash
 # Generate secure token
-SUPER_USER_TOKEN=$(openssl rand -hex 32)
+SYSTEM_ADMIN_TOKEN=$(openssl rand -hex 32)
 
 # Use it to bootstrap
 curl -X POST http://localhost:8080/api/v1/files \
-  -H "Authorization: Bearer $SUPER_USER_TOKEN" \
+  -H "Authorization: Bearer $SYSTEM_ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "directory_path": "/",
@@ -290,19 +290,19 @@ curl -X POST http://localhost:8080/api/v1/files \
 **Configuration:**
 ```bash
 AUTH_PROVIDER=file
-FILE_AUTH_DIRECTORY=/              # Where to find .user file
-USER_CACHE_TTL_SECONDS=300        # Cache user data
-SUPER_USER_TOKEN=bootstrap-token  # For initial setup
+FILE_AUTH_DIRECTORY=/                 # Where to find .user file
+USER_CACHE_TTL_SECONDS=300           # Cache user data
+SYSTEM_ADMIN_TOKEN=bootstrap-token   # For initial setup
 ```
 
 **Bootstrap workflow:**
 ```bash
-# Step 1: Start VFS with super user token
-export SUPER_USER_TOKEN=my-bootstrap-secret
+# Step 1: Start VFS with system admin token
+export SYSTEM_ADMIN_TOKEN=my-bootstrap-secret
 export AUTH_PROVIDER=file
 ./vfs
 
-# Step 2: Create .user file with super user token
+# Step 2: Create .user file with system admin token
 curl -X POST http://localhost:8080/api/v1/files \
   -H "Authorization: Bearer my-bootstrap-secret" \
   -d '{

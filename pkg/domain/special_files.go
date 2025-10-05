@@ -17,6 +17,7 @@ const (
 	SpecialFileTypeEvents  SpecialFileType = ".events"
 	SpecialFileTypeUser    SpecialFileType = ".user"
 	SpecialFileTypeGroup   SpecialFileType = ".group"
+	SpecialFileTypeOwner   SpecialFileType = ".owner"  // Directory ownership
 )
 
 // SpecialFileDefinition defines metadata for a special file type
@@ -61,7 +62,7 @@ var SpecialFileRegistry = map[SpecialFileType]*SpecialFileDefinition{
 		ContentType:       "application/json",
 		AdminOnly:         true,
 		ValidateFunc:      validateUserConfig,
-		InheritFromParent: false, // Users are per-directory, not inherited
+		InheritFromParent: true, // Users inherit from parent directories
 	},
 	SpecialFileTypeGroup: {
 		Name:              SpecialFileTypeGroup,
@@ -70,6 +71,14 @@ var SpecialFileRegistry = map[SpecialFileType]*SpecialFileDefinition{
 		AdminOnly:         true,
 		ValidateFunc:      validateGroupConfig,
 		InheritFromParent: false, // Groups are per-directory, not inherited
+	},
+	SpecialFileTypeOwner: {
+		Name:              SpecialFileTypeOwner,
+		Description:       "Directory ownership - controls visibility and access",
+		ContentType:       "application/json",
+		AdminOnly:         false, // Users can set ownership on their own directories
+		ValidateFunc:      validateOwnerConfig,
+		InheritFromParent: true, // Ownership inherits to child directories
 	},
 }
 
@@ -128,6 +137,12 @@ func RequiresAdmin(filename string) bool {
 		return true
 	}
 	return def.AdminOnly
+}
+
+// IsSystemAdmin checks if a user has system admin privileges
+// System admins bypass all authorization checks
+func IsSystemAdmin(userRole string) bool {
+	return userRole == "system-admin"
 }
 
 // SupportsInheritance checks if this special file type supports parent inheritance
@@ -301,11 +316,10 @@ type UserConfig struct {
 }
 
 type UserCredential struct {
-	UserID       string   `json:"user_id"`
-	PasswordHash string   `json:"password_hash"` // bcrypt hash
-	Token        string   `json:"token,omitempty"` // Optional static token
-	Role         string   `json:"role"`
-	Groups       []string `json:"groups,omitempty"`
+	UserID       string `json:"user_id"`
+	PasswordHash string `json:"password_hash"`   // bcrypt hash
+	Token        string `json:"token,omitempty"`  // Optional static token
+	Role         string `json:"role"`
 }
 
 // validateUserConfig validates .user file content
@@ -375,6 +389,26 @@ func validateGroupConfig(content []byte) error {
 			return fmt.Errorf("duplicate group_id: %s", group.GroupID)
 		}
 		groupIDs[group.GroupID] = true
+	}
+
+	return nil
+}
+
+// OwnerConfig represents the structure of a .owner file
+type OwnerConfig struct {
+	Owner string `json:"owner"` // User ID of the directory owner
+}
+
+// validateOwnerConfig validates .owner file content
+func validateOwnerConfig(content []byte) error {
+	var ownerConfig OwnerConfig
+
+	if err := json.Unmarshal(content, &ownerConfig); err != nil {
+		return fmt.Errorf("invalid owner JSON: %w", err)
+	}
+
+	if ownerConfig.Owner == "" {
+		return fmt.Errorf("owner is required")
 	}
 
 	return nil

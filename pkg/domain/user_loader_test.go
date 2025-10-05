@@ -167,7 +167,6 @@ func TestUserLoader_LoadUser(t *testing.T) {
 				UserID:       "alice",
 				PasswordHash: hashPassword("password123"),
 				Role:         "admin",
-				Groups:       []string{"admins", "developers"},
 			},
 			{
 				UserID:       "bob",
@@ -199,9 +198,6 @@ func TestUserLoader_LoadUser(t *testing.T) {
 				}
 				if user.Role != "admin" {
 					t.Errorf("Expected role admin, got %s", user.Role)
-				}
-				if len(user.Groups) != 2 {
-					t.Errorf("Expected 2 groups, got %d", len(user.Groups))
 				}
 			},
 		},

@@ -18,13 +18,13 @@ import (
 
 // NewAuthExtractorFromConfig creates an auth extractor based on config
 func NewAuthExtractorFromConfig(cfg config.AuthConfig, fileRepo repository.FileRepository, dirRepo repository.DirectoryRepository) (AuthExtractor, error) {
-	// ALWAYS check super user first (hybrid auth)
+	// ALWAYS check system admin first (hybrid auth)
 	baseExtractor, err := createBaseExtractor(cfg, fileRepo, dirRepo)
 	if err != nil {
 		return nil, err
 	}
 
-	// Wrap with super user check
+	// Wrap with system admin check
 	return NewHybridAuthExtractor(cfg, baseExtractor), nil
 }
 
@@ -67,9 +67,8 @@ func createBaseExtractor(cfg config.AuthConfig, fileRepo repository.FileReposito
 // ============================================================================
 
 type JWTClaims struct {
-	UserID string   `json:"user_id"`
-	Role   string   `json:"role"`
-	Groups []string `json:"groups"`
+	UserID string `json:"user_id"`
+	Role   string `json:"role"`
 	jwt.RegisteredClaims
 }
 
@@ -106,7 +105,6 @@ func NewJWTAuthExtractor(secretKey, issuer string) (AuthExtractor, error) {
 		return AuthContext{
 			UserID: claims.UserID,
 			Role:   claims.Role,
-			Groups: claims.Groups,
 		}, nil
 	}, nil
 }
@@ -151,16 +149,16 @@ func NewProxyAuthExtractor(sharedSecret string) (AuthExtractor, error) {
 	}
 
 	return func(tokenString string) (AuthContext, error) {
-		// Token format: "userID:role:groups:timestamp:signature"
+		// Token format: "userID:role:timestamp:signature"
 		parts := strings.Split(tokenString, ":")
-		if len(parts) != 5 {
+		if len(parts) != 4 {
 			return AuthContext{}, fmt.Errorf("invalid proxy token format")
 		}
 
-		userID, role, groupsStr, timestampStr, signature := parts[0], parts[1], parts[2], parts[3], parts[4]
+		userID, role, timestampStr, signature := parts[0], parts[1], parts[2], parts[3]
 
 		// Verify signature (HMAC)
-		message := fmt.Sprintf("%s:%s:%s:%s", userID, role, groupsStr, timestampStr)
+		message := fmt.Sprintf("%s:%s:%s", userID, role, timestampStr)
 		expectedSig := computeHMAC(message, sharedSecret)
 
 		if !hmac.Equal([]byte(signature), []byte(expectedSig)) {
@@ -177,15 +175,9 @@ func NewProxyAuthExtractor(sharedSecret string) (AuthExtractor, error) {
 			return AuthContext{}, fmt.Errorf("token expired")
 		}
 
-		groups := []string{}
-		if groupsStr != "" {
-			groups = strings.Split(groupsStr, ",")
-		}
-
 		return AuthContext{
 			UserID: userID,
 			Role:   role,
-			Groups: groups,
 		}, nil
 	}, nil
 }
@@ -210,7 +202,6 @@ func NewHeaderAuthExtractor(allowAnonymous bool) AuthExtractor {
 			return AuthContext{
 				UserID: "anonymous",
 				Role:   "user",
-				Groups: []string{},
 			}, nil
 		}
 
@@ -219,20 +210,19 @@ func NewHeaderAuthExtractor(allowAnonymous bool) AuthExtractor {
 }
 
 // ============================================================================
-// Hybrid Auth Extractor (Super User + Base Provider)
+// Hybrid Auth Extractor (System Admin + Base Provider)
 // ============================================================================
 
-// NewHybridAuthExtractor wraps any auth extractor with super user check
+// NewHybridAuthExtractor wraps any auth extractor with system admin check
 func NewHybridAuthExtractor(cfg config.AuthConfig, baseExtractor AuthExtractor) AuthExtractor {
 	return func(tokenString string) (AuthContext, error) {
-		// 1. Check if token matches super user token
-		if cfg.SuperUserToken != "" && tokenString == cfg.SuperUserToken {
+		// 1. Check if token matches system admin token
+		if cfg.SystemAdminToken != "" && tokenString == cfg.SystemAdminToken {
 			return AuthContext{
-				UserID: cfg.SuperUserID,
-				Role:   cfg.SuperUserRole,
-				Groups: []string{"super-admins"},
+				UserID: cfg.SystemAdminID,
+				Role:   cfg.SystemAdminRole,
 				Metadata: map[string]interface{}{
-					"auth_type": "super_user",
+					"auth_type": "system_admin",
 				},
 			}, nil
 		}
@@ -260,7 +250,6 @@ func NewFileAuthExtractor(cfg config.AuthConfig, fileRepo repository.FileReposit
 		return AuthContext{
 			UserID: user.UserID,
 			Role:   user.Role,
-			Groups: user.Groups,
 			Metadata: map[string]interface{}{
 				"auth_type": "file_based",
 			},

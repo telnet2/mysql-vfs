@@ -57,10 +57,10 @@ type AuthConfig struct {
 	// Optional: allow anonymous access (no auth required)
 	AllowAnonymous bool
 
-	// Super User (environment-based, always works)
-	SuperUserToken string // Token that grants super user access
-	SuperUserID    string // User ID for super user (default: "super-admin")
-	SuperUserRole  string // Role for super user (default: "super-admin")
+	// System Admin (environment-based, bypasses all authorization)
+	SystemAdminToken string // Token that grants system admin access
+	SystemAdminID    string // User ID for system admin (default: "system-admin")
+	SystemAdminRole  string // Role for system admin (default: "system-admin")
 
 	// File-based auth (.user files)
 	FileAuthDirectory string // Directory containing .user file (default: "/")
@@ -91,9 +91,9 @@ func LoadFromEnv() *Config {
 			MTLSCertFile:          getEnv("AUTH_MTLS_CERT_FILE", ""),
 			MTLSKeyFile:           getEnv("AUTH_MTLS_KEY_FILE", ""),
 			AllowAnonymous:        getEnvBool("AUTH_ALLOW_ANONYMOUS", false),
-			SuperUserToken:        getEnv("SUPER_USER_TOKEN", ""),
-			SuperUserID:           getEnv("SUPER_USER_ID", "super-admin"),
-			SuperUserRole:         getEnv("SUPER_USER_ROLE", "super-admin"),
+			SystemAdminToken:      getEnv("SYSTEM_ADMIN_TOKEN", ""),
+			SystemAdminID:         getEnv("SYSTEM_ADMIN_ID", "system-admin"),
+			SystemAdminRole:       getEnv("SYSTEM_ADMIN_ROLE", "system-admin"),
 			FileAuthDirectory:     getEnv("FILE_AUTH_DIRECTORY", "/"),
 			UserCacheTTL:          getEnvDuration("USER_CACHE_TTL_SECONDS", 5*time.Minute),
 		},
