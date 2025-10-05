@@ -40,6 +40,7 @@ type AuthConfig struct {
 	// JWT Configuration
 	JWTSecret string
 	JWTIssuer string
+	JWTTTL    time.Duration
 
 	// OAuth Configuration
 	OAuthIntrospectionURL string
@@ -60,7 +61,6 @@ type AuthConfig struct {
 	// System Admin (environment-based, bypasses all authorization)
 	SystemAdminToken string // Token that grants system admin access
 	SystemAdminID    string // User ID for system admin (default: "system-admin")
-	SystemAdminRole  string // Role for system admin (default: "system-admin")
 
 	// File-based auth (.user files)
 	FileAuthDirectory string // Directory containing .user file (default: "/")
@@ -81,8 +81,9 @@ func LoadFromEnv() *Config {
 		// Authentication
 		Auth: AuthConfig{
 			Provider:              getEnv("AUTH_PROVIDER", "headers"), // headers=dev only, jwt=production, file=.user files
-			JWTSecret:             getEnv("AUTH_JWT_SECRET", ""),
-			JWTIssuer:             getEnv("AUTH_JWT_ISSUER", ""),
+			JWTSecret:             getEnv("AUTH_JWT_SECRET", "change-me-in-production"),
+			JWTIssuer:             getEnv("AUTH_JWT_ISSUER", "mysql-vfs"),
+			JWTTTL:                getEnvDuration("AUTH_JWT_TTL_SECONDS", 24*time.Hour),
 			OAuthIntrospectionURL: getEnv("AUTH_OAUTH_INTROSPECTION_URL", ""),
 			OAuthClientID:         getEnv("AUTH_OAUTH_CLIENT_ID", ""),
 			OAuthClientSecret:     getEnv("AUTH_OAUTH_CLIENT_SECRET", ""),
@@ -93,7 +94,6 @@ func LoadFromEnv() *Config {
 			AllowAnonymous:        getEnvBool("AUTH_ALLOW_ANONYMOUS", false),
 			SystemAdminToken:      getEnv("SYSTEM_ADMIN_TOKEN", ""),
 			SystemAdminID:         getEnv("SYSTEM_ADMIN_ID", "system-admin"),
-			SystemAdminRole:       getEnv("SYSTEM_ADMIN_ROLE", "system-admin"),
 			FileAuthDirectory:     getEnv("FILE_AUTH_DIRECTORY", "/"),
 			UserCacheTTL:          getEnvDuration("USER_CACHE_TTL_SECONDS", 5*time.Minute),
 		},

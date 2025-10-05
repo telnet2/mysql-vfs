@@ -11,15 +11,15 @@ import (
 
 	"github.com/telnet2/mysql-vfs/citest/fixtures"
 	"github.com/telnet2/mysql-vfs/pkg/models"
-	"github.com/telnet2/mysql-vfs/pkg/services"
+	"github.com/telnet2/mysql-vfs/pkg/domain"
 )
 
 var _ = Describe("VFS File Operations", Ordered, func() {
 	var (
 		testDB      *fixtures.TestDatabase
 		testS3      *fixtures.TestS3
-		dirService  *services.DirectoryService
-		fileService *services.FileService
+		dirService  *domain.DirectoryService
+		fileService *domain.FileService
 		ctx         context.Context
 	)
 
@@ -33,10 +33,10 @@ var _ = Describe("VFS File Operations", Ordered, func() {
 		testS3 = fixtures.NewTestS3()
 		GinkgoWriter.Println("   ✓ S3 ready")
 
-		dirService = services.NewDirectoryService(testDB.GetDB())
+		dirService = domain.NewDirectoryService(testDB.GetDB())
 
 		// Use in-memory storage
-		fileService = services.NewFileService(testDB.GetDB(), testS3.Storage)
+		fileService = domain.NewFileService(testDB.GetDB(), testS3.Storage)
 		ctx = context.Background()
 
 		// Create root directory
@@ -77,12 +77,13 @@ var _ = Describe("VFS File Operations", Ordered, func() {
 			Expect(file.Name).To(Equal("hello.txt"))
 			Expect(file.SizeBytes).To(Equal(int64(len(content))))
 			Expect(file.Version).To(Equal(int64(1)))
-			Expect(file.StorageType).To(Equal(models.StorageTypeS3))
+			Expect(file.StorageType).To(Equal(models.StorageTypeText)) // Text files < 16MB stored as text
 			Expect(file.ChecksumSHA256).NotTo(BeEmpty())
 		})
 
 		It("should store file content in S3", func() {
-			content := "Test content for S3"
+			// Create 20MB text file (exceeds 16MB threshold for MySQL storage)
+			content := strings.Repeat("Test content for S3 storage\n", 700000) // ~20MB
 			file, err := fileService.CreateFile(
 				ctx,
 				"/",

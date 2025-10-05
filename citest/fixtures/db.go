@@ -12,8 +12,8 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	"github.com/telnet2/mysql-vfs/pkg/db"
 	"github.com/telnet2/mysql-vfs/pkg/models"
+	persistencedb "github.com/telnet2/mysql-vfs/pkg/persistence/db"
 )
 
 // TestDatabase manages a MySQL test container
@@ -77,7 +77,7 @@ func NewTestDatabase() *TestDatabase {
 	// Verify connection works
 	maxRetries := 5
 	for i := 0; i < maxRetries; i++ {
-		testGormDB, err := db.Connect(db.Config{
+		testGormDB, err := persistencedb.Connect(persistencedb.Config{
 			DSN:      dsn,
 			LogLevel: logger.Silent,
 		})
@@ -102,14 +102,14 @@ func NewTestDatabase() *TestDatabase {
 
 // Migrate runs database migrations
 func (td *TestDatabase) Migrate() {
-	gormDB, err := db.Connect(db.Config{
+	gormDB, err := persistencedb.Connect(persistencedb.Config{
 		DSN:      td.DSN,
 		LogLevel: logger.Silent,
 	})
 	Expect(err).NotTo(HaveOccurred())
 
 	// Run migrations explicitly
-	err = db.AutoMigrate(gormDB)
+	err = persistencedb.AutoMigrate(gormDB)
 	Expect(err).NotTo(HaveOccurred())
 
 	sqlDB, err := gormDB.DB()
@@ -119,7 +119,7 @@ func (td *TestDatabase) Migrate() {
 
 // GetDB returns a GORM database connection
 func (td *TestDatabase) GetDB() *gorm.DB {
-	gormDB, err := db.Connect(db.Config{
+	gormDB, err := persistencedb.Connect(persistencedb.Config{
 		DSN:      td.DSN,
 		LogLevel: logger.Silent,
 	})

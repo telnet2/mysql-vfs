@@ -13,11 +13,11 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/telnet2/mysql-vfs/pkg/config"
 	"github.com/telnet2/mysql-vfs/pkg/domain"
-	"github.com/telnet2/mysql-vfs/pkg/repository"
+	"github.com/telnet2/mysql-vfs/pkg/persistence/db"
 )
 
 // NewAuthExtractorFromConfig creates an auth extractor based on config
-func NewAuthExtractorFromConfig(cfg config.AuthConfig, fileRepo repository.FileRepository, dirRepo repository.DirectoryRepository) (AuthExtractor, error) {
+func NewAuthExtractorFromConfig(cfg config.AuthConfig, fileRepo db.FileRepository, dirRepo db.DirectoryRepository) (AuthExtractor, error) {
 	// ALWAYS check system admin first (hybrid auth)
 	baseExtractor, err := createBaseExtractor(cfg, fileRepo, dirRepo)
 	if err != nil {
@@ -28,7 +28,7 @@ func NewAuthExtractorFromConfig(cfg config.AuthConfig, fileRepo repository.FileR
 	return NewHybridAuthExtractor(cfg, baseExtractor), nil
 }
 
-func createBaseExtractor(cfg config.AuthConfig, fileRepo repository.FileRepository, dirRepo repository.DirectoryRepository) (AuthExtractor, error) {
+func createBaseExtractor(cfg config.AuthConfig, fileRepo db.FileRepository, dirRepo db.DirectoryRepository) (AuthExtractor, error) {
 	switch cfg.Provider {
 	case "jwt":
 		return NewJWTAuthExtractor(cfg.JWTSecret, cfg.JWTIssuer)
@@ -67,8 +67,8 @@ func createBaseExtractor(cfg config.AuthConfig, fileRepo repository.FileReposito
 // ============================================================================
 
 type JWTClaims struct {
-	UserID string `json:"user_id"`
-	Role   string `json:"role"`
+	UserID string   `json:"user_id"`
+	Groups []string `json:"groups"`
 	jwt.RegisteredClaims
 }
 
@@ -104,7 +104,7 @@ func NewJWTAuthExtractor(secretKey, issuer string) (AuthExtractor, error) {
 
 		return AuthContext{
 			UserID: claims.UserID,
-			Role:   claims.Role,
+			Groups: claims.Groups,
 		}, nil
 	}, nil
 }
@@ -149,16 +149,17 @@ func NewProxyAuthExtractor(sharedSecret string) (AuthExtractor, error) {
 	}
 
 	return func(tokenString string) (AuthContext, error) {
-		// Token format: "userID:role:timestamp:signature"
+		// Token format: "userID:groups:timestamp:signature"
+		// groups is comma-separated
 		parts := strings.Split(tokenString, ":")
 		if len(parts) != 4 {
 			return AuthContext{}, fmt.Errorf("invalid proxy token format")
 		}
 
-		userID, role, timestampStr, signature := parts[0], parts[1], parts[2], parts[3]
+		userID, groupsStr, timestampStr, signature := parts[0], parts[1], parts[2], parts[3]
 
 		// Verify signature (HMAC)
-		message := fmt.Sprintf("%s:%s:%s", userID, role, timestampStr)
+		message := fmt.Sprintf("%s:%s:%s", userID, groupsStr, timestampStr)
 		expectedSig := computeHMAC(message, sharedSecret)
 
 		if !hmac.Equal([]byte(signature), []byte(expectedSig)) {
@@ -175,9 +176,15 @@ func NewProxyAuthExtractor(sharedSecret string) (AuthExtractor, error) {
 			return AuthContext{}, fmt.Errorf("token expired")
 		}
 
+		// Parse groups (comma-separated)
+		var groups []string
+		if groupsStr != "" {
+			groups = strings.Split(groupsStr, ",")
+		}
+
 		return AuthContext{
 			UserID: userID,
-			Role:   role,
+			Groups: groups,
 		}, nil
 	}, nil
 }
@@ -201,7 +208,7 @@ func NewHeaderAuthExtractor(allowAnonymous bool) AuthExtractor {
 		if allowAnonymous {
 			return AuthContext{
 				UserID: "anonymous",
-				Role:   "user",
+				Groups: []string{},
 			}, nil
 		}
 
@@ -220,7 +227,7 @@ func NewHybridAuthExtractor(cfg config.AuthConfig, baseExtractor AuthExtractor) 
 		if cfg.SystemAdminToken != "" && tokenString == cfg.SystemAdminToken {
 			return AuthContext{
 				UserID: cfg.SystemAdminID,
-				Role:   cfg.SystemAdminRole,
+				Groups: []string{"system-admin"},
 				Metadata: map[string]interface{}{
 					"auth_type": "system_admin",
 				},
@@ -237,7 +244,7 @@ func NewHybridAuthExtractor(cfg config.AuthConfig, baseExtractor AuthExtractor) 
 // ============================================================================
 
 // NewFileAuthExtractor creates a file-based auth extractor
-func NewFileAuthExtractor(cfg config.AuthConfig, fileRepo repository.FileRepository, dirRepo repository.DirectoryRepository) (AuthExtractor, error) {
+func NewFileAuthExtractor(cfg config.AuthConfig, fileRepo db.FileRepository, dirRepo db.DirectoryRepository) (AuthExtractor, error) {
 	userLoader := domain.NewUserLoader(fileRepo, dirRepo, cfg.UserCacheTTL)
 
 	return func(tokenString string) (AuthContext, error) {
@@ -249,7 +256,7 @@ func NewFileAuthExtractor(cfg config.AuthConfig, fileRepo repository.FileReposit
 
 		return AuthContext{
 			UserID: user.UserID,
-			Role:   user.Role,
+			Groups: user.Groups,
 			Metadata: map[string]interface{}{
 				"auth_type": "file_based",
 			},

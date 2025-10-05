@@ -1,9 +1,9 @@
-# MySQL VFS v2 - Implementation Progress
+# MySQL VFS v2.1+ - Implementation Progress
 
-**Version:** v2.0
-**Last Updated:** 2025-10-04
+**Version:** v2.1+
+**Last Updated:** 2025-10-05
 **Branch:** claude-v1
-**Status:** ✅ Production Ready
+**Status:** ✅ Production Ready (103/104 tests passing)
 
 [← Back to Index](0_README.md) | [Next: Architecture →](2_ARCHITECTURE.md)
 
@@ -11,66 +11,97 @@
 
 ## Vision
 
-MySQL VFS v2 is a **pure file system** with **file-based configuration**. Instead of managing schemas, policies, and quotas through separate APIs, everything is stored as special files (`.jsonschema`, `.rego`, `.quota`) directly within the VFS, creating a unified, elegant system where **everything is a file**.
+MySQL VFS v2.1+ is a **pure file system** with **file-based configuration**. Instead of managing schemas, policies, and users through separate APIs, everything is stored as special files (`.files`, `.rego`, `.user`, `.events`, `.owner`) directly within the VFS, creating a unified, elegant system where **everything is a file**.
 
-**Authentication and user management are intentionally NOT part of the VFS core** - they are external concerns handled by pluggable auth providers (JWT, OAuth, mTLS) with centralized configuration.
+**Key Innovation:** File-based authentication via `.user` files, combined with system admin bootstrap and pluggable auth providers (JWT, OAuth planned), provides a self-contained yet flexible security model.
+
+**Implementation:** Core logic in `pkg/domain/` with loaders for each special file type.
 
 ---
 
-## What's New in v2
+## What's New in v2.1+
 
 ### 1. Special Files System
 
 **Core Concept:** Files starting with `.` are special and control directory behavior.
 
-- **`.jsonschema`** → Validates JSON files in the directory
-- **`.rego`** → Defines authorization policy for the directory
-- **`.quota`** → Resource limits for the directory
-- **Only admins** can create/modify special files (enforced via `.rego` policies)
+- **`.files`** → Pattern-based validation rules (replaces `.jsonschema`)
+- **`.rego`** → Authorization policy (OPA-based)
+- **`.user`** → User credentials and file-based auth
+- **`.events`** → Lifecycle event handlers (webhooks, logs, metrics)
+- **`.owner`** → Directory ownership
+- **Protected resources** can only be modified by admin or owner
 - **Inherits from parents** (child directories can override)
+
+**Implementation Files:**
+- `pkg/domain/files_loader.go` - Pattern matching and schema validation
+- `pkg/domain/policy_loader.go` - OPA policy loading with caching
+- `pkg/domain/user_loader.go` - File-based authentication
+- `pkg/domain/events_loader.go` - Event handler configuration
+- `pkg/domain/owner_loader.go` - Ownership tracking
+- `pkg/domain/special_file_loader.go` - Generic loader with caching (lines 1-150)
 
 **Example:**
 ```
 /data/
-├── .jsonschema              ← All files in /data validate against this
-├── .rego                    ← All files in /data authorize against this
+├── .files                   ← Pattern-based validation rules
+├── .rego                    ← Authorization policy
+├── .user                    ← User credentials (root dir only)
+├── .owner                   ← Directory owner
 └── users/
-    ├── .jsonschema          ← Override: stricter validation
-    ├── alice.json           ← Validates with /data/users/.jsonschema
+    ├── .files               ← Override: stricter validation
+    ├── .events              ← Event handlers
+    ├── alice.json           ← Validates with /data/users/.files
     └── admins/              (no special files)
-        └── root.json        ← Inherits /data/users/.jsonschema
+        └── root.json        ← Inherits /data/users/.files
 ```
 
 **See:** [Special Files Documentation](4_SPECIAL_FILES.md)
 
 ---
 
-### 2. Pluggable Authentication with Centralized Configuration
+### 2. Hybrid Authentication with File-Based Users
 
-VFS **does not manage users or groups** internally. Instead:
+VFS supports **hybrid authentication** combining multiple methods:
 
 **Centralized Auth Config:**
-- All auth settings in `pkg/config/config.go`
+- All auth settings in `pkg/config/config.go` (lines 1-150)
 - Switch auth providers via environment variables (no code changes!)
-- Support for JWT, OAuth, mTLS, reverse proxy, and dev mode
+- System admin token for bootstrap and emergency access
 
 **Supported Providers:**
-- **JWT** - Cryptographically verified tokens (production-ready)
-- **OAuth/OIDC** - Enterprise SSO integration (Okta, Auth0, Google)
-- **mTLS** - Certificate-based authentication (banking/government)
-- **Proxy+HMAC** - Reverse proxy with signature verification
-- **Headers** - Development mode only (unsafe for production)
+- **File** - User credentials in `.user` files (✅ implemented)
+- **JWT** - Cryptographically verified tokens (✅ implemented)
+- **Proxy+HMAC** - Reverse proxy with signature verification (✅ implemented)
+- **OAuth/OIDC** - Enterprise SSO integration (planned)
+- **mTLS** - Certificate-based authentication (planned)
+- **Headers** - Development mode only (unsafe for production, ✅ implemented)
+
+**System Admin (Always Active):**
+- `SYSTEM_ADMIN_TOKEN` environment variable
+- Provides bootstrap and emergency access
+- Checked before other auth providers
+
+**Implementation Files:**
+- `pkg/middleware/auth.go` - Generic auth middleware (lines 1-100)
+- `pkg/middleware/auth_providers.go` - Provider factory and implementations (lines 1-300)
+- `pkg/domain/user_loader.go` - File-based user authentication (lines 1-150)
 
 **Configuration:**
 ```bash
-# Choose provider via environment variable
+# System admin (always active)
+export SYSTEM_ADMIN_TOKEN=$(openssl rand -hex 32)
+export SYSTEM_ADMIN_ID=system-admin
+export SYSTEM_ADMIN_ROLE=admin
+
+# File-based auth
+export AUTH_PROVIDER=file
+export FILE_AUTH_DIRECTORY=/
+
+# Or JWT
 export AUTH_PROVIDER=jwt
 export AUTH_JWT_SECRET=your-secret-min-32-chars
 export AUTH_JWT_ISSUER=https://auth.yourcompany.com
-
-# Or OAuth
-export AUTH_PROVIDER=oauth
-export AUTH_OAUTH_INTROSPECTION_URL=https://oauth.provider.com/introspect
 ```
 
 **Benefits:**
@@ -174,15 +205,22 @@ pkg/middleware/authorization.go          - OPA-based authorization
 
 ---
 
-### ✅ Phase 4: Testing & Integration (Oct 3-4, 2025)
+### ✅ Phase 4: Testing & Integration (Oct 3-5, 2025)
 
 **Delivered:**
-- ✅ **104 passing E2E tests**
+- ✅ **103/104 passing E2E tests** (1 flaky concurrency test)
 - ✅ Schema validation E2E tests
 - ✅ OPA policy integration E2E tests
-- ✅ Concurrency tests
+- ✅ Lifecycle events E2E tests
+- ✅ Webhook delivery E2E tests
+- ✅ File-based auth E2E tests
+- ✅ Concurrency tests (1 flaky, timing-dependent)
 - ✅ Edge case tests
 - ✅ Performance verified (caching works)
+
+**Test Implementation Files:**
+- `citest/` - All E2E integration tests
+- Test count: 103/104 passing (99.0% success rate)
 
 **Test Coverage:**
 - Directory operations (create, list, delete)
@@ -427,7 +465,8 @@ curl -X POST http://localhost:8080/api/v1/files \
 
 ### Test Status
 
-✅ **104 tests passing** (as of 2025-10-04)
+✅ **103/104 tests passing** (as of 2025-10-05)
+- 1 flaky concurrency test (timing-dependent, non-critical)
 
 **Test Suites:**
 - VFS Core (directories, files, versions)

@@ -13,15 +13,15 @@ import (
 	"github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"github.com/telnet2/mysql-vfs/pkg/config"
-	"github.com/telnet2/mysql-vfs/pkg/db"
 	"github.com/telnet2/mysql-vfs/pkg/domain"
 	"github.com/telnet2/mysql-vfs/pkg/events/handlers"
 	"github.com/telnet2/mysql-vfs/pkg/idempotency"
 	"github.com/telnet2/mysql-vfs/pkg/middleware"
 	"github.com/telnet2/mysql-vfs/pkg/models"
-	gormrepo "github.com/telnet2/mysql-vfs/pkg/repository/gorm"
-	"github.com/telnet2/mysql-vfs/pkg/services"
-	"github.com/telnet2/mysql-vfs/pkg/storage"
+	persistencedb "github.com/telnet2/mysql-vfs/pkg/persistence/db"
+	"github.com/telnet2/mysql-vfs/pkg/persistence/db/mysql"
+	"github.com/telnet2/mysql-vfs/pkg/persistence/storage"
+	vfshandlers "github.com/telnet2/mysql-vfs/services/vfs/handlers"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
@@ -29,8 +29,8 @@ import (
 type VFSServer struct {
 	db                 *gorm.DB
 	storage            storage.Storage
-	dirService         *services.DirectoryService
-	fileService        *services.FileService
+	dirService         *domain.DirectoryService
+	fileService        *domain.FileService
 	idempotencyService *idempotency.Service
 	filesLoader        *domain.FilesLoader
 	policyLoader       *domain.PolicyLoader
@@ -52,7 +52,7 @@ func main() {
 
 	// Connect to database
 	log.Println("Connecting to database...")
-	database, err := db.Connect(db.Config{
+	database, err := persistencedb.Connect(persistencedb.Config{
 		DSN:      cfg.DatabaseDSN,
 		LogLevel: gormLogLevel,
 	})
@@ -62,7 +62,7 @@ func main() {
 
 	// Run migrations
 	log.Println("Running database migrations...")
-	if err := db.AutoMigrate(database); err != nil {
+	if err := persistencedb.AutoMigrate(database); err != nil {
 		log.Fatalf("Failed to run migrations: %v", err)
 	}
 	log.Println("Migrations completed successfully")
@@ -77,13 +77,15 @@ func main() {
 	log.Println("Storage initialized successfully")
 
 	// Initialize repositories
-	fileRepo := gormrepo.NewGormFileRepository(database)
-	dirRepo := gormrepo.NewGormDirectoryRepository(database)
+	fileRepo := mysql.NewGormFileRepository(database, storageService)
+	dirRepo := mysql.NewGormDirectoryRepository(database)
 
 	// Initialize loaders with caching (from config)
 	filesLoader := domain.NewFilesLoader(fileRepo, dirRepo, cfg.SchemaCacheTTL)
 	policyLoader := domain.NewPolicyLoader(fileRepo, dirRepo, cfg.PolicyCacheTTL)
 	eventsLoader := domain.NewEventsLoader(fileRepo, dirRepo, cfg.SchemaCacheTTL) // Reuse schema TTL for events
+	userLoader := domain.NewUserLoader(fileRepo, dirRepo, cfg.Auth.UserCacheTTL)
+	groupLoader := domain.NewGroupLoader(fileRepo, dirRepo, cfg.SchemaCacheTTL)
 
 	// Initialize event handler registry
 	handlerRegistry := handlers.NewRegistry()
@@ -101,8 +103,8 @@ func main() {
 	)
 
 	// Initialize services
-	dirService := services.NewDirectoryServiceWithLifecycle(database, eventTrigger)
-	fileService := services.NewFileServiceWithLifecycle(database, storageService, filesLoader, eventTrigger)
+	dirService := domain.NewDirectoryServiceWithLifecycle(database, eventTrigger)
+	fileService := domain.NewFileServiceWithLifecycle(database, storageService, filesLoader, eventTrigger)
 	idempotencyService := idempotency.NewServiceWithTTL(database, cfg.IdempotencyTTL)
 
 	// Start idempotency cleanup worker
@@ -141,6 +143,10 @@ func main() {
 	h.GET("/health", vfsServer.healthHandler)
 	h.GET("/ready", vfsServer.readyHandler)
 
+	// Auth routes (no auth middleware, these create tokens)
+	authHandler := vfshandlers.NewAuthHandler(userLoader, groupLoader, cfg.Auth.JWTSecret, cfg.Auth.JWTTTL)
+	h.POST("/api/v1/auth/login", authHandler.Login)
+
 	// API v1 routes
 	v1 := h.Group("/api/v1")
 	v1.Use(idempotencyService.Middleware())
@@ -174,7 +180,7 @@ func (s *VFSServer) healthHandler(ctx context.Context, c *app.RequestContext) {
 	checks := make(map[string]string)
 
 	// Check database connectivity
-	if err := db.HealthCheck(s.db); err != nil {
+	if err := persistencedb.HealthCheck(s.db); err != nil {
 		checks["database"] = fmt.Sprintf("unhealthy: %v", err)
 		c.JSON(consts.StatusServiceUnavailable, map[string]interface{}{
 			"status": "degraded",
@@ -212,7 +218,7 @@ func (s *VFSServer) healthHandler(ctx context.Context, c *app.RequestContext) {
 
 // readyHandler returns readiness status (for Kubernetes)
 func (s *VFSServer) readyHandler(ctx context.Context, c *app.RequestContext) {
-	if err := db.HealthCheck(s.db); err != nil {
+	if err := persistencedb.HealthCheck(s.db); err != nil {
 		c.JSON(consts.StatusServiceUnavailable, map[string]interface{}{
 			"ready": false,
 			"reason": err.Error(),

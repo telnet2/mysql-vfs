@@ -12,15 +12,15 @@ import (
 
 	"github.com/telnet2/mysql-vfs/citest/fixtures"
 	"github.com/telnet2/mysql-vfs/pkg/models"
-	"github.com/telnet2/mysql-vfs/pkg/services"
+	"github.com/telnet2/mysql-vfs/pkg/domain"
 )
 
 var _ = Describe("End-to-End VFS Workflow", Ordered, func() {
 	var (
 		testDB      *fixtures.TestDatabase
 		testS3      *fixtures.TestS3
-		dirService  *services.DirectoryService
-		fileService *services.FileService
+		dirService  *domain.DirectoryService
+		fileService *domain.FileService
 		ctx         context.Context
 	)
 
@@ -34,8 +34,8 @@ var _ = Describe("End-to-End VFS Workflow", Ordered, func() {
 		testS3 = fixtures.NewTestS3()
 		GinkgoWriter.Println("   ✓ S3 ready")
 
-		dirService = services.NewDirectoryService(testDB.GetDB())
-		fileService = services.NewFileService(testDB.GetDB(), testS3.Storage)
+		dirService = domain.NewDirectoryService(testDB.GetDB())
+		fileService = domain.NewFileService(testDB.GetDB(), testS3.Storage)
 		ctx = context.Background()
 
 		// Create root directory
@@ -385,7 +385,11 @@ func TestAdd(t *testing.T) {
 				}
 			}
 			Expect(nonRootDirs).To(HaveLen(0))
-			Expect(rootFiles).To(HaveLen(0))
+			// Bootstrap files (.rego and .group) should exist in root
+			Expect(rootFiles).To(HaveLen(2))
+			fileNames := []string{rootFiles[0].Name, rootFiles[1].Name}
+			Expect(fileNames).To(ContainElement(".rego"))
+			Expect(fileNames).To(ContainElement(".group"))
 		})
 	})
 
@@ -396,8 +400,8 @@ func TestAdd(t *testing.T) {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(dataDir.Path).To(Equal("/data"))
 
-			By("Creating a large file (1MB)")
-			largeContent := strings.Repeat("Large data content - ", 50000) // ~1MB
+			By("Creating a large file (20MB)")
+			largeContent := strings.Repeat("Large data content - ", 1000000) // ~20MB
 			largeFile, err := fileService.CreateFile(
 				ctx,
 				"/data",
@@ -407,8 +411,8 @@ func TestAdd(t *testing.T) {
 				io.NopCloser(strings.NewReader(largeContent)),
 			)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(largeFile.SizeBytes).To(BeNumerically(">", 1000000))
-			Expect(string(largeFile.StorageType)).To(Equal("s3")) // Large files go to S3
+			Expect(largeFile.SizeBytes).To(BeNumerically(">", 20000000))
+			Expect(string(largeFile.StorageType)).To(Equal("s3")) // Large files (>16MB) go to S3
 
 			By("Retrieving and verifying large file content")
 			retrievedFile, reader, err := fileService.GetFile(ctx, "/data/large.txt")

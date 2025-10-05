@@ -10,13 +10,13 @@ import (
 
 	"github.com/telnet2/mysql-vfs/citest/fixtures"
 	"github.com/telnet2/mysql-vfs/pkg/models"
-	"github.com/telnet2/mysql-vfs/pkg/services"
+	"github.com/telnet2/mysql-vfs/pkg/domain"
 )
 
 var _ = Describe("VFS Directory Operations", Ordered, func() {
 	var (
 		testDB     *fixtures.TestDatabase
-		dirService *services.DirectoryService
+		dirService *domain.DirectoryService
 		ctx        context.Context
 	)
 
@@ -26,7 +26,7 @@ var _ = Describe("VFS Directory Operations", Ordered, func() {
 		testDB = fixtures.NewTestDatabase()
 		GinkgoWriter.Println("   ✓ MySQL ready")
 
-		dirService = services.NewDirectoryService(testDB.GetDB())
+		dirService = domain.NewDirectoryService(testDB.GetDB())
 		ctx = context.Background()
 
 		// Create root directory

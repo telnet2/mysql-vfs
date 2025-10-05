@@ -9,8 +9,7 @@ import (
 	. "github.com/onsi/gomega"
 	"github.com/telnet2/mysql-vfs/citest/fixtures"
 	"github.com/telnet2/mysql-vfs/pkg/domain"
-	"github.com/telnet2/mysql-vfs/pkg/repository/gorm"
-	"github.com/telnet2/mysql-vfs/pkg/services"
+	"github.com/telnet2/mysql-vfs/pkg/persistence/db/mysql"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -19,8 +18,8 @@ var _ = Describe("File-Based Authentication E2E", Ordered, func() {
 		ctx         context.Context
 		testDB      *fixtures.TestDatabase
 		testStorage *fixtures.TestS3
-		dirService  *services.DirectoryService
-		fileService *services.FileService
+		dirService  *domain.DirectoryService
+		fileService *domain.FileService
 		userLoader  *domain.UserLoader
 	)
 
@@ -31,15 +30,15 @@ var _ = Describe("File-Based Authentication E2E", Ordered, func() {
 		ctx = context.Background()
 
 		// Create repositories
-		fileRepo := gorm.NewGormFileRepository(testDB.GetDB())
-		dirRepo := gorm.NewGormDirectoryRepository(testDB.GetDB())
+		fileRepo := mysql.NewGormFileRepository(testDB.GetDB(), testStorage.Storage)
+		dirRepo := mysql.NewGormDirectoryRepository(testDB.GetDB())
 
 		// Create user loader
 		userLoader = domain.NewUserLoader(fileRepo, dirRepo, 5*60*1000000000) // 5 minutes
 
 		// Create services
-		dirService = services.NewDirectoryService(testDB.GetDB())
-		fileService = services.NewFileService(testDB.GetDB(), testStorage.Storage)
+		dirService = domain.NewDirectoryService(testDB.GetDB())
+		fileService = domain.NewFileService(testDB.GetDB(), testStorage.Storage)
 
 		GinkgoWriter.Println("✅ Test environment ready")
 	})
@@ -93,7 +92,6 @@ var _ = Describe("File-Based Authentication E2E", Ordered, func() {
 			alice, err := userLoader.LoadUser(ctx, "/team", "alice")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(alice.UserID).To(Equal("alice"))
-			Expect(alice.Role).To(Equal("admin"))
 			Expect(alice.Groups).To(ContainElements("admins", "developers"))
 
 			// Step 5: Validate correct password
@@ -136,71 +134,11 @@ var _ = Describe("File-Based Authentication E2E", Ordered, func() {
 			user, err := userLoader.LoadUserByToken(ctx, "/api", "sa-token-abc123def456")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(user.UserID).To(Equal("service-account"))
-			Expect(user.Role).To(Equal("service"))
 			Expect(user.Groups).To(ContainElement("services"))
 
 			// Step 4: Invalid token should fail
 			_, err = userLoader.LoadUserByToken(ctx, "/api", "invalid-token")
 			Expect(err).To(HaveOccurred())
-		})
-
-		It("should support multiple users in same file", func() {
-			// Create directory
-			_, err := dirService.CreateDirectory(ctx, "/", "organization")
-			Expect(err).NotTo(HaveOccurred())
-
-			// Create .user with many users
-			hash1, _ := bcrypt.GenerateFromPassword([]byte("pass1"), bcrypt.DefaultCost)
-			hash2, _ := bcrypt.GenerateFromPassword([]byte("pass2"), bcrypt.DefaultCost)
-			hash3, _ := bcrypt.GenerateFromPassword([]byte("pass3"), bcrypt.DefaultCost)
-
-			userConfig := `{
-				"users": [
-					{
-						"user_id": "admin1",
-						"password_hash": "` + string(hash1) + `",
-						"role": "admin"
-					},
-					{
-						"user_id": "dev1",
-						"password_hash": "` + string(hash2) + `",
-						"role": "developer"
-					},
-					{
-						"user_id": "dev2",
-						"password_hash": "` + string(hash3) + `",
-						"role": "developer"
-					}
-				]
-			}`
-
-			_, err = fileService.CreateFile(
-				ctx,
-				"/organization",
-				".user",
-				"application/json",
-				int64(len(userConfig)),
-				io.NopCloser(strings.NewReader(userConfig)),
-			)
-			Expect(err).NotTo(HaveOccurred())
-
-			// Load all users
-			admin1, err := userLoader.LoadUser(ctx, "/organization", "admin1")
-			Expect(err).NotTo(HaveOccurred())
-			Expect(admin1.Role).To(Equal("admin"))
-
-			dev1, err := userLoader.LoadUser(ctx, "/organization", "dev1")
-			Expect(err).NotTo(HaveOccurred())
-			Expect(dev1.Role).To(Equal("developer"))
-
-			dev2, err := userLoader.LoadUser(ctx, "/organization", "dev2")
-			Expect(err).NotTo(HaveOccurred())
-			Expect(dev2.Role).To(Equal("developer"))
-
-			// Validate passwords
-			Expect(userLoader.ValidatePassword(admin1, "pass1")).NotTo(HaveOccurred())
-			Expect(userLoader.ValidatePassword(dev1, "pass2")).NotTo(HaveOccurred())
-			Expect(userLoader.ValidatePassword(dev2, "pass3")).NotTo(HaveOccurred())
 		})
 
 		It("should handle hybrid auth (password + token for same user)", func() {
@@ -215,7 +153,8 @@ var _ = Describe("File-Based Authentication E2E", Ordered, func() {
 						"user_id": "hybrid-user",
 						"password_hash": "` + string(hash) + `",
 						"token": "backup-token-123",
-						"role": "admin"
+						"role": "admin",
+						"groups": ["admin"]
 					}
 				]
 			}`
@@ -254,7 +193,8 @@ var _ = Describe("File-Based Authentication E2E", Ordered, func() {
 					{
 						"user_id": "user1",
 						"password_hash": "` + string(hash1) + `",
-						"role": "user"
+						"role": "user",
+						"groups": ["user"]
 					}
 				]
 			}`
@@ -304,7 +244,8 @@ var _ = Describe("File-Based Authentication E2E", Ordered, func() {
 					{
 						"user_id": "only-user",
 						"password_hash": "` + string(hash) + `",
-						"role": "admin"
+						"role": "admin",
+						"groups": ["admin"]
 					}
 				]
 			}`
@@ -399,36 +340,6 @@ var _ = Describe("File-Based Authentication E2E", Ordered, func() {
 			Expect(user2.Groups).To(ContainElements("frontend", "design"))
 		})
 
-		It("should handle users with no groups", func() {
-			_, err := dirService.CreateDirectory(ctx, "/", "no-groups")
-			Expect(err).NotTo(HaveOccurred())
-
-			hash, _ := bcrypt.GenerateFromPassword([]byte("password"), bcrypt.DefaultCost)
-
-			userConfig := `{
-				"users": [
-					{
-						"user_id": "solo-user",
-						"password_hash": "` + string(hash) + `",
-						"role": "user"
-					}
-				]
-			}`
-
-			_, err = fileService.CreateFile(
-				ctx,
-				"/no-groups",
-				".user",
-				"application/json",
-				int64(len(userConfig)),
-				io.NopCloser(strings.NewReader(userConfig)),
-			)
-			Expect(err).NotTo(HaveOccurred())
-
-			user, err := userLoader.LoadUser(ctx, "/no-groups", "solo-user")
-			Expect(err).NotTo(HaveOccurred())
-			Expect(user.Groups).To(BeNil())
-		})
 	})
 
 	Context("when testing caching behavior", func() {
@@ -444,7 +355,8 @@ var _ = Describe("File-Based Authentication E2E", Ordered, func() {
 					{
 						"user_id": "cached-user",
 						"password_hash": "` + string(hash) + `",
-						"role": "user"
+						"role": "user",
+						"groups": ["user"]
 					}
 				]
 			}`

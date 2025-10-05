@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/telnet2/mysql-vfs/pkg/models"
-	"github.com/telnet2/mysql-vfs/pkg/repository"
+	"github.com/telnet2/mysql-vfs/pkg/persistence/db"
 )
 
 // Mock repositories for testing
@@ -20,14 +20,14 @@ func (m *mockPolicyFileRepo) FindByDirectoryAndName(ctx context.Context, directo
 	if file, ok := m.files[key]; ok {
 		return file, nil
 	}
-	return nil, repository.ErrNotFound
+	return nil, db.ErrNotFound
 }
 
 func (m *mockPolicyFileRepo) GetLatestVersion(ctx context.Context, fileID string) (*models.FileVersion, error) {
 	if version, ok := m.versions[fileID]; ok {
 		return version, nil
 	}
-	return nil, repository.ErrNotFound
+	return nil, db.ErrNotFound
 }
 
 // Unused methods
@@ -38,7 +38,7 @@ func (m *mockPolicyFileRepo) Update(ctx context.Context, file *models.File) erro
 	return nil
 }
 func (m *mockPolicyFileRepo) FindByID(ctx context.Context, id string) (*models.File, error) {
-	return nil, repository.ErrNotFound
+	return nil, db.ErrNotFound
 }
 func (m *mockPolicyFileRepo) FindByDirectory(ctx context.Context, directoryID string) ([]*models.File, error) {
 	return nil, nil
@@ -53,7 +53,7 @@ func (m *mockPolicyFileRepo) CreateVersion(ctx context.Context, version *models.
 	return nil
 }
 func (m *mockPolicyFileRepo) GetVersion(ctx context.Context, fileID string, version int64) (*models.FileVersion, error) {
-	return nil, repository.ErrNotFound
+	return nil, db.ErrNotFound
 }
 func (m *mockPolicyFileRepo) ListVersions(ctx context.Context, fileID string) ([]*models.FileVersion, error) {
 	return nil, nil
@@ -64,6 +64,15 @@ func (m *mockPolicyFileRepo) Delete(ctx context.Context, id string) error {
 func (m *mockPolicyFileRepo) FindByDirectoryID(ctx context.Context, dirID string, limit int, cursor string) ([]*models.File, string, error) {
 	return nil, "", nil
 }
+func (m *mockPolicyFileRepo) CreateFile(ctx context.Context, file *models.File, content []byte) error {
+	return nil
+}
+func (m *mockPolicyFileRepo) GetFileContent(ctx context.Context, file *models.File) ([]byte, error) {
+	return nil, db.ErrNotFound
+}
+func (m *mockPolicyFileRepo) UpdateFile(ctx context.Context, file *models.File, content []byte) error {
+	return nil
+}
 
 type mockPolicyDirRepo struct {
 	dirs map[string]*models.Directory
@@ -73,7 +82,7 @@ func (m *mockPolicyDirRepo) FindByPath(ctx context.Context, path string) (*model
 	if dir, ok := m.dirs[path]; ok {
 		return dir, nil
 	}
-	return nil, repository.ErrNotFound
+	return nil, db.ErrNotFound
 }
 
 func (m *mockPolicyDirRepo) FindByID(ctx context.Context, id string) (*models.Directory, error) {
@@ -82,7 +91,7 @@ func (m *mockPolicyDirRepo) FindByID(ctx context.Context, id string) (*models.Di
 			return dir, nil
 		}
 	}
-	return nil, repository.ErrNotFound
+	return nil, db.ErrNotFound
 }
 
 // Unused methods
@@ -105,7 +114,7 @@ func (m *mockPolicyDirRepo) Exists(ctx context.Context, path string) (bool, erro
 func (m *mockPolicyDirRepo) Delete(ctx context.Context, id string) error {
 	return nil
 }
-func (m *mockPolicyDirRepo) LockPaths(ctx context.Context, tx repository.Transaction, paths []string) error {
+func (m *mockPolicyDirRepo) LockPaths(ctx context.Context, tx db.Transaction, paths []string) error {
 	return nil
 }
 

@@ -10,8 +10,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/telnet2/mysql-vfs/pkg/db"
 	"github.com/telnet2/mysql-vfs/pkg/models"
+	persistencedb "github.com/telnet2/mysql-vfs/pkg/persistence/db"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
@@ -42,7 +42,7 @@ func main() {
 	log.Println("Event Worker starting...")
 	log.Printf("Worker count: %d, Poll interval: %v, Batch size: %d", workerCount, pollInterval, batchSize)
 
-	database, err := db.Connect(db.Config{
+	database, err := persistencedb.Connect(persistencedb.Config{
 		DSN:      dsn,
 		LogLevel: logger.Info,
 	})

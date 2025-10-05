@@ -55,12 +55,7 @@ func (h *DirectoryHandler) CreateDirectory(ctx context.Context, c *app.RequestCo
 	requestID, _ := ctx.Value("request_id").(string)
 
 	// Call domain service
-	domainReq := domain.CreateDirectoryRequest{
-		ParentPath: req.ParentPath,
-		Name:       req.Name,
-	}
-
-	dir, err := h.domainService.CreateDirectory(ctx, domainReq)
+	dir, err := h.domainService.CreateDirectory(ctx, req.ParentPath, req.Name)
 	if err != nil {
 		statusCode := mapErrorToStatus(err)
 		c.JSON(statusCode, ErrorResponse{
@@ -104,7 +99,7 @@ func (h *DirectoryHandler) ListDirectory(ctx context.Context, c *app.RequestCont
 	requestID, _ := ctx.Value("request_id").(string)
 
 	// Call domain service
-	dirs, nextCursor, err := h.domainService.ListDirectory(ctx, path, limit, cursor)
+	directories, files, nextCursor, err := h.domainService.ListDirectory(path, limit, cursor)
 	if err != nil {
 		statusCode := mapErrorToStatus(err)
 		c.JSON(statusCode, ErrorResponse{
@@ -115,9 +110,9 @@ func (h *DirectoryHandler) ListDirectory(ctx context.Context, c *app.RequestCont
 	}
 
 	// Format response
-	directories := make([]DirectoryResponse, len(dirs))
-	for i, dir := range dirs {
-		directories[i] = DirectoryResponse{
+	dirResponses := make([]DirectoryResponse, len(directories))
+	for i, dir := range directories {
+		dirResponses[i] = DirectoryResponse{
 			ID:        dir.ID,
 			Name:      dir.Name,
 			Path:      dir.Path,
@@ -128,12 +123,15 @@ func (h *DirectoryHandler) ListDirectory(ctx context.Context, c *app.RequestCont
 	}
 
 	response := ListDirectoryResponse{
-		Directories: directories,
+		Directories: dirResponses,
 	}
 
 	if nextCursor != "" {
 		response.NextCursor = &nextCursor
 	}
+
+	// Note: files are currently not included in the response, but they are available if needed
+	_ = files
 
 	c.JSON(200, response)
 }
@@ -153,7 +151,8 @@ func (h *DirectoryHandler) DeleteDirectory(ctx context.Context, c *app.RequestCo
 	// Get request ID
 	requestID, _ := ctx.Value("request_id").(string)
 
-	// Call domain service
+	// Note: userRole parameter is no longer used in DeleteDirectory
+	// Authorization now happens via groups in middleware
 	err := h.domainService.DeleteDirectory(ctx, path, recursive)
 	if err != nil {
 		statusCode := mapErrorToStatus(err)
@@ -180,7 +179,7 @@ func (h *DirectoryHandler) GetDirectory(ctx context.Context, c *app.RequestConte
 	requestID, _ := ctx.Value("request_id").(string)
 
 	// Call domain service
-	dir, err := h.domainService.GetDirectory(ctx, path)
+	dir, err := h.domainService.GetDirectory(path)
 	if err != nil {
 		statusCode := mapErrorToStatus(err)
 		c.JSON(statusCode, ErrorResponse{

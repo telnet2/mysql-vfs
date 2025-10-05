@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/telnet2/mysql-vfs/pkg/repository"
+	"github.com/telnet2/mysql-vfs/pkg/persistence/db"
 )
 
 // CacheEntry holds cached special file content with expiration
@@ -18,8 +18,8 @@ type CacheEntry struct {
 
 // GenericLoader loads and caches special files with inheritance support
 type GenericLoader struct {
-	fileRepo repository.FileRepository
-	dirRepo  repository.DirectoryRepository
+	fileRepo db.FileRepository
+	dirRepo  db.DirectoryRepository
 	fileType SpecialFileType
 	cache    *sync.Map
 	cacheTTL time.Duration
@@ -27,8 +27,8 @@ type GenericLoader struct {
 
 // NewGenericLoader creates a loader for any special file type
 func NewGenericLoader(
-	fileRepo repository.FileRepository,
-	dirRepo repository.DirectoryRepository,
+	fileRepo db.FileRepository,
+	dirRepo db.DirectoryRepository,
 	fileType SpecialFileType,
 	cacheTTL time.Duration,
 ) *GenericLoader {

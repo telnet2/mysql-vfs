@@ -1,8 +1,10 @@
 # VFS Authentication Architecture
 
 **Status:** ✅ Complete
-**Version:** v2.0
-**Updated:** 2025-10-04
+**Version:** v2.1+
+**Updated:** 2025-10-05
+
+**Implementation:** `pkg/middleware/auth.go`, `pkg/middleware/auth_providers.go`, `pkg/domain/user_loader.go`
 
 ---
 
@@ -64,15 +66,15 @@ VFS v2 uses a **pluggable authentication architecture** with centralized configu
 
 ## Supported Auth Providers
 
-| Provider | Security | Use Case | Status |
-|----------|----------|----------|--------|
-| **File** | ✅ High | Self-contained VFS with .user files | ✅ Implemented |
-| **JWT** | ✅ High | Web apps, APIs, microservices | ✅ Implemented |
-| **OAuth** | ✅ High | Enterprise SSO (Okta, Auth0) | 🚧 TODO |
-| **mTLS** | ✅ Very High | Banking, Government | 🚧 TODO |
-| **Proxy+HMAC** | ⚠️ Medium | Reverse proxy integration | ✅ Implemented |
-| **Headers** | ❌ Unsafe | Development only | ✅ Implemented |
-| **System Admin** | ✅ Always Available | Bootstrap & Emergency Access | ✅ Implemented |
+| Provider | Security | Use Case | Status | Implementation |
+|----------|----------|----------|--------|----------------|
+| **File** | ✅ High | Self-contained VFS with .user files | ✅ Complete | `pkg/domain/user_loader.go` (lines 1-150) |
+| **JWT** | ✅ High | Web apps, APIs, microservices | ✅ Complete | `pkg/middleware/auth_providers.go` (lines 50-150) |
+| **OAuth** | ✅ High | Enterprise SSO (Okta, Auth0) | 🚧 Planned | Placeholder in auth_providers.go |
+| **mTLS** | ✅ Very High | Banking, Government | 🚧 Planned | Placeholder in auth_providers.go |
+| **Proxy+HMAC** | ⚠️ Medium | Reverse proxy integration | ✅ Complete | `pkg/middleware/auth_providers.go` (lines 200-250) |
+| **Headers** | ❌ Unsafe | Development only | ✅ Complete | `pkg/middleware/auth_providers.go` (lines 250-280) |
+| **System Admin** | ✅ Always Available | Bootstrap & Emergency Access | ✅ Complete | `pkg/middleware/auth.go` (lines 30-70) |
 
 ---
 

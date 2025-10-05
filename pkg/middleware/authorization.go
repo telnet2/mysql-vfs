@@ -9,18 +9,21 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/open-policy-agent/opa/rego"
 	"github.com/telnet2/mysql-vfs/pkg/domain"
+	"github.com/telnet2/mysql-vfs/pkg/persistence/db"
 )
 
 // UserContext represents the user making the request
 type UserContext struct {
 	UserID   string
 	Username string
-	Role     string
+	Groups   []string // User's group memberships (e.g., ["admin"], ["user"], ["system-admin"])
 }
 
 // AuthorizationMiddleware checks access permissions using .rego policies
 type AuthorizationMiddleware struct {
 	policyLoader   *domain.PolicyLoader
+	ownerLoader    *domain.OwnerLoader
+	dirRepo        db.DirectoryRepository
 	timeout        time.Duration
 	skipRoutes     map[string]bool // Routes that don't require authorization
 	extractUserCtx func(*app.RequestContext) (*UserContext, error)
@@ -29,6 +32,8 @@ type AuthorizationMiddleware struct {
 // AuthorizationConfig configures the authorization middleware
 type AuthorizationConfig struct {
 	PolicyLoader   *domain.PolicyLoader
+	OwnerLoader    *domain.OwnerLoader
+	DirRepo        db.DirectoryRepository
 	Timeout        time.Duration
 	SkipRoutes     []string
 	ExtractUserCtx func(*app.RequestContext) (*UserContext, error)
@@ -51,6 +56,8 @@ func NewAuthorizationMiddleware(config AuthorizationConfig) *AuthorizationMiddle
 
 	return &AuthorizationMiddleware{
 		policyLoader:   config.PolicyLoader,
+		ownerLoader:    config.OwnerLoader,
+		dirRepo:        config.DirRepo,
 		timeout:        config.Timeout,
 		skipRoutes:     skipRoutes,
 		extractUserCtx: config.ExtractUserCtx,
@@ -79,7 +86,15 @@ func (m *AuthorizationMiddleware) Handler() app.HandlerFunc {
 		}
 
 		// System admin bypasses all rego authorization
-		if userCtx.Role == "system-admin" {
+		// Check if "system-admin" is in user's groups
+		hasSystemAdmin := false
+		for _, group := range userCtx.Groups {
+			if group == "system-admin" {
+				hasSystemAdmin = true
+				break
+			}
+		}
+		if hasSystemAdmin {
 			ctx = context.WithValue(ctx, "authorized", true)
 			ctx = context.WithValue(ctx, "user_context", userCtx)
 			c.Next(ctx)
@@ -104,20 +119,29 @@ func (m *AuthorizationMiddleware) Handler() app.HandlerFunc {
 		regoPolicy, err := m.policyLoader.LoadPolicy(authCtx, dirPath)
 		if err != nil {
 			if err == domain.ErrNotFound {
-				// No policy found - allow by default (or fail closed based on requirements)
-				// For now, fail closed for security
-				c.JSON(403, map[string]string{
-					"error": "forbidden: no authorization policy found",
+				// No policy found - fall back to built-in default policy
+				// This should only happen if bootstrap hasn't run yet
+				// or if all .rego files have been deleted
+				regoPolicy = DefaultRegoPolicy
+				// Log warning
+				fmt.Printf("WARNING: No .rego policy found for path %s, using built-in default. Run bootstrap to create /.rego\n", dirPath)
+			} else {
+				// Fail closed on other errors
+				c.JSON(500, map[string]string{
+					"error": fmt.Sprintf("failed to load authorization policy: %v", err),
 				})
 				c.Abort()
 				return
 			}
-			// Fail closed on errors
-			c.JSON(500, map[string]string{
-				"error": fmt.Sprintf("failed to load authorization policy: %v", err),
-			})
-			c.Abort()
-			return
+		}
+
+		// Get ownership information for the directory
+		var ownerGroups []string
+		if m.ownerLoader != nil && m.dirRepo != nil {
+			dir, err := m.dirRepo.FindByPath(authCtx, dirPath)
+			if err == nil {
+				ownerGroups, _ = m.ownerLoader.GetOwnerGroups(authCtx, dir.ID)
+			}
 		}
 
 		// Build input for OPA evaluation
@@ -125,11 +149,12 @@ func (m *AuthorizationMiddleware) Handler() app.HandlerFunc {
 			"user": map[string]interface{}{
 				"id":       userCtx.UserID,
 				"username": userCtx.Username,
-				"role":     userCtx.Role,
+				"groups":   userCtx.Groups,
 			},
 			"resource": map[string]interface{}{
-				"path": resourcePath,
-				"type": determineResourceType(route),
+				"path":   resourcePath,
+				"type":   determineResourceType(route),
+				"owners": ownerGroups,
 			},
 			"action": action,
 		}
@@ -162,7 +187,7 @@ func defaultUserContextExtractor(c *app.RequestContext) (*UserContext, error) {
 
 	// Try to get from auth middleware context first
 	userID, hasUserID := ctx.Value(UserIDKey).(string)
-	role, hasRole := ctx.Value(UserRoleKey).(string)
+	groups, hasGroups := ctx.Value(UserGroupsKey).([]string)
 
 	// If not found, try from headers (for external auth via reverse proxy)
 	if !hasUserID {
@@ -172,12 +197,17 @@ func defaultUserContextExtractor(c *app.RequestContext) (*UserContext, error) {
 		}
 	}
 
-	// Get role
-	if !hasRole || role == "" {
-		if roleHeader := string(c.GetHeader("X-User-Role")); roleHeader != "" {
-			role = roleHeader
+	// Get groups from header if not in context
+	if !hasGroups || len(groups) == 0 {
+		if groupHeader := string(c.GetHeader("X-User-Groups")); groupHeader != "" {
+			groups = strings.Split(groupHeader, ",")
+			// Trim whitespace from each group
+			for i := range groups {
+				groups[i] = strings.TrimSpace(groups[i])
+			}
 		} else {
-			role = "user" // default role
+			// Default to "user" group if no groups specified
+			groups = []string{"user"}
 		}
 	}
 
@@ -189,7 +219,7 @@ func defaultUserContextExtractor(c *app.RequestContext) (*UserContext, error) {
 	return &UserContext{
 		UserID:   userID,
 		Username: username,
-		Role:     role,
+		Groups:   groups,
 	}, nil
 }
 

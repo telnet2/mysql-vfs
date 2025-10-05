@@ -1,10 +1,25 @@
 # .files Special File Specification
 
+**Implementation:** `pkg/domain/files_loader.go`
+
 ## Overview
 
 The `.files` special file defines allowed file patterns and their validation schemas for a directory.
 
 **Replaces:** `.jsonschema` (more flexible, supports multiple patterns)
+
+**Key Features:**
+- Pattern-based file matching (glob and regex)
+- Per-pattern JSON schema validation
+- Default action (allow/deny)
+- Directory inheritance
+- Caching with TTL
+
+**Implementation Details:**
+- Loader: `pkg/domain/files_loader.go` (lines 1-300)
+- Pattern matching engine: Lines 50-100
+- Schema validation: Lines 150-250
+- Caching: Via `pkg/domain/special_file_loader.go` (lines 1-150)
 
 ## Format
 

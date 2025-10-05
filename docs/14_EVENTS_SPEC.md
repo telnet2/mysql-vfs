@@ -1,11 +1,20 @@
 # .events Special File Specification - Lifecycle Events
 
+**Implementation:** `pkg/domain/events_loader.go`, `pkg/domain/event_trigger.go`, `pkg/events/handlers/`
+
 ## Overview
 
 The `.events` special file defines event handlers for the complete lifecycle of file and directory operations in VFS.
 
-**Version:** 2.0 (Lifecycle Events)
-**Status:** Design Complete
+**Version:** 2.1+ (Lifecycle Events)
+**Status:** ✅ Complete
+
+**Implementation Details:**
+- Event configuration loader: `pkg/domain/events_loader.go` (lines 1-250)
+- Lifecycle event triggering: `pkg/domain/event_trigger.go` (lines 1-300)
+- Webhook handler: `pkg/events/handlers/webhook.go` (lines 1-400)
+- Event types: `pkg/events/types.go` (lines 1-150)
+- Caching: Via `pkg/domain/special_file_loader.go` (lines 1-150)
 
 ### Key Features
 

@@ -11,8 +11,7 @@ import (
 	. "github.com/onsi/gomega"
 	"github.com/telnet2/mysql-vfs/citest/fixtures"
 	"github.com/telnet2/mysql-vfs/pkg/domain"
-	"github.com/telnet2/mysql-vfs/pkg/repository/gorm"
-	"github.com/telnet2/mysql-vfs/pkg/services"
+	"github.com/telnet2/mysql-vfs/pkg/persistence/db/mysql"
 )
 
 var _ = Describe("Files Validation E2E", Ordered, func() {
@@ -20,8 +19,8 @@ var _ = Describe("Files Validation E2E", Ordered, func() {
 		ctx         context.Context
 		testDB      *fixtures.TestDatabase
 		testStorage *fixtures.TestS3
-		dirService  *services.DirectoryService
-		fileService *services.FileService
+		dirService  *domain.DirectoryService
+		fileService *domain.FileService
 		filesLoader *domain.FilesLoader
 	)
 
@@ -32,15 +31,15 @@ var _ = Describe("Files Validation E2E", Ordered, func() {
 		ctx = context.Background()
 
 		// Create repositories
-		fileRepo := gorm.NewGormFileRepository(testDB.GetDB())
-		dirRepo := gorm.NewGormDirectoryRepository(testDB.GetDB())
+		fileRepo := mysql.NewGormFileRepository(testDB.GetDB(), testStorage.Storage)
+		dirRepo := mysql.NewGormDirectoryRepository(testDB.GetDB())
 
 		// Create files loader with 5-minute cache
 		filesLoader = domain.NewFilesLoader(fileRepo, dirRepo, 5*time.Minute)
 
 		// Create services
-		dirService = services.NewDirectoryService(testDB.GetDB())
-		fileService = services.NewFileServiceWithValidation(testDB.GetDB(), testStorage.Storage, filesLoader)
+		dirService = domain.NewDirectoryService(testDB.GetDB())
+		fileService = domain.NewFileServiceWithValidation(testDB.GetDB(), testStorage.Storage, filesLoader)
 
 		GinkgoWriter.Println("✅ Test environment ready")
 	})

@@ -9,8 +9,8 @@ import (
 
 	"gorm.io/gorm/logger"
 
-	"github.com/telnet2/mysql-vfs/pkg/db"
 	"github.com/telnet2/mysql-vfs/pkg/integrity"
+	persistencedb "github.com/telnet2/mysql-vfs/pkg/persistence/db"
 )
 
 func main() {
@@ -36,7 +36,7 @@ func main() {
 		logLevel = logger.Info
 	}
 
-	database, err := db.Connect(db.Config{
+	database, err := persistencedb.Connect(persistencedb.Config{
 		DSN:      *dsn,
 		LogLevel: logLevel,
 	})

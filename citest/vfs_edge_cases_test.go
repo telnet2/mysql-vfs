@@ -12,14 +12,14 @@ import (
 
 	"github.com/telnet2/mysql-vfs/citest/fixtures"
 	"github.com/telnet2/mysql-vfs/pkg/models"
-	"github.com/telnet2/mysql-vfs/pkg/services"
+	"github.com/telnet2/mysql-vfs/pkg/domain"
 )
 
 var _ = Describe("VFS Edge Cases", Ordered, func() {
 	var (
 		testDB      *fixtures.TestDatabase
-		dirService  *services.DirectoryService
-		fileService *services.FileService
+		dirService  *domain.DirectoryService
+		fileService *domain.FileService
 		ctx         context.Context
 		s3          *fixtures.TestS3
 	)
@@ -34,8 +34,8 @@ var _ = Describe("VFS Edge Cases", Ordered, func() {
 		s3 = fixtures.NewTestS3()
 		GinkgoWriter.Println("   ✓ S3 ready")
 
-		dirService = services.NewDirectoryService(testDB.GetDB())
-		fileService = services.NewFileService(testDB.GetDB(), s3.Storage)
+		dirService = domain.NewDirectoryService(testDB.GetDB())
+		fileService = domain.NewFileService(testDB.GetDB(), s3.Storage)
 		ctx = context.Background()
 
 		// Create root directory

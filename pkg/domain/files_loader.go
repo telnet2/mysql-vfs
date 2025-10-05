@@ -9,14 +9,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/telnet2/mysql-vfs/pkg/repository"
+	"github.com/telnet2/mysql-vfs/pkg/persistence/db"
 	"github.com/xeipuuv/gojsonschema"
 )
 
 // FilesLoader loads and caches .files rules
 type FilesLoader struct {
-	fileRepo repository.FileRepository
-	dirRepo  repository.DirectoryRepository
+	fileRepo db.FileRepository
+	dirRepo  db.DirectoryRepository
 	cache    sync.Map // map[directoryID]*filesCacheEntry
 	ttl      time.Duration
 }
@@ -27,7 +27,7 @@ type filesCacheEntry struct {
 }
 
 // NewFilesLoader creates a new files loader
-func NewFilesLoader(fileRepo repository.FileRepository, dirRepo repository.DirectoryRepository, ttl time.Duration) *FilesLoader {
+func NewFilesLoader(fileRepo db.FileRepository, dirRepo db.DirectoryRepository, ttl time.Duration) *FilesLoader {
 	return &FilesLoader{
 		fileRepo: fileRepo,
 		dirRepo:  dirRepo,
@@ -37,6 +37,11 @@ func NewFilesLoader(fileRepo repository.FileRepository, dirRepo repository.Direc
 
 // ValidateFile validates a file against .files rules
 func (l *FilesLoader) ValidateFile(ctx context.Context, dirID, fileName string, content []byte) error {
+	// Built-in rules: .user and .group can only be created at root
+	if err := l.validateBuiltInRules(ctx, dirID, fileName); err != nil {
+		return err
+	}
+
 	// Load .files config for this directory (with inheritance)
 	config, err := l.Load(ctx, dirID)
 	if err != nil {
@@ -150,6 +155,8 @@ func (l *FilesLoader) Load(ctx context.Context, dirID string) (*FilesConfig, err
 		var content []byte
 		if file.JSONContent != nil {
 			content = []byte(*file.JSONContent)
+		} else if file.TextContent != nil {
+			content = []byte(*file.TextContent)
 		} else {
 			return nil, fmt.Errorf(".files has no content")
 		}
@@ -186,4 +193,22 @@ func (l *FilesLoader) Load(ctx context.Context, dirID string) (*FilesConfig, err
 // InvalidateCache invalidates the cache for a directory
 func (l *FilesLoader) InvalidateCache(dirID string) {
 	l.cache.Delete(dirID)
+}
+
+// validateBuiltInRules validates built-in rules that cannot be overridden
+func (l *FilesLoader) validateBuiltInRules(ctx context.Context, dirID, fileName string) error {
+	// Rule: .user and .group files can only be created at root directory
+	if fileName == ".user" || fileName == ".group" {
+		// Get directory path to check if it's root
+		dir, err := l.dirRepo.FindByID(ctx, dirID)
+		if err != nil {
+			return fmt.Errorf("failed to check directory path: %w", err)
+		}
+		
+		if dir.Path != "/" {
+			return fmt.Errorf("%s files can only be created at root directory (/)", fileName)
+		}
+	}
+	
+	return nil
 }

@@ -1,12 +1,18 @@
 # VFS Configuration Guide
 
+**Implementation:** `pkg/config/config.go`
+
 ## Overview
 
 The VFS system uses environment variables for configuration. All configuration can be customized via the `.env` file or by setting environment variables directly.
 
 ## Configuration Package
 
-Starting from this version, we've introduced a centralized configuration package at `pkg/config` that manages all application settings.
+All configuration is centralized in `pkg/config/config.go` (lines 1-250), which provides:
+- Type-safe configuration loading
+- Environment variable parsing
+- Default values
+- Validation
 
 ## Environment Variables
 

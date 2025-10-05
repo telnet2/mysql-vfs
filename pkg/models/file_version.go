@@ -13,6 +13,7 @@ type FileVersion struct {
 	SizeBytes      int64       `gorm:"not null"`
 	StorageType    StorageType `gorm:"type:varchar(10);not null"`
 	JSONContent    *string     `gorm:"type:json"`
+	TextContent    *string     `gorm:"type:mediumtext"`
 	S3Key          *string     `gorm:"type:varchar(1024)"`
 	ChecksumSHA256 string      `gorm:"type:char(64);not null"`
 	CreatedAt      time.Time   `gorm:"not null"`

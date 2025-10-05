@@ -5,7 +5,7 @@ import (
 
 	. "github.com/onsi/gomega"
 
-	"github.com/telnet2/mysql-vfs/pkg/storage"
+	"github.com/telnet2/mysql-vfs/pkg/persistence/storage"
 	_ "gocloud.dev/blob/memblob" // Register mem:// driver
 )
 

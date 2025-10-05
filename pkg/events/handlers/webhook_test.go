@@ -345,7 +345,7 @@ func TestWebhookHandler_PayloadStructure(t *testing.T) {
 		},
 		User: events.UserContext{
 			UserID: "alice",
-			Role:   "admin",
+			Groups: []string{"admin"},
 		},
 	}
 

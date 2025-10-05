@@ -10,7 +10,7 @@ import (
 	"github.com/telnet2/mysql-vfs/pkg/domain"
 	"github.com/telnet2/mysql-vfs/pkg/middleware"
 	"github.com/telnet2/mysql-vfs/pkg/models"
-	"github.com/telnet2/mysql-vfs/pkg/repository"
+	"github.com/telnet2/mysql-vfs/pkg/persistence/db"
 )
 
 // TestOPAIntegration_FullFlow tests the complete OPA integration flow:
@@ -450,14 +450,14 @@ func (m *mockFileRepository) FindByDirectoryAndName(ctx context.Context, directo
 	if file, ok := m.files[key]; ok {
 		return file, nil
 	}
-	return nil, repository.ErrNotFound
+	return nil, db.ErrNotFound
 }
 
 func (m *mockFileRepository) GetLatestVersion(ctx context.Context, fileID string) (*models.FileVersion, error) {
 	if version, ok := m.versions[fileID]; ok {
 		return version, nil
 	}
-	return nil, repository.ErrNotFound
+	return nil, db.ErrNotFound
 }
 
 func (m *mockFileRepository) Create(ctx context.Context, file *models.File) error {
@@ -469,7 +469,7 @@ func (m *mockFileRepository) Create(ctx context.Context, file *models.File) erro
 
 func (m *mockFileRepository) Update(ctx context.Context, file *models.File) error { return nil }
 func (m *mockFileRepository) FindByID(ctx context.Context, id string) (*models.File, error) {
-	return nil, repository.ErrNotFound
+	return nil, db.ErrNotFound
 }
 func (m *mockFileRepository) FindByDirectoryID(ctx context.Context, dirID string, limit int, cursor string) ([]*models.File, string, error) {
 	return nil, "", nil
@@ -486,10 +486,27 @@ func (m *mockFileRepository) CreateVersion(ctx context.Context, version *models.
 	return nil
 }
 func (m *mockFileRepository) GetVersion(ctx context.Context, fileID string, version int64) (*models.FileVersion, error) {
-	return nil, repository.ErrNotFound
+	return nil, db.ErrNotFound
 }
 func (m *mockFileRepository) ListVersions(ctx context.Context, fileID string) ([]*models.FileVersion, error) {
 	return nil, nil
+}
+
+func (m *mockFileRepository) CreateFile(ctx context.Context, file *models.File, content []byte) error {
+	// Simple mock - just store metadata
+	key := file.DirectoryID + "/" + file.Name
+	m.files[key] = file
+	return nil
+}
+
+func (m *mockFileRepository) GetFileContent(ctx context.Context, file *models.File) ([]byte, error) {
+	// Mock returns empty content
+	return []byte{}, nil
+}
+
+func (m *mockFileRepository) UpdateFile(ctx context.Context, file *models.File, content []byte) error {
+	// Simple mock - just update metadata
+	return nil
 }
 
 type mockDirectoryRepository struct {
@@ -506,7 +523,7 @@ func (m *mockDirectoryRepository) FindByPath(ctx context.Context, path string) (
 	if dir, ok := m.dirs[path]; ok {
 		return dir, nil
 	}
-	return nil, repository.ErrNotFound
+	return nil, db.ErrNotFound
 }
 
 func (m *mockDirectoryRepository) FindByID(ctx context.Context, id string) (*models.Directory, error) {
@@ -515,7 +532,7 @@ func (m *mockDirectoryRepository) FindByID(ctx context.Context, id string) (*mod
 			return dir, nil
 		}
 	}
-	return nil, repository.ErrNotFound
+	return nil, db.ErrNotFound
 }
 
 func (m *mockDirectoryRepository) Create(ctx context.Context, dir *models.Directory) error {
@@ -533,6 +550,6 @@ func (m *mockDirectoryRepository) Exists(ctx context.Context, path string) (bool
 	_, ok := m.dirs[path]
 	return ok, nil
 }
-func (m *mockDirectoryRepository) LockPaths(ctx context.Context, tx repository.Transaction, paths []string) error {
+func (m *mockDirectoryRepository) LockPaths(ctx context.Context, tx db.Transaction, paths []string) error {
 	return nil
 }

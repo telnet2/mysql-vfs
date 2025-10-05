@@ -227,19 +227,22 @@ func (v *Validator) ValidateFiles(ctx context.Context) ([]ValidationResult, erro
 		Name        string
 		StorageType string
 		JSONContent *string
+		TextContent *string
 		S3Key       *string
 	}
 
 	err = v.db.WithContext(ctx).
 		Raw(`
-			SELECT id, name, storage_type, json_content, s3_key
+			SELECT id, name, storage_type, json_content, text_content, s3_key
 			FROM files
 			WHERE deleted_at IS NULL
 			  AND (
 				(storage_type = 'json' AND json_content IS NULL)
+				OR (storage_type = 'text' AND text_content IS NULL)
 				OR (storage_type = 's3' AND s3_key IS NULL)
-				OR (storage_type = 'json' AND s3_key IS NOT NULL)
-				OR (storage_type = 's3' AND json_content IS NOT NULL)
+				OR (storage_type = 'json' AND (s3_key IS NOT NULL OR text_content IS NOT NULL))
+				OR (storage_type = 'text' AND (s3_key IS NOT NULL OR json_content IS NOT NULL))
+				OR (storage_type = 's3' AND (json_content IS NOT NULL OR text_content IS NOT NULL))
 			  )
 		`).Scan(&storageIssues).Error
 

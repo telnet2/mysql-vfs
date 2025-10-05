@@ -10,13 +10,13 @@ import (
 	"time"
 
 	"github.com/telnet2/mysql-vfs/pkg/events"
-	"github.com/telnet2/mysql-vfs/pkg/repository"
+	"github.com/telnet2/mysql-vfs/pkg/persistence/db"
 )
 
 // EventsLoader loads and caches .events configurations
 type EventsLoader struct {
-	fileRepo repository.FileRepository
-	dirRepo  repository.DirectoryRepository
+	fileRepo db.FileRepository
+	dirRepo  db.DirectoryRepository
 	cache    sync.Map // map[directoryID]*eventsCacheEntry
 	ttl      time.Duration
 }
@@ -27,7 +27,7 @@ type eventsCacheEntry struct {
 }
 
 // NewEventsLoader creates a new events loader
-func NewEventsLoader(fileRepo repository.FileRepository, dirRepo repository.DirectoryRepository, ttl time.Duration) *EventsLoader {
+func NewEventsLoader(fileRepo db.FileRepository, dirRepo db.DirectoryRepository, ttl time.Duration) *EventsLoader {
 	return &EventsLoader{
 		fileRepo: fileRepo,
 		dirRepo:  dirRepo,
@@ -72,6 +72,8 @@ func (l *EventsLoader) loadWithInheritance(ctx context.Context, dirID string) (*
 		var content []byte
 		if file.JSONContent != nil {
 			content = []byte(*file.JSONContent)
+		} else if file.TextContent != nil {
+			content = []byte(*file.TextContent)
 		} else {
 			return nil, fmt.Errorf(".events has no content")
 		}

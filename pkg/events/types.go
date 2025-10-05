@@ -62,7 +62,6 @@ type DirectoryResource struct {
 // UserContext represents the user who triggered the event
 type UserContext struct {
 	UserID string   `json:"user_id"`
-	Role   string   `json:"role"`
 	Groups []string `json:"groups"`
 }
 

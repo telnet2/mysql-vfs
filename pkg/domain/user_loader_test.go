@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/telnet2/mysql-vfs/pkg/models"
-	"github.com/telnet2/mysql-vfs/pkg/repository"
+	"github.com/telnet2/mysql-vfs/pkg/persistence/db"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -32,7 +32,7 @@ func (r *mockFileRepo) Create(ctx context.Context, file *models.File) error {
 }
 
 func (r *mockFileRepo) FindByID(ctx context.Context, id string) (*models.File, error) {
-	return nil, repository.ErrNotFound // Not used in these tests
+	return nil, db.ErrNotFound // Not used in these tests
 }
 
 func (r *mockFileRepo) FindByDirectoryAndName(ctx context.Context, dirID, name string) (*models.File, error) {
@@ -41,11 +41,11 @@ func (r *mockFileRepo) FindByDirectoryAndName(ctx context.Context, dirID, name s
 			return file, nil
 		}
 	}
-	return nil, repository.ErrNotFound
+	return nil, db.ErrNotFound
 }
 
 func (r *mockFileRepo) FindByDirectoryID(ctx context.Context, dirID string, limit int, cursor string) ([]*models.File, string, error) {
-	return nil, "", repository.ErrNotFound // Not used in these tests
+	return nil, "", db.ErrNotFound // Not used in these tests
 }
 
 func (r *mockFileRepo) Update(ctx context.Context, file *models.File) error {
@@ -65,11 +65,23 @@ func (r *mockFileRepo) CreateVersion(ctx context.Context, version *models.FileVe
 }
 
 func (r *mockFileRepo) GetLatestVersion(ctx context.Context, fileID string) (*models.FileVersion, error) {
-	return nil, repository.ErrNotFound // Not used in these tests
+	return nil, db.ErrNotFound // Not used in these tests
 }
 
 func (r *mockFileRepo) Exists(ctx context.Context, dirID, name string) (bool, error) {
 	return false, nil // Not used in these tests
+}
+
+func (r *mockFileRepo) CreateFile(ctx context.Context, file *models.File, content []byte) error {
+	return nil // Not used in these tests
+}
+
+func (r *mockFileRepo) GetFileContent(ctx context.Context, file *models.File) ([]byte, error) {
+	return nil, db.ErrNotFound // Not used in these tests
+}
+
+func (r *mockFileRepo) UpdateFile(ctx context.Context, file *models.File, content []byte) error {
+	return nil // Not used in these tests
 }
 
 func (r *mockFileRepo) addFile(dirID, name string, content interface{}) {
@@ -99,7 +111,7 @@ func (r *mockDirRepo) FindByPath(ctx context.Context, path string) (*models.Dire
 	if dir, ok := r.dirs[path]; ok {
 		return dir, nil
 	}
-	return nil, repository.ErrNotFound
+	return nil, db.ErrNotFound
 }
 
 func (r *mockDirRepo) FindByID(ctx context.Context, id string) (*models.Directory, error) {
@@ -108,11 +120,11 @@ func (r *mockDirRepo) FindByID(ctx context.Context, id string) (*models.Director
 			return dir, nil
 		}
 	}
-	return nil, repository.ErrNotFound
+	return nil, db.ErrNotFound
 }
 
 func (r *mockDirRepo) FindByParentID(ctx context.Context, parentID string, limit int, cursor string) ([]*models.Directory, string, error) {
-	return nil, "", repository.ErrNotFound // Not used in these tests
+	return nil, "", db.ErrNotFound // Not used in these tests
 }
 
 func (r *mockDirRepo) Update(ctx context.Context, dir *models.Directory) error {
@@ -127,7 +139,7 @@ func (r *mockDirRepo) SoftDelete(ctx context.Context, id string) error {
 	return nil // Not used in these tests
 }
 
-func (r *mockDirRepo) LockPaths(ctx context.Context, tx repository.Transaction, paths []string) error {
+func (r *mockDirRepo) LockPaths(ctx context.Context, tx db.Transaction, paths []string) error {
 	return nil // Not used in these tests
 }
 
@@ -166,12 +178,12 @@ func TestUserLoader_LoadUser(t *testing.T) {
 			{
 				UserID:       "alice",
 				PasswordHash: hashPassword("password123"),
-				Role:         "admin",
+				Groups:       []string{"admin"},
 			},
 			{
 				UserID:       "bob",
 				PasswordHash: hashPassword("secret"),
-				Role:         "user",
+				Groups:       []string{"user"},
 				Token:        "token123",
 			},
 		},
@@ -196,8 +208,8 @@ func TestUserLoader_LoadUser(t *testing.T) {
 				if user.UserID != "alice" {
 					t.Errorf("Expected user_id alice, got %s", user.UserID)
 				}
-				if user.Role != "admin" {
-					t.Errorf("Expected role admin, got %s", user.Role)
+				if len(user.Groups) == 0 || user.Groups[0] != "admin" {
+					t.Errorf("Expected group admin, got %v", user.Groups)
 				}
 			},
 		},
@@ -262,17 +274,17 @@ func TestUserLoader_LoadUserByToken(t *testing.T) {
 			{
 				UserID: "service1",
 				Token:  "service-token-abc123",
-				Role:   "service",
+				Groups: []string{"service"},
 			},
 			{
 				UserID:       "user1",
 				PasswordHash: hashPassword("password"),
-				Role:         "user",
+				Groups:       []string{"user"},
 			},
 			{
 				UserID: "service2",
 				Token:  "service-token-xyz789",
-				Role:   "service",
+				Groups: []string{"service"},
 			},
 		},
 	}
@@ -402,7 +414,7 @@ func TestUserLoader_Caching(t *testing.T) {
 		Users: []UserCredential{
 			{
 				UserID: "alice",
-				Role:   "admin",
+				Groups: []string{"admin"},
 			},
 		},
 	}
@@ -436,7 +448,7 @@ func TestUserLoader_Caching(t *testing.T) {
 		Users: []UserCredential{
 			{
 				UserID: "alice",
-				Role:   "superadmin", // Changed role
+				Groups: []string{"superadmin"}, // Changed role
 			},
 		},
 	}
@@ -448,8 +460,8 @@ func TestUserLoader_Caching(t *testing.T) {
 		t.Fatalf("Third load failed: %v", err)
 	}
 
-	if user3.Role != "superadmin" {
-		t.Errorf("Expected updated role superadmin, got %s", user3.Role)
+	if len(user3.Groups) == 0 || user3.Groups[0] != "superadmin" {
+		t.Errorf("Expected updated group superadmin, got %v", user3.Groups)
 	}
 }
 
@@ -465,7 +477,7 @@ func TestUserLoader_CacheInvalidation(t *testing.T) {
 		Users: []UserCredential{
 			{
 				UserID: "alice",
-				Role:   "admin",
+				Groups: []string{"admin"},
 			},
 		},
 	}
@@ -484,7 +496,7 @@ func TestUserLoader_CacheInvalidation(t *testing.T) {
 		Users: []UserCredential{
 			{
 				UserID: "alice",
-				Role:   "superadmin",
+				Groups: []string{"superadmin"},
 			},
 		},
 	}
@@ -499,8 +511,8 @@ func TestUserLoader_CacheInvalidation(t *testing.T) {
 		t.Fatalf("Load after invalidation failed: %v", err)
 	}
 
-	if user.Role != "superadmin" {
-		t.Errorf("Expected role superadmin after cache invalidation, got %s", user.Role)
+	if len(user.Groups) == 0 || user.Groups[0] != "superadmin" {
+		t.Errorf("Expected group superadmin after cache invalidation, got %v", user.Groups)
 	}
 }
 
@@ -580,10 +592,10 @@ func TestUserLoader_MultipleUsers(t *testing.T) {
 
 	userConfig := UserConfig{
 		Users: []UserCredential{
-			{UserID: "alice", Role: "admin"},
-			{UserID: "bob", Role: "developer"},
-			{UserID: "charlie", Role: "designer"},
-			{UserID: "dave", Role: "developer"},
+			{UserID: "alice", Groups: []string{"admin"}},
+			{UserID: "bob", Groups: []string{"developer"}},
+			{UserID: "charlie", Groups: []string{"designer"}},
+			{UserID: "dave", Groups: []string{"developer"}},
 		},
 	}
 	fileRepo.addFile("dir1", ".user", userConfig)

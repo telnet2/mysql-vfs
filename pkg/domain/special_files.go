@@ -58,26 +58,26 @@ var SpecialFileRegistry = map[SpecialFileType]*SpecialFileDefinition{
 	},
 	SpecialFileTypeUser: {
 		Name:              SpecialFileTypeUser,
-		Description:       "User credential store (passwords, tokens)",
+		Description:       "User credential store (passwords, tokens) - ONLY at root",
 		ContentType:       "application/json",
 		AdminOnly:         true,
 		ValidateFunc:      validateUserConfig,
-		InheritFromParent: true, // Users inherit from parent directories
+		InheritFromParent: false, // Users stay at root, no inheritance
 	},
 	SpecialFileTypeGroup: {
 		Name:              SpecialFileTypeGroup,
-		Description:       "Group membership definition",
+		Description:       "Group membership definition - ONLY at root",
 		ContentType:       "application/json",
 		AdminOnly:         true,
 		ValidateFunc:      validateGroupConfig,
-		InheritFromParent: false, // Groups are per-directory, not inherited
+		InheritFromParent: false, // Groups stay at root, no inheritance
 	},
 	SpecialFileTypeOwner: {
 		Name:              SpecialFileTypeOwner,
 		Description:       "Directory ownership - controls visibility and access",
 		ContentType:       "application/json",
 		AdminOnly:         false, // Users can set ownership on their own directories
-		ValidateFunc:      validateOwnerConfig,
+		ValidateFunc:      ValidateOwnerConfig,
 		InheritFromParent: true, // Ownership inherits to child directories
 	},
 }
@@ -316,10 +316,10 @@ type UserConfig struct {
 }
 
 type UserCredential struct {
-	UserID       string `json:"user_id"`
-	PasswordHash string `json:"password_hash"`   // bcrypt hash
-	Token        string `json:"token,omitempty"`  // Optional static token
-	Role         string `json:"role"`
+	UserID       string   `json:"user_id"`
+	PasswordHash string   `json:"password_hash"`  // bcrypt hash
+	Token        string   `json:"token,omitempty"` // Optional static token
+	Groups       []string `json:"groups"`          // User's group memberships
 }
 
 // validateUserConfig validates .user file content
@@ -349,8 +349,8 @@ func validateUserConfig(content []byte) error {
 			return fmt.Errorf("user %s must have either password_hash or token", user.UserID)
 		}
 
-		if user.Role == "" {
-			return fmt.Errorf("user %s must have a role", user.UserID)
+		if len(user.Groups) == 0 {
+			return fmt.Errorf("user %s must have at least one group", user.UserID)
 		}
 	}
 
@@ -396,19 +396,33 @@ func validateGroupConfig(content []byte) error {
 
 // OwnerConfig represents the structure of a .owner file
 type OwnerConfig struct {
-	Owner string `json:"owner"` // User ID of the directory owner
+	Owners []string `json:"owners"` // Group IDs that own this directory
 }
 
-// validateOwnerConfig validates .owner file content
-func validateOwnerConfig(content []byte) error {
+// ValidateOwnerConfig validates .owner file content
+// Note: This only validates the JSON structure. Group existence validation
+// should be done separately in the service layer where we have access to GroupLoader
+func ValidateOwnerConfig(content []byte) error {
 	var ownerConfig OwnerConfig
 
 	if err := json.Unmarshal(content, &ownerConfig); err != nil {
 		return fmt.Errorf("invalid owner JSON: %w", err)
 	}
 
-	if ownerConfig.Owner == "" {
-		return fmt.Errorf("owner is required")
+	if len(ownerConfig.Owners) == 0 {
+		return fmt.Errorf("at least one owner (group_id) is required")
+	}
+
+	// Check for duplicate owners
+	ownerSet := make(map[string]bool)
+	for _, owner := range ownerConfig.Owners {
+		if owner == "" {
+			return fmt.Errorf("owner group_id cannot be empty")
+		}
+		if ownerSet[owner] {
+			return fmt.Errorf("duplicate owner group_id: %s", owner)
+		}
+		ownerSet[owner] = true
 	}
 
 	return nil

@@ -1,9 +1,11 @@
 # 2. System Architecture
 
-**Version:** v2.0
-**Last Updated:** 2025-10-04
+**Version:** v2.1+
+**Last Updated:** 2025-10-05
 
 [← Back: Overview](1_OVERVIEW.md) | [Index](0_README.md) | [Next: Quick Start →](3_QUICKSTART.md)
+
+**Implementation:** All core components in `pkg/domain/`, `pkg/middleware/`, and `services/vfs/`
 
 ---
 
@@ -102,12 +104,16 @@ v1.GET("/files/*path", vfsServer.getFile)
 **Responsibility:** Cross-cutting concerns (auth, validation, logging)
 
 **Components:**
-- `middleware.AuthMiddleware` - Authentication (JWT, OAuth, etc.)
+- `middleware.AuthMiddleware` - Authentication (file, JWT, headers, proxy)
 - `middleware.AuthorizationMiddleware` - OPA policy evaluation
 - `middleware.ValidationMiddleware` - JSON schema validation
 - `middleware.ObservabilityMiddleware` - Logging, metrics
 
-**File:** `pkg/middleware/`
+**Implementation Files:**
+- `pkg/middleware/auth.go` - Generic auth middleware (lines 1-100)
+- `pkg/middleware/auth_providers.go` - Provider factory and implementations (lines 1-300)
+- `pkg/middleware/authorization.go` - OPA-based authorization (lines 1-200)
+- `pkg/middleware/default_policy.go` - Fallback authorization policy (lines 1-100)
 
 **Example:**
 ```go
@@ -151,13 +157,26 @@ func (s *VFSServer) createFile(ctx context.Context, c *app.RequestContext) {
 **Responsibility:** Business logic, validation, orchestration
 
 **Components:**
-- `DirectoryService` - Directory operations
-- `FileService` - File operations with special file handling
-- `SchemaLoader` - Load and cache `.jsonschema` files
+- `DirectoryService` - Directory operations with lifecycle events
+- `FileService` - File operations with special file handling and events
+- `FilesLoader` - Load and cache `.files` patterns (replaces SchemaLoader)
 - `PolicyLoader` - Load and cache `.rego` files
-- `QuotaLoader` - Load and cache `.quota` files
+- `UserLoader` - Load and cache `.user` files for file-based auth
+- `EventsLoader` - Load and cache `.events` handlers
+- `OwnerLoader` - Load and cache `.owner` ownership data
+- `EventTrigger` - Lifecycle event triggering
+- `EventDispatcher` - Event delivery coordination
 
-**Files:** `pkg/domain/`
+**Implementation Files:**
+- `pkg/domain/file_service.go` - File CRUD with validation (lines 1-500)
+- `pkg/domain/directory_service.go` - Directory CRUD with events (lines 1-400)
+- `pkg/domain/files_loader.go` - Pattern matching and validation (lines 1-300)
+- `pkg/domain/policy_loader.go` - OPA policy loading (lines 1-200)
+- `pkg/domain/user_loader.go` - File-based auth (lines 1-150)
+- `pkg/domain/events_loader.go` - Event handler config (lines 1-250)
+- `pkg/domain/owner_loader.go` - Ownership tracking (lines 1-100)
+- `pkg/domain/event_trigger.go` - Event lifecycle management (lines 1-300)
+- `pkg/domain/special_file_loader.go` - Generic loader with caching (lines 1-150)
 
 **Example:**
 ```go

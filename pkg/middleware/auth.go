@@ -14,8 +14,8 @@ const (
 	// UserIDKey is the context key for user ID
 	UserIDKey ContextKey = "user_id"
 
-	// UserRoleKey is the context key for user role
-	UserRoleKey ContextKey = "user_role"
+	// UserGroupsKey is the context key for user groups (includes special groups like "system-admin", "admin", "user")
+	UserGroupsKey ContextKey = "user_groups"
 
 	// UserMetadataKey is the context key for additional user metadata
 	UserMetadataKey ContextKey = "user_metadata"
@@ -28,7 +28,7 @@ type AuthExtractor func(token string) (AuthContext, error)
 // AuthContext holds the authenticated user information
 type AuthContext struct {
 	UserID   string
-	Role     string
+	Groups   []string               // User's group memberships (e.g., ["admin"], ["user"], ["system-admin"])
 	Metadata map[string]interface{} // Additional custom fields
 }
 
@@ -98,18 +98,18 @@ func (m *AuthMiddleware) Handler() app.HandlerFunc {
 
 		// Store auth context in request context
 		ctx = context.WithValue(ctx, UserIDKey, authContext.UserID)
-		ctx = context.WithValue(ctx, UserRoleKey, authContext.Role)
+		ctx = context.WithValue(ctx, UserGroupsKey, authContext.Groups)
 		ctx = context.WithValue(ctx, UserMetadataKey, authContext.Metadata)
 
 		c.Next(ctx)
 	}
 }
 
-// RequireRole returns a middleware that requires a specific role
-func RequireRole(requiredRole string) app.HandlerFunc {
+// RequireGroup returns a middleware that requires a specific group membership
+func RequireGroup(requiredGroup string) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
-		role, ok := ctx.Value(UserRoleKey).(string)
-		if !ok || role == "" {
+		groups, ok := ctx.Value(UserGroupsKey).([]string)
+		if !ok || len(groups) == 0 {
 			c.JSON(401, map[string]string{
 				"error": "authentication required",
 			})
@@ -117,7 +117,16 @@ func RequireRole(requiredRole string) app.HandlerFunc {
 			return
 		}
 
-		if role != requiredRole {
+		// Check if user is in required group
+		hasGroup := false
+		for _, g := range groups {
+			if g == requiredGroup {
+				hasGroup = true
+				break
+			}
+		}
+
+		if !hasGroup {
 			c.JSON(403, map[string]string{
 				"error": "insufficient permissions",
 			})
@@ -129,9 +138,9 @@ func RequireRole(requiredRole string) app.HandlerFunc {
 	}
 }
 
-// RequireAdmin returns a middleware that requires admin role
+// RequireAdmin returns a middleware that requires admin group membership
 func RequireAdmin() app.HandlerFunc {
-	return RequireRole("admin")
+	return RequireGroup("admin")
 }
 
 // GetUserID extracts the user ID from context
@@ -140,10 +149,24 @@ func GetUserID(ctx context.Context) (string, bool) {
 	return userID, ok
 }
 
-// GetUserRole extracts the user role from context
-func GetUserRole(ctx context.Context) (string, bool) {
-	role, ok := ctx.Value(UserRoleKey).(string)
-	return role, ok
+// GetUserGroups extracts the user groups from context
+func GetUserGroups(ctx context.Context) ([]string, bool) {
+	groups, ok := ctx.Value(UserGroupsKey).([]string)
+	return groups, ok
+}
+
+// HasGroup checks if user has a specific group
+func HasGroup(ctx context.Context, group string) bool {
+	groups, ok := GetUserGroups(ctx)
+	if !ok {
+		return false
+	}
+	for _, g := range groups {
+		if g == group {
+			return true
+		}
+	}
+	return false
 }
 
 // GetUserMetadata extracts custom user metadata from context
@@ -154,12 +177,10 @@ func GetUserMetadata(ctx context.Context) (map[string]interface{}, bool) {
 
 // IsAdmin checks if the user in context is an admin
 func IsAdmin(ctx context.Context) bool {
-	role, ok := GetUserRole(ctx)
-	return ok && role == "admin"
+	return HasGroup(ctx, "admin")
 }
 
 // IsSystemAdmin checks if the user in context is a system admin
 func IsSystemAdmin(ctx context.Context) bool {
-	role, ok := GetUserRole(ctx)
-	return ok && role == "system-admin"
+	return HasGroup(ctx, "system-admin")
 }

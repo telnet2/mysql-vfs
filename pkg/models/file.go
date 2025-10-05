@@ -11,6 +11,7 @@ type StorageType string
 
 const (
 	StorageTypeJSON StorageType = "json"
+	StorageTypeText StorageType = "text"
 	StorageTypeS3   StorageType = "s3"
 )
 
@@ -23,6 +24,7 @@ type File struct {
 	SizeBytes    int64          `gorm:"not null"`
 	StorageType  StorageType    `gorm:"type:varchar(10);not null"`
 	JSONContent  *string        `gorm:"type:json"`
+	TextContent  *string        `gorm:"type:mediumtext"`
 	S3Key        *string        `gorm:"type:varchar(1024)"`
 	ChecksumSHA256 string       `gorm:"type:char(64);not null;index"`
 	Version      int64          `gorm:"not null;default:1"`
@@ -51,6 +53,15 @@ func (f *File) BeforeCreate(tx *gorm.DB) error {
 	// Validate storage type consistency
 	if f.StorageType == StorageTypeJSON && f.JSONContent == nil {
 		return gorm.ErrInvalidData
+	}
+	if f.StorageType == StorageTypeText {
+		if f.TextContent == nil {
+			return gorm.ErrInvalidData
+		}
+		// Text content limited to 100MB (same as JSON)
+		if f.SizeBytes > 104857600 {
+			return gorm.ErrInvalidData
+		}
 	}
 	if f.StorageType == StorageTypeS3 && f.S3Key == nil {
 		return gorm.ErrInvalidData

@@ -12,19 +12,19 @@ import (
 
 	"github.com/telnet2/mysql-vfs/citest/fixtures"
 	"github.com/telnet2/mysql-vfs/pkg/models"
-	"github.com/telnet2/mysql-vfs/pkg/services"
+	"github.com/telnet2/mysql-vfs/pkg/domain"
 )
 
 var _ = Describe("Concurrent Operations", func() {
 	var (
 		testDB     *fixtures.TestDatabase
-		dirService *services.DirectoryService
+		dirService *domain.DirectoryService
 		ctx        context.Context
 	)
 
 	BeforeEach(func() {
 		testDB = fixtures.NewTestDatabase()
-		dirService = services.NewDirectoryService(testDB.GetDB())
+		dirService = domain.NewDirectoryService(testDB.GetDB())
 		ctx = context.Background()
 
 		// Create root directory

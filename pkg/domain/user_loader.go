@@ -7,14 +7,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/telnet2/mysql-vfs/pkg/repository"
+	"github.com/telnet2/mysql-vfs/pkg/persistence/db"
 	"golang.org/x/crypto/bcrypt"
 )
 
 // UserLoader loads and caches .user files
 type UserLoader struct {
-	fileRepo repository.FileRepository
-	dirRepo  repository.DirectoryRepository
+	fileRepo db.FileRepository
+	dirRepo  db.DirectoryRepository
 	cache    sync.Map // map[directoryID]*userCacheEntry
 	ttl      time.Duration
 }
@@ -25,7 +25,7 @@ type userCacheEntry struct {
 }
 
 // NewUserLoader creates a new user loader
-func NewUserLoader(fileRepo repository.FileRepository, dirRepo repository.DirectoryRepository, ttl time.Duration) *UserLoader {
+func NewUserLoader(fileRepo db.FileRepository, dirRepo db.DirectoryRepository, ttl time.Duration) *UserLoader {
 	return &UserLoader{
 		fileRepo: fileRepo,
 		dirRepo:  dirRepo,
@@ -118,6 +118,8 @@ func (l *UserLoader) loadUserConfig(ctx context.Context, dirID string) (*UserCon
 	var content []byte
 	if file.JSONContent != nil {
 		content = []byte(*file.JSONContent)
+	} else if file.TextContent != nil {
+		content = []byte(*file.TextContent)
 	} else {
 		return nil, fmt.Errorf(".user file has no content")
 	}

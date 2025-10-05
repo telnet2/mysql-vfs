@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/telnet2/mysql-vfs/pkg/repository"
+	"github.com/telnet2/mysql-vfs/pkg/persistence/db"
 )
 
 // PolicyLoader loads and caches OPA Rego policies from .rego files
@@ -14,8 +14,8 @@ type PolicyLoader struct {
 
 // NewPolicyLoader creates a new policy loader with caching and inheritance
 func NewPolicyLoader(
-	fileRepo repository.FileRepository,
-	dirRepo repository.DirectoryRepository,
+	fileRepo db.FileRepository,
+	dirRepo db.DirectoryRepository,
 	cacheTTL time.Duration,
 ) *PolicyLoader {
 	return &PolicyLoader{

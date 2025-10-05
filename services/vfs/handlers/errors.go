@@ -5,7 +5,7 @@ import (
 	"net/http"
 
 	"github.com/telnet2/mysql-vfs/pkg/domain"
-	"github.com/telnet2/mysql-vfs/pkg/repository"
+	"github.com/telnet2/mysql-vfs/pkg/persistence/db"
 )
 
 // ErrorResponse represents an API error response
@@ -42,17 +42,17 @@ func mapErrorToStatus(err error) int {
 
 	// Repository errors
 	switch {
-	case errors.Is(err, repository.ErrNotFound):
+	case errors.Is(err, db.ErrNotFound):
 		return http.StatusNotFound
-	case errors.Is(err, repository.ErrAlreadyExists):
+	case errors.Is(err, db.ErrAlreadyExists):
 		return http.StatusConflict
-	case errors.Is(err, repository.ErrConflict):
+	case errors.Is(err, db.ErrConflict):
 		return http.StatusConflict
-	case errors.Is(err, repository.ErrInvalidInput):
+	case errors.Is(err, db.ErrInvalidInput):
 		return http.StatusBadRequest
-	case errors.Is(err, repository.ErrTransactionFailed):
+	case errors.Is(err, db.ErrTransactionFailed):
 		return http.StatusInternalServerError
-	case errors.Is(err, repository.ErrLockFailed):
+	case errors.Is(err, db.ErrLockFailed):
 		return http.StatusConflict
 	}
 
@@ -88,17 +88,17 @@ func mapErrorToMessage(err error) string {
 
 	// Repository errors
 	switch {
-	case errors.Is(err, repository.ErrNotFound):
+	case errors.Is(err, db.ErrNotFound):
 		return "resource not found"
-	case errors.Is(err, repository.ErrAlreadyExists):
+	case errors.Is(err, db.ErrAlreadyExists):
 		return "resource already exists"
-	case errors.Is(err, repository.ErrConflict):
+	case errors.Is(err, db.ErrConflict):
 		return "conflict detected"
-	case errors.Is(err, repository.ErrInvalidInput):
+	case errors.Is(err, db.ErrInvalidInput):
 		return "invalid input"
-	case errors.Is(err, repository.ErrTransactionFailed):
+	case errors.Is(err, db.ErrTransactionFailed):
 		return "transaction failed"
-	case errors.Is(err, repository.ErrLockFailed):
+	case errors.Is(err, db.ErrLockFailed):
 		return "failed to acquire lock"
 	}
 

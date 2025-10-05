@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/robfig/cron/v3"
-	"github.com/telnet2/mysql-vfs/pkg/db"
 	"github.com/telnet2/mysql-vfs/pkg/models"
+	persistencedb "github.com/telnet2/mysql-vfs/pkg/persistence/db"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
@@ -46,7 +46,7 @@ func main() {
 	log.Printf("Poll interval: %v, Lease duration: %v, Heartbeat interval: %v",
 		pollInterval, leaseDuration, heartbeatInterval)
 
-	database, err := db.Connect(db.Config{
+	database, err := persistencedb.Connect(persistencedb.Config{
 		DSN:      dsn,
 		LogLevel: logger.Info,
 	})

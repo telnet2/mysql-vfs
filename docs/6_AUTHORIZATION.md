@@ -2,6 +2,8 @@
 
 **Policy-based access control using `.rego` files**
 
+**Implementation:** `pkg/middleware/authorization.go`, `pkg/domain/policy_loader.go`
+
 [← Back: Authentication](5_AUTHENTICATION.md) | [Index](0_README.md) | [Next: Configuration →](7_CONFIGURATION.md)
 
 ---
@@ -353,11 +355,18 @@ Policies are cached to improve performance:
 - **TTL:** 5 minutes (configurable via `POLICY_CACHE_TTL_SECONDS`)
 - **Invalidation:** Automatic when `.rego` file is updated
 - **Per-Directory:** Each directory's policy is cached separately
+- **Implementation:** `pkg/domain/policy_loader.go` using `GenericLoader` pattern (lines 1-200)
 
 **Configure cache:**
 ```bash
 export POLICY_CACHE_TTL_SECONDS=300  # 5 minutes
 ```
+
+**Cache Implementation:** Policies use the generic special file loader (`pkg/domain/special_file_loader.go`) which provides:
+- Thread-safe caching with TTL
+- Automatic invalidation on file changes
+- Directory-level inheritance
+- Efficient lookup with minimal DB queries
 
 ---
 

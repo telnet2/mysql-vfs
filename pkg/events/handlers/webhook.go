@@ -225,7 +225,10 @@ func (h *WebhookHandler) executeWithRetry(ctx context.Context, handler *events.E
 			return response
 		}
 
-		log.Printf("webhook attempt %d/%d failed: %s", attempt+1, maxAttempts, response.Message)
+		// Log retry attempt (only if we have more attempts left)
+		if attempt+1 < maxAttempts {
+			log.Printf("webhook attempt %d/%d failed: %s", attempt+1, maxAttempts, response.Message)
+		}
 	}
 
 	// All retries failed
