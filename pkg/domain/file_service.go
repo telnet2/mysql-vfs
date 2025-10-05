@@ -459,20 +459,6 @@ func (s *FileService) CreateFile(ctx context.Context, directoryPath, name, conte
 			return fmt.Errorf("failed to create file version: %w", err)
 		}
 
-		// Emit file.created event
-		if err := s.emitEvent(ctx, tx, "file.created", file.ID, map[string]interface{}{
-			"file_id":       file.ID,
-			"name":          file.Name,
-			"directory_id":  file.DirectoryID,
-			"content_type":  file.ContentType,
-			"size_bytes":    file.SizeBytes,
-			"storage_type":  file.StorageType,
-			"checksum":      file.ChecksumSHA256,
-			"version":       file.Version,
-		}); err != nil {
-			return err
-		}
-
 		return nil
 	})
 
@@ -499,9 +485,6 @@ func (s *FileService) CreateFile(ctx context.Context, directoryPath, name, conte
 
 		completionPayload := s.buildCompletionPayload(opCtx, user, requestID, file, true, "")
 		s.eventTrigger.Emit(ctx, "file.create.completion.succeeded", completionPayload)
-
-		// Also emit legacy file.created event for backward compatibility
-		s.eventTrigger.Emit(ctx, "file.created", completionPayload)
 	}
 
 	return file, nil
@@ -853,9 +836,6 @@ func (s *FileService) UpdateFile(ctx context.Context, filePath, contentType stri
 
 		completionPayload := s.buildCompletionPayloadForOp(opCtx, user, requestID, file, events.OperationUpdate, true, "")
 		s.eventTrigger.Emit(ctx, "file.update.completion.succeeded", completionPayload)
-
-		// Also emit legacy file.updated event for backward compatibility
-		s.eventTrigger.Emit(ctx, "file.updated", completionPayload)
 	}
 
 	return file, nil
@@ -1011,9 +991,6 @@ func (s *FileService) DeleteFile(ctx context.Context, filePath string) error {
 
 		completionPayload := s.buildCompletionPayloadForOp(opCtx, user, requestID, file, events.OperationDelete, true, "")
 		s.eventTrigger.Emit(ctx, "file.delete.completion.succeeded", completionPayload)
-
-		// Also emit legacy file.deleted event for backward compatibility
-		s.eventTrigger.Emit(ctx, "file.deleted", completionPayload)
 	}
 
 	return nil

@@ -287,3 +287,17 @@ func (l *EventsLoader) InvalidateCacheRecursive(ctx context.Context, dirID strin
 
 	return nil
 }
+
+// ResolveDirectoryID resolves a directory path to its persistent identifier.
+func (l *EventsLoader) ResolveDirectoryID(ctx context.Context, dirPath string) (string, error) {
+	if dirPath == "" {
+		return "", fmt.Errorf("empty directory path")
+	}
+
+	dir, err := l.dirRepo.FindByPath(ctx, dirPath)
+	if err != nil {
+		return "", err
+	}
+
+	return dir.ID, nil
+}

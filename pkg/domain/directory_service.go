@@ -309,16 +309,6 @@ func (s *DirectoryService) tryCreateDirectory(ctx context.Context, parentPath, f
 			return err
 		}
 
-		// Emit legacy directory.created event
-		if err := s.emitEvent(ctx, tx, "directory.created", dir.ID, map[string]interface{}{
-			"directory_id": dir.ID,
-			"name":         dir.Name,
-			"path":         dir.Path,
-			"parent_id":    dir.ParentID,
-		}); err != nil {
-			return err
-		}
-
 		return nil
 	})
 
@@ -345,9 +335,6 @@ func (s *DirectoryService) tryCreateDirectory(ctx context.Context, parentPath, f
 
 		completionPayload := s.buildCompletionPayloadForDir(opCtx, user, requestID, dir, events.OperationCreate, true, "")
 		s.eventTrigger.Emit(ctx, "directory.create.completion.succeeded", completionPayload)
-
-		// Also emit legacy directory.created event for backward compatibility
-		s.eventTrigger.Emit(ctx, "directory.created", completionPayload)
 	}
 
 	return dir, nil
@@ -595,9 +582,6 @@ func (s *DirectoryService) DeleteDirectory(ctx context.Context, dirPath string, 
 
 		completionPayload := s.buildCompletionPayloadForDir(opCtx, user, requestID, dir, events.OperationDelete, true, "")
 		s.eventTrigger.Emit(ctx, "directory.delete.completion.succeeded", completionPayload)
-
-		// Also emit legacy directory.deleted event for backward compatibility
-		s.eventTrigger.Emit(ctx, "directory.deleted", completionPayload)
 	}
 
 	return nil

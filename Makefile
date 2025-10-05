@@ -61,11 +61,8 @@ dev: ## Start services in development mode
 cli: ## Connect to CLI container
 	docker-compose exec cli /bin/bash
 
-cli-prompt: ## Build and run CLI with go-prompt locally
-	cd cli && go build -o vfs-cli-prompt main_prompt.go && ./vfs-cli-prompt
-
-cli-build: ## Build CLI with go-prompt
-	cd cli && go build -o vfs-cli-prompt main_prompt.go
+cli-build: ## Build CLI
+	cd cli && go build -o ../vfs-cli .
 
 db-shell: ## Connect to MySQL shell
 	docker-compose exec mysql mysql -uroot -proot vfs

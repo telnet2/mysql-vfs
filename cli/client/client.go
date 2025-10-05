@@ -352,5 +352,68 @@ func (c *Client) HealthCheck() (bool, error) {
 	return resp.StatusCode == http.StatusOK, nil
 }
 
+// LoginRequest is the request to authenticate
+type LoginRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+// LoginResponse is the response from login
+type LoginResponse struct {
+	Token string `json:"token"`
+}
+
+// Login authenticates with username/password
+func (c *Client) Login(username, password string) (string, error) {
+	req := LoginRequest{
+		Username: username,
+		Password: password,
+	}
+
+	resp, err := c.request("POST", "/api/v1/auth/login", req, "")
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("login failed: %s (status: %d)", string(body), resp.StatusCode)
+	}
+
+	var result LoginResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return result.Token, nil
+}
+
+// GetFileVersion retrieves a specific version of a file
+func (c *Client) GetFileVersion(path string, version int64) ([]byte, string, error) {
+	params := url.Values{}
+	params.Set("version", fmt.Sprintf("%d", version))
+	queryString := "?" + params.Encode()
+
+	resp, err := c.request("GET", "/api/v1/files"+path+queryString, nil, "")
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, "", fmt.Errorf("failed to get file: %s (status: %d)", string(body), resp.StatusCode)
+	}
+
+	contentType := resp.Header.Get("Content-Type")
+	content, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to read file content: %w", err)
+	}
+
+	return content, contentType, nil
+}
+
 // Note: User/group management is handled via .user files and super user tokens.
 // There are no database-backed user tables or traditional login endpoints.

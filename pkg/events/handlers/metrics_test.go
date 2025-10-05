@@ -121,11 +121,11 @@ func TestMetricsHandler_TagTemplateRendering(t *testing.T) {
 			},
 			payload: TestPayload{
 				Event: events.Event{
-					Type: "file.created",
+					Type: "file.create.completion.succeeded",
 				},
 			},
 			expectTags: []string{
-				`event_type="file.created"`,
+				`event_type="file.create.completion.succeeded"`,
 			},
 		},
 		{
@@ -222,11 +222,11 @@ func TestMetricsHandler_RenderTags(t *testing.T) {
 			},
 			payload: TestPayload{
 				Event: events.Event{
-					Type: "file.created",
+					Type: "file.create.completion.succeeded",
 				},
 			},
 			expected: map[string]string{
-				"event_type": "file.created",
+				"event_type": "file.create.completion.succeeded",
 			},
 		},
 		{
@@ -236,11 +236,11 @@ func TestMetricsHandler_RenderTags(t *testing.T) {
 				"event_type": "{{event.type}}",
 			},
 			payload: TestPayload{
-				Event: events.Event{Type: "file.created"},
+				Event: events.Event{Type: "file.create.completion.succeeded"},
 			},
 			expected: map[string]string{
 				"env":        "production",
-				"event_type": "file.created",
+				"event_type": "file.create.completion.succeeded",
 			},
 		},
 	}

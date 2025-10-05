@@ -243,20 +243,25 @@ func createDefaultRegoFile(db *gorm.DB, rootDirID string) error {
 		return fmt.Errorf("failed to query .rego file: %w", err)
 	}
 
-	// Default policy: admin has full access, user has read-only
+	// Default policy: admin group has full access, user group has read-only
 	defaultPolicy := `package vfs.authz
 
 # Simple default policy for flexible authorization
 # Customize this policy to match your security requirements
 
-# Admin role: full access to all operations
+# Admin group: full access to all operations
 allow {
-    input.user.role == "admin"
+    input.user.groups[_] == "admin"
 }
 
-# User role: read-only access
+# System admin group: full access to all operations
 allow {
-    input.user.role == "user"
+    input.user.groups[_] == "system-admin"
+}
+
+# User group: read-only access
+allow {
+    input.user.groups[_] == "user"
     input.action == "read"
 }
 `

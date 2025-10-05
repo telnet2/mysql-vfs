@@ -105,19 +105,19 @@ func TestLogHandler_TemplateRendering(t *testing.T) {
 			name:     "simple event type",
 			template: "Event: {{event.type}}",
 			payload: TestPayload{
-				Event: events.Event{Type: "file.created"},
+				Event: events.Event{Type: "file.create.completion.succeeded"},
 			},
-			expected: "Event: file.created",
+			expected: "Event: file.create.completion.succeeded",
 		},
 		{
 			name:     "multiple variables",
 			template: "{{event.type}} on {{resource.path}} by {{user.user_id}}",
 			payload: TestPayload{
-				Event:    events.Event{Type: "file.created"},
+				Event:    events.Event{Type: "file.create.completion.succeeded"},
 				Resource: map[string]interface{}{"path": "/data/test.json"},
 				User:     map[string]interface{}{"user_id": "alice"},
 			},
-			expected: "file.created on /data/test.json by alice",
+			expected: "file.create.completion.succeeded on /data/test.json by alice",
 		},
 		{
 			name:     "nested field access",

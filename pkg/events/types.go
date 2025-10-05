@@ -4,20 +4,10 @@ import (
 	"time"
 )
 
-// EventType represents the type of event
+// EventType represents the type of event (now using lifecycle event patterns)
+// Legacy event types have been removed in favor of hierarchical lifecycle events
+// Examples: "file.create.authorization.started", "file.create.completion.succeeded"
 type EventType string
-
-const (
-	// File events
-	EventFileCreated EventType = "file.created"
-	EventFileUpdated EventType = "file.updated"
-	EventFileDeleted EventType = "file.deleted"
-	EventFileMoved   EventType = "file.moved"
-
-	// Directory events
-	EventDirectoryCreated EventType = "directory.created"
-	EventDirectoryDeleted EventType = "directory.deleted"
-)
 
 // Event represents the core event information
 type Event struct {

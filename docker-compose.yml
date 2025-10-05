@@ -59,6 +59,7 @@ services:
       AWS_S3_FORCE_PATH_STYLE: "true"
       PORT: 8080
       LOG_LEVEL: debug
+      SYSTEM_ADMIN_TOKEN: local-system-admin
     ports:
       - "18080:8080"
     healthcheck:

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/telnet2/mysql-vfs/pkg/events"
 	"github.com/xeipuuv/gojsonschema"
 )
 
@@ -255,22 +256,15 @@ func validateEventsConfig(content []byte) error {
 		return fmt.Errorf("at least one handler must be defined")
 	}
 
-	// Validate event types
-	validEvents := map[string]bool{
-		"file.created":      true,
-		"file.updated":      true,
-		"file.deleted":      true,
-		"file.moved":        true,
-		"directory.created": true,
-		"directory.deleted": true,
-	}
-
 	// Validate handler types
 	validHandlerTypes := map[string]bool{
 		"webhook": true,
 		"log":     true,
 		"metrics": true,
 	}
+
+	// Create pattern matcher for validating event patterns
+	matcher := events.NewWildcardPatternMatcher()
 
 	handlerNames := make(map[string]bool)
 	for i, handler := range eventsFile.Handlers {
@@ -295,9 +289,15 @@ func validateEventsConfig(content []byte) error {
 			return fmt.Errorf("handler %d: at least one event must be specified", i)
 		}
 
-		for _, event := range handler.Events {
-			if !validEvents[event] {
-				return fmt.Errorf("handler %d: invalid event type: %s", i, event)
+		// Validate each event pattern using the wildcard pattern matcher
+		for j, eventPattern := range handler.Events {
+			if eventPattern == "" {
+				return fmt.Errorf("handler %d: event pattern %d cannot be empty", i, j)
+			}
+
+			// Validate pattern syntax by attempting to compile it
+			if _, err := matcher.CompilePattern(eventPattern); err != nil {
+				return fmt.Errorf("handler %d: invalid event pattern '%s': %w", i, eventPattern, err)
 			}
 		}
 

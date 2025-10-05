@@ -85,7 +85,7 @@ func TestWebhookHandler_VetoViaHTTPStatus(t *testing.T) {
 			payload := &events.FileEventPayload{
 				Event: events.Event{
 					ID:   "evt_123",
-					Type: "file.created",
+					Type: "file.create.completion.succeeded",
 				},
 			}
 
@@ -174,7 +174,7 @@ func TestWebhookHandler_VetoViaJSONResponse(t *testing.T) {
 			payload := &events.FileEventPayload{
 				Event: events.Event{
 					ID:   "evt_123",
-					Type: "file.created",
+					Type: "file.create.completion.succeeded",
 				},
 			}
 
@@ -245,7 +245,7 @@ func TestWebhookHandler_OnError(t *testing.T) {
 			payload := &events.FileEventPayload{
 				Event: events.Event{
 					ID:   "evt_123",
-					Type: "file.created",
+					Type: "file.create.completion.succeeded",
 				},
 			}
 
@@ -287,7 +287,7 @@ func TestWebhookHandler_HMACSignature(t *testing.T) {
 	payload := &events.FileEventPayload{
 		Event: events.Event{
 			ID:   "evt_123",
-			Type: "file.created",
+			Type: "file.create.completion.succeeded",
 		},
 	}
 
@@ -335,7 +335,7 @@ func TestWebhookHandler_PayloadStructure(t *testing.T) {
 	expectedPayload := &events.FileEventPayload{
 		Event: events.Event{
 			ID:   "evt_123",
-			Type: "file.created",
+			Type: "file.create.completion.succeeded",
 		},
 		Resource: events.FileResource{
 			Type: events.ResourceTypeFile,
@@ -400,7 +400,7 @@ func TestWebhookHandler_CircuitBreaker(t *testing.T) {
 	payload := &events.FileEventPayload{
 		Event: events.Event{
 			ID:   "evt_123",
-			Type: "file.created",
+			Type: "file.create.completion.succeeded",
 		},
 	}
 

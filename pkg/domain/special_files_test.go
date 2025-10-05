@@ -286,3 +286,126 @@ func TestValidateSpecialFileContent(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateEventsConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		wantErr bool
+	}{
+		{
+			name: "valid lifecycle event pattern",
+			content: `{
+				"handlers": [{
+					"name": "auth-webhook",
+					"type": "webhook",
+					"events": ["file.create.authorization.started"],
+					"config": {"url": "https://example.com"}
+				}]
+			}`,
+			wantErr: false,
+		},
+		{
+			name: "valid wildcard pattern",
+			content: `{
+				"handlers": [{
+					"name": "all-creates",
+					"type": "log",
+					"events": ["file.create.*"],
+					"config": {"level": "info", "message": "File creation"}
+				}]
+			}`,
+			wantErr: false,
+		},
+		{
+			name: "valid multi-wildcard pattern",
+			content: `{
+				"handlers": [{
+					"name": "all-auth",
+					"type": "metrics",
+					"events": ["*.*.authorization.*"],
+					"config": {"metric_name": "auth_events"}
+				}]
+			}`,
+			wantErr: false,
+		},
+		{
+			name: "valid brace expansion",
+			content: `{
+				"handlers": [{
+					"name": "create-update",
+					"type": "webhook",
+					"events": ["file.{create,update}.completion.succeeded"],
+					"config": {"url": "https://example.com"}
+				}]
+			}`,
+			wantErr: false,
+		},
+		{
+			name: "multiple valid patterns",
+			content: `{
+				"handlers": [{
+					"name": "multi-handler",
+					"type": "webhook",
+					"events": [
+						"file.create.authorization.started",
+						"file.create.validation.succeeded",
+						"file.create.completion.*"
+					],
+					"config": {"url": "https://example.com"}
+				}]
+			}`,
+			wantErr: false,
+		},
+		{
+			name: "empty event pattern",
+			content: `{
+				"handlers": [{
+					"name": "bad-handler",
+					"type": "webhook",
+					"events": [""],
+					"config": {"url": "https://example.com"}
+				}]
+			}`,
+			wantErr: true,
+		},
+		{
+			name: "no events",
+			content: `{
+				"handlers": [{
+					"name": "no-events",
+					"type": "webhook",
+					"events": [],
+					"config": {"url": "https://example.com"}
+				}]
+			}`,
+			wantErr: true,
+		},
+		{
+			name: "invalid handler type",
+			content: `{
+				"handlers": [{
+					"name": "bad-type",
+					"type": "invalid",
+					"events": ["file.create.*"],
+					"config": {}
+				}]
+			}`,
+			wantErr: true,
+		},
+		{
+			name:    "no handlers",
+			content: `{"handlers": []}`,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateEventsConfig([]byte(tt.content))
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateEventsConfig() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}

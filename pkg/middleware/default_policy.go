@@ -5,37 +5,42 @@ package middleware
 // IMPORTANT: This is only used as a fallback if /.rego doesn't exist.
 // Run the bootstrap script to create /.rego as an actual file that can be edited.
 //
-// This provides basic role-based access control:
-// - admin role: full read+write+delete access
-// - user role: read-only access
+// This provides basic group-based access control:
+// - admin group: full read+write+delete access
+// - user group: read-only access
 // - owners (users in owner groups): read+write+delete access
-// - all other roles: denied
+// - all other groups: denied
 const DefaultRegoPolicy = `package vfs.authz
 
-# Default policy: admin has full access, user has read-only access, owners have write access
+# Default policy: admin group has full access, user group has read-only access, owners have write access
 # This policy is used when no .rego file is found in the directory hierarchy
 
-# Admin role: full access to all actions
+# Admin group: full access to all actions
 allow {
-    input.user.role == "admin"
+    input.user.groups[_] == "admin"
 }
 
-# User role: read-only access
+# System admin group: full access to all actions
 allow {
-    input.user.role == "user"
+    input.user.groups[_] == "system-admin"
+}
+
+# User group: read-only access
+allow {
+    input.user.groups[_] == "user"
     input.action == "read"
 }
 
 # Owners: Users in owner groups can write
 allow {
-    input.user.role == "user"
+    input.user.groups[_] == "user"
     input.action == "write"
     is_owner
 }
 
 # Owners: Users in owner groups can delete
 allow {
-    input.user.role == "user"
+    input.user.groups[_] == "user"
     input.action == "delete"
     is_owner
 }

@@ -229,13 +229,53 @@ type CatCommand struct{}
 
 func (c *CatCommand) Execute(ctx *Context, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: cat <path>")
+		return fmt.Errorf("usage: cat [-v version] <path>")
 	}
 
-	path := ctx.Session.ResolvePath(args[0])
+	var version int64
+	var path string
+	hasVersion := false
+
+	// Parse args
+	for i := 0; i < len(args); i++ {
+		if args[i] == "-v" && i+1 < len(args) {
+			_, err := fmt.Sscanf(args[i+1], "%d", &version)
+			if err != nil {
+				return fmt.Errorf("invalid version number")
+			}
+			hasVersion = true
+			i++
+		} else {
+			path = args[i]
+		}
+	}
+
+	if path == "" {
+		return fmt.Errorf("usage: cat [-v version] <path>")
+	}
+
+	path = ctx.Session.ResolvePath(path)
 
 	if !session.IsValidPath(path) {
 		return fmt.Errorf("invalid path: %s", path)
+	}
+
+	var content []byte
+	var contentType string
+	var err error
+
+	if hasVersion {
+		content, contentType, err = ctx.Client.GetFileVersion(path, version)
+		if err != nil {
+			return err
+		}
+		// Warn if binary
+		if !strings.HasPrefix(contentType, "text/") &&
+			!strings.HasPrefix(contentType, "application/json") {
+			fmt.Fprintf(ctx.Stderr, "Warning: file is binary (%s)\n", contentType)
+		}
+		_, err = ctx.Stdout.Write(content)
+		return err
 	}
 
 	reader, contentType, err := ctx.Client.GetFileStream(path)
@@ -256,7 +296,7 @@ func (c *CatCommand) Execute(ctx *Context, args []string) error {
 }
 
 func (c *CatCommand) Help() string {
-	return "cat <path> - Display file contents"
+	return "cat [-v version] <path> - Display file contents"
 }
 
 // ImportCommand imports a local file to VFS
@@ -524,65 +564,252 @@ func (c *HelpCommand) Help() string {
 	return "help - Show available commands"
 }
 
-// CreateSchemaCommand creates a .jsonschema special file
-type CreateSchemaCommand struct{}
+// TreeCommand displays directory tree
+type TreeCommand struct{}
 
-func (c *CreateSchemaCommand) Execute(ctx *Context, args []string) error {
-	if len(args) < 2 {
-		return fmt.Errorf("usage: create-schema <directory_path> <local_schema_file>")
+func (c *TreeCommand) Execute(ctx *Context, args []string) error {
+	maxDepth := 3
+	targetPath := ""
+
+	// Parse flags and args
+	for i := 0; i < len(args); i++ {
+		if args[i] == "-d" && i+1 < len(args) {
+			depth, err := fmt.Sscanf(args[i+1], "%d", &maxDepth)
+			if err != nil || depth != 1 {
+				return fmt.Errorf("invalid depth value")
+			}
+			i++
+		} else if !strings.HasPrefix(args[i], "-") {
+			targetPath = args[i]
+		}
 	}
 
-	dirPath := ctx.Session.ResolvePath(args[0])
-	localPath := args[1]
+	if targetPath == "" {
+		targetPath = ctx.Session.GetCurrentDirectory()
+	} else {
+		targetPath = ctx.Session.ResolvePath(targetPath)
+	}
 
-	// Read schema file
-	content, err := os.ReadFile(localPath)
+	if !session.IsValidPath(targetPath) {
+		return fmt.Errorf("invalid path: %s", targetPath)
+	}
+
+	fmt.Fprintf(ctx.Stdout, "%s/\n", targetPath)
+	return c.printTree(ctx, targetPath, "", 0, maxDepth)
+}
+
+func (c *TreeCommand) printTree(ctx *Context, path, prefix string, depth, maxDepth int) error {
+	if depth >= maxDepth {
+		return nil
+	}
+
+	resp, err := ctx.Client.ListDirectory(path, 100, "")
 	if err != nil {
-		return fmt.Errorf("failed to read schema file: %w", err)
+		return err
 	}
 
-	// Create .jsonschema file in the directory
-	_, err = ctx.Client.CreateFile(dirPath, ".jsonschema", "application/json", string(content))
-	if err != nil {
-		return fmt.Errorf("failed to create schema: %w", err)
+	for i, entry := range resp.Entries {
+		isLast := i == len(resp.Entries)-1
+		connector := "├── "
+		extension := "│   "
+		if isLast {
+			connector = "└── "
+			extension = "    "
+		}
+
+		if entry.Type == "directory" {
+			fmt.Fprintf(ctx.Stdout, "%s%s%s/\n", prefix, connector, entry.Name)
+			subPath := filepath.Join(path, entry.Name)
+			if err := c.printTree(ctx, subPath, prefix+extension, depth+1, maxDepth); err != nil {
+				return err
+			}
+		} else {
+			fmt.Fprintf(ctx.Stdout, "%s%s%s\n", prefix, connector, entry.Name)
+		}
 	}
 
-	fmt.Fprintf(ctx.Stdout, "✓ Schema created at %s/.jsonschema\n", dirPath)
 	return nil
 }
 
-func (c *CreateSchemaCommand) Help() string {
-	return "create-schema <directory_path> <local_schema_file> - Create a .jsonschema file in a directory"
+func (c *TreeCommand) Help() string {
+	return "tree [-d depth] [path] - Display directory tree (default depth: 3)"
 }
 
-// CreatePolicyCommand creates a .rego special file
-type CreatePolicyCommand struct{}
+// EditCommand edits a file using $EDITOR or vim
+type EditCommand struct{}
 
-func (c *CreatePolicyCommand) Execute(ctx *Context, args []string) error {
-	if len(args) < 2 {
-		return fmt.Errorf("usage: create-policy <directory_path> <local_rego_file>")
+func (c *EditCommand) Execute(ctx *Context, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: edit <path>")
 	}
 
-	dirPath := ctx.Session.ResolvePath(args[0])
-	localPath := args[1]
+	path := ctx.Session.ResolvePath(args[0])
+	if !session.IsValidPath(path) {
+		return fmt.Errorf("invalid path: %s", path)
+	}
 
-	// Read policy file
-	content, err := os.ReadFile(localPath)
+	// Download file to temp location
+	tmpFile, err := os.CreateTemp("", "vfs-edit-*")
 	if err != nil {
-		return fmt.Errorf("failed to read policy file: %w", err)
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath)
+
+	// Try to get existing content
+	content, _, err := ctx.Client.GetFile(path)
+	if err == nil {
+		if _, err := tmpFile.Write(content); err != nil {
+			tmpFile.Close()
+			return fmt.Errorf("failed to write temp file: %w", err)
+		}
+	}
+	tmpFile.Close()
+
+	// Get editor
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		editor = "vim"
 	}
 
-	// Create .rego file in the directory
-	_, err = ctx.Client.CreateFile(dirPath, ".rego", "text/plain", string(content))
+	// Open editor
+	cmd := exec.Command(editor, tmpPath)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("editor failed: %w", err)
+	}
+
+	// Read edited content
+	editedContent, err := os.ReadFile(tmpPath)
 	if err != nil {
-		return fmt.Errorf("failed to create policy: %w", err)
+		return fmt.Errorf("failed to read edited file: %w", err)
 	}
 
-	fmt.Fprintf(ctx.Stdout, "✓ Policy created at %s/.rego\n", dirPath)
+	// Upload to VFS
+	dirPath := filepath.Dir(path)
+	fileName := filepath.Base(path)
+
+	_, err = ctx.Client.CreateFile(dirPath, fileName, "text/plain", string(editedContent))
+	if err != nil {
+		return fmt.Errorf("failed to save file: %w", err)
+	}
+
+	fmt.Fprintf(ctx.Stdout, "File saved: %s\n", path)
 	return nil
 }
 
-func (c *CreatePolicyCommand) Help() string {
-	return "create-policy <directory_path> <local_rego_file> - Create a .rego policy file in a directory"
+func (c *EditCommand) Help() string {
+	return "edit <path> - Edit file using $EDITOR or vim"
+}
+
+// LoginCommand authenticates with VFS
+type LoginCommand struct{}
+
+func (c *LoginCommand) Execute(ctx *Context, args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: login <username> <password>")
+	}
+
+	username := args[0]
+	password := args[1]
+
+	token, err := ctx.Client.Login(username, password)
+	if err != nil {
+		return fmt.Errorf("login failed: %w", err)
+	}
+
+	ctx.Client.SetAuthToken(token)
+	ctx.Session.SetAuthToken(token)
+
+	// Save token
+	if err := SaveToken(token); err != nil {
+		fmt.Fprintf(ctx.Stderr, "Warning: failed to save token: %v\n", err)
+	}
+
+	fmt.Fprintf(ctx.Stdout, "Logged in as %s\n", username)
+	return nil
+}
+
+func (c *LoginCommand) Help() string {
+	return "login <username> <password> - Authenticate with VFS"
+}
+
+// LogoutCommand clears authentication
+type LogoutCommand struct{}
+
+func (c *LogoutCommand) Execute(ctx *Context, args []string) error {
+	ctx.Client.SetAuthToken("")
+	ctx.Session.SetAuthToken("")
+
+	if err := RemoveToken(); err != nil {
+		// Ignore error if file doesn't exist
+	}
+
+	fmt.Fprintf(ctx.Stdout, "Logged out\n")
+	return nil
+}
+
+func (c *LogoutCommand) Help() string {
+	return "logout - Clear authentication"
+}
+
+// HistoryCommand shows command history
+type HistoryCommand struct {
+	history []string
+}
+
+func NewHistoryCommand(history []string) *HistoryCommand {
+	return &HistoryCommand{history: history}
+}
+
+func (c *HistoryCommand) Execute(ctx *Context, args []string) error {
+	for i, cmd := range c.history {
+		fmt.Fprintf(ctx.Stdout, "%4d  %s\n", i+1, cmd)
+	}
+	return nil
+}
+
+func (c *HistoryCommand) Help() string {
+	return "history - Show command history"
+}
+
+// GetCwdCommand shows local working directory
+type GetCwdCommand struct{}
+
+func (c *GetCwdCommand) Execute(ctx *Context, args []string) error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(ctx.Stdout, cwd)
+	return nil
+}
+
+func (c *GetCwdCommand) Help() string {
+	return "get-cwd - Show local working directory"
+}
+
+// SetCwdCommand changes local working directory
+type SetCwdCommand struct{}
+
+func (c *SetCwdCommand) Execute(ctx *Context, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: set-cwd <path>")
+	}
+
+	if err := os.Chdir(args[0]); err != nil {
+		return fmt.Errorf("failed to change directory: %w", err)
+	}
+
+	cwd, _ := os.Getwd()
+	fmt.Fprintf(ctx.Stdout, "Local directory: %s\n", cwd)
+	return nil
+}
+
+func (c *SetCwdCommand) Help() string {
+	return "set-cwd <path> - Change local working directory"
 }
 

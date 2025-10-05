@@ -179,7 +179,6 @@ func TestCreateFile_LifecycleEvents(t *testing.T) {
 		"file.create.authorization.succeeded",
 		"file.create.validation.succeeded",
 		"file.create.completion.succeeded",
-		"file.created", // legacy event
 	}
 
 	assert.GreaterOrEqual(t, len(mockTrigger.EmittedEvents), len(expectedEvents),

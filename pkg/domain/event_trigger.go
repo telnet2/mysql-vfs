@@ -2,12 +2,17 @@ package domain
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"path"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/telnet2/mysql-vfs/pkg/events"
 	"github.com/telnet2/mysql-vfs/pkg/events/handlers"
+	"github.com/telnet2/mysql-vfs/pkg/persistence/db"
 )
 
 // EventTrigger is the interface for emitting lifecycle events
@@ -21,11 +26,13 @@ type LifecycleEventTrigger struct {
 	patternMatcher  events.PatternMatcher
 	workerPool      chan struct{} // Semaphore for limiting concurrent handlers
 	wg              sync.WaitGroup
+	asyncTimeout    time.Duration
 }
 
 // EventTriggerConfig configures the event trigger
 type EventTriggerConfig struct {
 	MaxConcurrentHandlers int // Maximum number of async handlers running concurrently
+	AsyncHandlerTimeout   time.Duration
 }
 
 // NewLifecycleEventTrigger creates a new lifecycle event trigger
@@ -39,11 +46,17 @@ func NewLifecycleEventTrigger(
 		maxConcurrent = 10 // Default: 10 concurrent handlers
 	}
 
+	asyncTimeout := config.AsyncHandlerTimeout
+	if asyncTimeout <= 0 {
+		asyncTimeout = 30 * time.Second
+	}
+
 	return &LifecycleEventTrigger{
 		eventsLoader:    eventsLoader,
 		handlerRegistry: handlerRegistry,
 		patternMatcher:  events.NewWildcardPatternMatcher(),
 		workerPool:      make(chan struct{}, maxConcurrent),
+		asyncTimeout:    asyncTimeout,
 	}
 }
 
@@ -59,10 +72,10 @@ func (t *LifecycleEventTrigger) EmitSync(ctx context.Context, eventType string, 
 
 // EmitWithOperation emits an event with operation context tracking
 func (t *LifecycleEventTrigger) EmitWithOperation(ctx context.Context, opCtx *events.OperationContext, eventType string, payload interface{}) {
-	// Get directory ID from payload
-	dirID := t.extractDirectoryID(payload)
-	if dirID == "" {
-		log.Printf("failed to extract directory ID from payload for event %s", eventType)
+	// Resolve directory context before loading handlers
+	dirID, err := t.resolveDirectoryID(ctx, payload)
+	if err != nil {
+		log.Printf("failed to resolve directory context for event %s: %v", eventType, err)
 		return
 	}
 
@@ -79,10 +92,10 @@ func (t *LifecycleEventTrigger) EmitWithOperation(ctx context.Context, opCtx *ev
 
 // EmitSyncWithOperation emits an event synchronously with operation context
 func (t *LifecycleEventTrigger) EmitSyncWithOperation(ctx context.Context, opCtx *events.OperationContext, eventType string, payload interface{}) error {
-	// Get directory ID from payload
-	dirID := t.extractDirectoryID(payload)
-	if dirID == "" {
-		return fmt.Errorf("failed to extract directory ID from payload for event %s", eventType)
+	// Resolve directory context before loading handlers
+	dirID, err := t.resolveDirectoryID(ctx, payload)
+	if err != nil {
+		return fmt.Errorf("failed to resolve directory context for event %s: %w", eventType, err)
 	}
 
 	// Get matching handlers
@@ -224,41 +237,186 @@ func (t *LifecycleEventTrigger) extractFileProperties(payload interface{}) (name
 	return "", 0, ""
 }
 
-// extractDirectoryID extracts directory ID from payload
-func (t *LifecycleEventTrigger) extractDirectoryID(payload interface{}) string {
-	// Try different payload types
-	if fep, ok := payload.(*events.FileEventPayload); ok {
-		return fep.Event.DirectoryPath
+// resolveDirectoryID resolves the directory identifier associated with a payload.
+func (t *LifecycleEventTrigger) resolveDirectoryID(ctx context.Context, payload interface{}) (string, error) {
+	var candidateIDs []string
+	var candidatePaths []string
+
+	switch p := payload.(type) {
+	case *events.FileEventPayload:
+		t.addDirectoryPathCandidate(&candidatePaths, p.Event.DirectoryPath)
+		t.collectPathsFromResource(&candidatePaths, &candidateIDs, p.Resource)
+	case *events.DirectoryEventPayload:
+		t.addDirectoryContextCandidate(&candidatePaths, p.Event.DirectoryPath)
+		t.collectPathsFromResource(&candidatePaths, &candidateIDs, p.Resource)
+	case *events.MoveEventPayload:
+		t.addDirectoryContextCandidate(&candidatePaths, p.Event.DirectoryPath)
+		t.addDirectoryPathCandidate(&candidatePaths, p.NewDirectory)
+		t.addDirectoryPathCandidate(&candidatePaths, p.OldDirectory)
+		t.collectPathsFromResource(&candidatePaths, &candidateIDs, p.Resource)
+	case *events.AuthorizationEventPayload:
+		t.collectPathsFromResource(&candidatePaths, &candidateIDs, p.Resource)
+	case *events.ValidationEventPayload:
+		t.collectPathsFromResource(&candidatePaths, &candidateIDs, p.Resource)
+	case *events.ExecutionEventPayload:
+		t.collectPathsFromResource(&candidatePaths, &candidateIDs, p.Resource)
+	case *events.CompletionEventPayload:
+		t.collectPathsFromResource(&candidatePaths, &candidateIDs, p.Resource)
+		if p.OperationContext != nil {
+			if p.OperationContext.Category == events.CategoryDirectory {
+				cleaned := t.addDirectoryPathCandidate(&candidatePaths, p.OperationContext.ResourcePath)
+				if cleaned != "" {
+					parent := path.Dir(cleaned)
+					if parent != cleaned {
+						t.addDirectoryPathCandidate(&candidatePaths, parent)
+					}
+				}
+			} else {
+				t.addFileDirectoryCandidate(&candidatePaths, p.OperationContext.ResourcePath)
+			}
+		}
+	default:
+		// No additional context available
 	}
 
-	if dep, ok := payload.(*events.DirectoryEventPayload); ok {
-		return dep.Event.DirectoryPath
+	// Prefer explicit identifiers if present
+	for _, id := range candidateIDs {
+		if id != "" {
+			return id, nil
+		}
 	}
 
-	if mep, ok := payload.(*events.MoveEventPayload); ok {
-		return mep.Event.DirectoryPath
+	if len(candidatePaths) == 0 {
+		return "", fmt.Errorf("no directory path hints available")
 	}
 
-	if aep, ok := payload.(*events.AuthorizationEventPayload); ok {
-		// Extract from lifecycle event
-		// For now, we need to pass this in metadata or extend the payload
-		// Temporary: use metadata.RequestID as directory path (should be fixed)
-		return aep.Metadata.RequestID
+	var notFound []string
+	var lastErr error
+	for _, dirPath := range candidatePaths {
+		resolved, err := t.eventsLoader.ResolveDirectoryID(ctx, dirPath)
+		if err == nil {
+			return resolved, nil
+		}
+		if errors.Is(err, db.ErrNotFound) {
+			notFound = append(notFound, dirPath)
+			lastErr = err
+			continue
+		}
+		lastErr = err
 	}
 
-	if vep, ok := payload.(*events.ValidationEventPayload); ok {
-		return vep.Metadata.RequestID
+	if len(notFound) == len(candidatePaths) && len(notFound) > 0 {
+		return "", fmt.Errorf("directories not found for paths: %s", strings.Join(notFound, ", "))
+	}
+	if lastErr != nil {
+		return "", lastErr
 	}
 
-	if eep, ok := payload.(*events.ExecutionEventPayload); ok {
-		return eep.Metadata.RequestID
+	return "", fmt.Errorf("unable to resolve directory context")
+}
+
+func (t *LifecycleEventTrigger) handlerContext(parent context.Context) (context.Context, context.CancelFunc) {
+	base := context.Background()
+	if parent != nil {
+		if requestID := parent.Value("requestID"); requestID != nil {
+			base = context.WithValue(base, "requestID", requestID)
+		}
 	}
 
-	if cep, ok := payload.(*events.CompletionEventPayload); ok {
-		return cep.Metadata.RequestID
+	if t.asyncTimeout > 0 {
+		return context.WithTimeout(base, t.asyncTimeout)
 	}
 
-	return ""
+	return context.WithCancel(base)
+}
+
+func (t *LifecycleEventTrigger) collectPathsFromResource(paths *[]string, ids *[]string, resource interface{}) {
+	switch res := resource.(type) {
+	case events.FileResource:
+		t.addFileDirectoryCandidate(paths, res.Path)
+	case *events.FileResource:
+		if res != nil {
+			t.addFileDirectoryCandidate(paths, res.Path)
+		}
+	case events.DirectoryResource:
+		if res.ID != "" {
+			t.addIDCandidate(ids, res.ID)
+		}
+		t.addDirectoryContextCandidate(paths, res.Path)
+	case *events.DirectoryResource:
+		if res != nil {
+			if res.ID != "" {
+				t.addIDCandidate(ids, res.ID)
+			}
+			t.addDirectoryContextCandidate(paths, res.Path)
+		}
+	}
+}
+
+func (t *LifecycleEventTrigger) addIDCandidate(ids *[]string, candidate string) {
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" {
+		return
+	}
+	for _, existing := range *ids {
+		if existing == candidate {
+			return
+		}
+	}
+	*ids = append(*ids, candidate)
+}
+
+func (t *LifecycleEventTrigger) addFileDirectoryCandidate(paths *[]string, filePath string) {
+	cleaned := t.cleanAbsolutePath(filePath)
+	if cleaned == "" {
+		return
+	}
+	dirPath := path.Dir(cleaned)
+	t.addCandidatePath(paths, dirPath)
+}
+
+func (t *LifecycleEventTrigger) addDirectoryPathCandidate(paths *[]string, dirPath string) string {
+	return t.addCandidatePath(paths, dirPath)
+}
+
+func (t *LifecycleEventTrigger) addDirectoryContextCandidate(paths *[]string, dirPath string) {
+	cleaned := t.addDirectoryPathCandidate(paths, dirPath)
+	if cleaned == "" {
+		return
+	}
+	parent := path.Dir(cleaned)
+	if parent != cleaned {
+		t.addCandidatePath(paths, parent)
+	}
+}
+
+func (t *LifecycleEventTrigger) addCandidatePath(paths *[]string, candidate string) string {
+	cleaned := t.cleanAbsolutePath(candidate)
+	if cleaned == "" {
+		return ""
+	}
+	for _, existing := range *paths {
+		if existing == cleaned {
+			return cleaned
+		}
+	}
+	*paths = append(*paths, cleaned)
+	return cleaned
+}
+
+func (t *LifecycleEventTrigger) cleanAbsolutePath(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return ""
+	}
+	if !strings.HasPrefix(p, "/") {
+		return ""
+	}
+	cleaned := path.Clean(p)
+	if cleaned == "." {
+		return ""
+	}
+	return cleaned
 }
 
 // executeHandler executes a handler synchronously and returns the response
@@ -281,12 +439,14 @@ func (t *LifecycleEventTrigger) dispatchAsync(ctx context.Context, handler event
 	t.wg.Add(1)
 
 	go func() {
+		handlerCtx, cancel := t.handlerContext(ctx)
 		defer func() {
+			cancel()
 			<-t.workerPool // Release worker slot
 			t.wg.Done()
 		}()
 
-		response := t.executeHandler(ctx, handler, payload)
+		response := t.executeHandler(handlerCtx, handler, payload)
 
 		// Log errors or vetos for async handlers
 		if response.Veto {
