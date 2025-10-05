@@ -34,7 +34,6 @@ type VFSServer struct {
 	idempotencyService *idempotency.Service
 	filesLoader        *domain.FilesLoader
 	policyLoader       *domain.PolicyLoader
-	quotaLoader        *domain.QuotaLoader
 }
 
 func main() {
@@ -84,7 +83,6 @@ func main() {
 	// Initialize loaders with caching (from config)
 	filesLoader := domain.NewFilesLoader(fileRepo, dirRepo, cfg.SchemaCacheTTL)
 	policyLoader := domain.NewPolicyLoader(fileRepo, dirRepo, cfg.PolicyCacheTTL)
-	quotaLoader := domain.NewQuotaLoader(fileRepo, dirRepo, cfg.QuotaCacheTTL)
 	eventsLoader := domain.NewEventsLoader(fileRepo, dirRepo, cfg.SchemaCacheTTL) // Reuse schema TTL for events
 
 	// Initialize event handler registry
@@ -119,7 +117,6 @@ func main() {
 		idempotencyService: idempotencyService,
 		filesLoader:        filesLoader,
 		policyLoader:       policyLoader,
-		quotaLoader:        quotaLoader,
 	}
 
 	// Initialize Hertz server

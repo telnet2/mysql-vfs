@@ -64,7 +64,6 @@ func main() {
 		"jq":            &commands.JqCommand{},
 		"create-schema": &commands.CreateSchemaCommand{},
 		"create-policy": &commands.CreatePolicyCommand{},
-		"create-quota":  &commands.CreateQuotaCommand{},
 		"help":          commands.NewHelpCommand(nil),
 	}
 

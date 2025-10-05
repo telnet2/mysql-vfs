@@ -12,7 +12,6 @@ func TestIsSpecialFile(t *testing.T) {
 	}{
 		{"json schema", ".jsonschema", true},
 		{"rego policy", ".rego", true},
-		{"quota file", ".quota", true},
 		{"hidden file", ".hiddenfile", true},
 		{"regular file", "data.json", false},
 		{"no extension", "README", false},
@@ -36,8 +35,6 @@ func TestIsRegisteredSpecialFile(t *testing.T) {
 	}{
 		{"files config", ".files", true},
 		{"rego policy", ".rego", true},
-		{"quota file", ".quota", true},
-		{"lifecycle file", ".lifecycle", true},
 		{"events file", ".events", true},
 		{"user file", ".user", true},
 		{"group file", ".group", true},
@@ -62,8 +59,6 @@ func TestRequiresAdmin(t *testing.T) {
 	}{
 		{"files config", ".files", true},
 		{"rego policy", ".rego", true},
-		{"quota file", ".quota", true},
-		{"lifecycle file", ".lifecycle", true},
 		{"events file", ".events", false}, // events don't require admin
 		{"user file", ".user", true},
 		{"group file", ".group", true},
@@ -93,11 +88,9 @@ func TestSupportsInheritance(t *testing.T) {
 	}{
 		{"files config", ".files", true},
 		{"rego policy", ".rego", true},
-		{"quota file", ".quota", true},
-		{"lifecycle file", ".lifecycle", false}, // no inheritance
-		{"events file", ".events", true},        // events inherit and merge
-		{"user file", ".user", false},           // no inheritance
-		{"group file", ".group", false},         // no inheritance
+		{"events file", ".events", true},  // events inherit and merge
+		{"user file", ".user", false},     // no inheritance
+		{"group file", ".group", false},   // no inheritance
 	}
 
 	for _, tt := range tests {
@@ -185,44 +178,6 @@ allow {
 	}
 }
 
-func TestValidateQuotaConfig(t *testing.T) {
-	tests := []struct {
-		name    string
-		content string
-		wantErr bool
-	}{
-		{
-			name:    "valid quota",
-			content: `{"max_files": 1000, "max_size_bytes": 104857600}`,
-			wantErr: false,
-		},
-		{
-			name:    "with optional fields",
-			content: `{"max_files": 100, "max_size_bytes": 10485760, "max_depth": 5, "max_file_size": 1048576}`,
-			wantErr: false,
-		},
-		{
-			name:    "negative max_files",
-			content: `{"max_files": -1, "max_size_bytes": 1000}`,
-			wantErr: true,
-		},
-		{
-			name:    "invalid json",
-			content: `{invalid}`,
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := validateQuotaConfig([]byte(tt.content))
-			if (err != nil) != tt.wantErr {
-				t.Errorf("validateQuotaConfig() error = %v, wantErr %v", err, tt.wantErr)
-			}
-		})
-	}
-}
-
 func TestValidateWebhookConfig(t *testing.T) {
 	t.Skip("Skipping - validateWebhookConfig function was removed/refactored")
 	tests := []struct {
@@ -290,12 +245,6 @@ func TestValidateSpecialFileContent(t *testing.T) {
 			name:     "valid policy",
 			filename: ".rego",
 			content:  `package test` + "\nallow { true }",
-			wantErr:  false,
-		},
-		{
-			name:     "valid quota",
-			filename: ".quota",
-			content:  `{"max_files": 100, "max_size_bytes": 1000000}`,
 			wantErr:  false,
 		},
 		{

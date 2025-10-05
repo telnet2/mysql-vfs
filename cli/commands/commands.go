@@ -433,7 +433,6 @@ func (c *JqCommand) Help() string {
 	return "jq <path> <expression> - Query JSON file with jq"
 }
 
-// LoginCommand authenticates a user
 // SaveToken saves the auth token to a file (for external auth providers)
 func SaveToken(token string) error {
 	homeDir, err := os.UserHomeDir()
@@ -513,7 +512,6 @@ func (c *HelpCommand) Execute(ctx *Context, args []string) error {
 	fmt.Fprintln(ctx.Stdout, "Special Files:")
 	fmt.Fprintln(ctx.Stdout, "  create-schema <dir> <file>         Create .jsonschema (admin)")
 	fmt.Fprintln(ctx.Stdout, "  create-policy <dir> <file>         Create .rego policy (admin)")
-	fmt.Fprintln(ctx.Stdout, "  create-quota <dir> <file>          Create .quota config (admin)")
 	fmt.Fprintln(ctx.Stdout, "")
 	fmt.Fprintln(ctx.Stdout, "Other:")
 	fmt.Fprintln(ctx.Stdout, "  help                               Show this help")
@@ -588,33 +586,3 @@ func (c *CreatePolicyCommand) Help() string {
 	return "create-policy <directory_path> <local_rego_file> - Create a .rego policy file in a directory"
 }
 
-// CreateQuotaCommand creates a .quota special file
-type CreateQuotaCommand struct{}
-
-func (c *CreateQuotaCommand) Execute(ctx *Context, args []string) error {
-	if len(args) < 2 {
-		return fmt.Errorf("usage: create-quota <directory_path> <local_quota_file>")
-	}
-
-	dirPath := ctx.Session.ResolvePath(args[0])
-	localPath := args[1]
-
-	// Read quota config
-	content, err := os.ReadFile(localPath)
-	if err != nil {
-		return fmt.Errorf("failed to read quota file: %w", err)
-	}
-
-	// Create .quota file in the directory
-	_, err = ctx.Client.CreateFile(dirPath, ".quota", "application/json", string(content))
-	if err != nil {
-		return fmt.Errorf("failed to create quota: %w", err)
-	}
-
-	fmt.Fprintf(ctx.Stdout, "✓ Quota created at %s/.quota\n", dirPath)
-	return nil
-}
-
-func (c *CreateQuotaCommand) Help() string {
-	return "create-quota <directory_path> <local_quota_file> - Create a .quota config file in a directory"
-}

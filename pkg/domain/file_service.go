@@ -31,7 +31,6 @@ type CreateFileRequest struct {
 type FileService struct {
 	uow          repository.UnitOfWork
 	filesLoader  *FilesLoader
-	quotaLoader  *QuotaLoader
 	policyLoader *PolicyLoader
 }
 
@@ -39,13 +38,11 @@ type FileService struct {
 func NewFileService(
 	uow repository.UnitOfWork,
 	filesLoader *FilesLoader,
-	quotaLoader *QuotaLoader,
 	policyLoader *PolicyLoader,
 ) *FileService {
 	return &FileService{
 		uow:          uow,
 		filesLoader:  filesLoader,
-		quotaLoader:  quotaLoader,
 		policyLoader: policyLoader,
 	}
 }
@@ -100,13 +97,6 @@ func (s *FileService) createRegularFile(ctx context.Context, req CreateFileReque
 			return nil, ErrDirectoryNotFound
 		}
 		return nil, err
-	}
-
-	// Check quota if one exists
-	if s.quotaLoader != nil {
-		if err := s.quotaLoader.CheckQuota(ctx, req.DirectoryPath, 1, int64(len(req.Content))); err != nil {
-			return nil, err
-		}
 	}
 
 	// Validate against .files rules (pattern + schema)
@@ -365,10 +355,6 @@ func (s *FileService) invalidateCacheForSpecialFile(directoryPath, fileName stri
 	case SpecialFileTypePolicy:
 		if s.policyLoader != nil {
 			s.policyLoader.Invalidate(directoryPath)
-		}
-	case SpecialFileTypeQuota:
-		if s.quotaLoader != nil {
-			s.quotaLoader.Invalidate(directoryPath)
 		}
 	}
 }

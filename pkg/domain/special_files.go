@@ -12,13 +12,11 @@ import (
 type SpecialFileType string
 
 const (
-	SpecialFileTypeFiles     SpecialFileType = ".files"     // File pattern rules with schemas
-	SpecialFileTypePolicy    SpecialFileType = ".rego"
-	SpecialFileTypeQuota     SpecialFileType = ".quota"
-	SpecialFileTypeLifecycle SpecialFileType = ".lifecycle"
-	SpecialFileTypeEvents    SpecialFileType = ".events"
-	SpecialFileTypeUser      SpecialFileType = ".user"
-	SpecialFileTypeGroup     SpecialFileType = ".group"
+	SpecialFileTypeFiles   SpecialFileType = ".files"  // File pattern rules with schemas
+	SpecialFileTypePolicy  SpecialFileType = ".rego"
+	SpecialFileTypeEvents  SpecialFileType = ".events"
+	SpecialFileTypeUser    SpecialFileType = ".user"
+	SpecialFileTypeGroup   SpecialFileType = ".group"
 )
 
 // SpecialFileDefinition defines metadata for a special file type
@@ -48,22 +46,6 @@ var SpecialFileRegistry = map[SpecialFileType]*SpecialFileDefinition{
 		AdminOnly:         true,
 		ValidateFunc:      validateRegoPolicy,
 		InheritFromParent: true,
-	},
-	SpecialFileTypeQuota: {
-		Name:              SpecialFileTypeQuota,
-		Description:       "Resource quota limits (max files, max size)",
-		ContentType:       "application/json",
-		AdminOnly:         true,
-		ValidateFunc:      validateQuotaConfig,
-		InheritFromParent: true,
-	},
-	SpecialFileTypeLifecycle: {
-		Name:              SpecialFileTypeLifecycle,
-		Description:       "File retention and archival policy",
-		ContentType:       "application/json",
-		AdminOnly:         true,
-		ValidateFunc:      validateLifecycleConfig,
-		InheritFromParent: false, // Don't inherit lifecycle policies
 	},
 	SpecialFileTypeEvents: {
 		Name:              SpecialFileTypeEvents,
@@ -232,72 +214,6 @@ func validateRegoPolicy(content []byte) error {
 
 	// TODO: Use OPA's AST parser for more thorough validation
 	// For now, basic checks are sufficient
-
-	return nil
-}
-
-// QuotaConfig represents the structure of a .quota file
-type QuotaConfig struct {
-	MaxFiles     int   `json:"max_files"`
-	MaxSizeBytes int64 `json:"max_size_bytes"`
-	MaxDepth     int   `json:"max_depth,omitempty"`
-	MaxFileSize  int64 `json:"max_file_size,omitempty"`
-}
-
-// validateQuotaConfig validates .quota file content
-func validateQuotaConfig(content []byte) error {
-	var quota QuotaConfig
-
-	if err := json.Unmarshal(content, &quota); err != nil {
-		return fmt.Errorf("invalid quota JSON: %w", err)
-	}
-
-	if quota.MaxFiles < 0 {
-		return fmt.Errorf("max_files must be >= 0")
-	}
-
-	if quota.MaxSizeBytes < 0 {
-		return fmt.Errorf("max_size_bytes must be >= 0")
-	}
-
-	if quota.MaxDepth < 0 {
-		return fmt.Errorf("max_depth must be >= 0")
-	}
-
-	if quota.MaxFileSize < 0 {
-		return fmt.Errorf("max_file_size must be >= 0")
-	}
-
-	return nil
-}
-
-// LifecycleConfig represents the structure of a .lifecycle file
-type LifecycleConfig struct {
-	RetentionDays  int    `json:"retention_days"`
-	ArchiveAfter   int    `json:"archive_after_days,omitempty"`
-	DeleteAfter    int    `json:"delete_after_days,omitempty"`
-	ArchiveStorage string `json:"archive_storage,omitempty"`
-}
-
-// validateLifecycleConfig validates .lifecycle file content
-func validateLifecycleConfig(content []byte) error {
-	var lifecycle LifecycleConfig
-
-	if err := json.Unmarshal(content, &lifecycle); err != nil {
-		return fmt.Errorf("invalid lifecycle JSON: %w", err)
-	}
-
-	if lifecycle.RetentionDays < 0 {
-		return fmt.Errorf("retention_days must be >= 0")
-	}
-
-	if lifecycle.ArchiveAfter < 0 {
-		return fmt.Errorf("archive_after_days must be >= 0")
-	}
-
-	if lifecycle.DeleteAfter < 0 {
-		return fmt.Errorf("delete_after_days must be >= 0")
-	}
 
 	return nil
 }
