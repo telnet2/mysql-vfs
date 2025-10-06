@@ -371,61 +371,104 @@ var ErrProtectedSystemDirectory = errors.New("cannot modify system-protected /et
 
 ### Embedded Files
 
-In `pkg/setup/setup.go`:
+In `pkg/seed/seed.go`:
 
 ```go
-package setup
+package seed
 
 import (
     _ "embed"
     "embed"
 )
 
-//go:embed seed/*.schema.json
-var seedFS embed.FS
+//go:embed *.schema.json
+var FS embed.FS
 
 // GetSchemaContent reads embedded schema file
 func GetSchemaContent(filename string) ([]byte, error) {
-    return seedFS.ReadFile("seed/" + filename)
+    return FS.ReadFile(filename)
+}
+
+// ListSchemaFiles lists all embedded schema files
+func ListSchemaFiles() ([]string, error) {
+    entries, err := FS.ReadDir(".")
+    if err != nil {
+        return nil, err
+    }
+
+    files := make([]string, 0, len(entries))
+    for _, entry := range entries {
+        if !entry.IsDir() {
+            files = append(files, entry.Name())
+        }
+    }
+    return files, nil
 }
 ```
 
-## Implementation Checklist
+**Note**: Schema files are embedded in the `pkg/seed` package to avoid import cycles with `pkg/persistence/db`.
 
-### Phase 1: Database Schema
-- [ ] Add `metadata` JSON field to `directories` table
-- [ ] Add `metadata` JSON field to `files` table
-- [ ] Add `metadata` JSON field to `file_versions` table
-- [ ] Update GORM models with Metadata field
-- [ ] Create migration for existing databases
+## Implementation Status
 
-### Phase 2: Schema Files
-- [ ] Create `pkg/setup/seed/` directory
-- [ ] Write `owner.schema.json`
-- [ ] Write `files.schema.json`
-- [ ] Write `events.schema.json`
-- [ ] Write `file.metadata.schema.json`
-- [ ] Write `directory.metadata.schema.json`
-- [ ] Add `go:embed` directive
+### Phase 1: Database Schema ✅ COMPLETE
+- [x] Add `metadata` JSON field to `directories` table
+- [x] Add `metadata` JSON field to `files` table
+- [x] Add `metadata` JSON field to `file_versions` table
+- [x] Update GORM models with Metadata field
+- [x] Create migration for existing databases
 
-### Phase 3: Protection Logic
-- [ ] Add `ErrProtectedSystemDirectory` error
-- [ ] Add protection checks in `file_service.go`
-- [ ] Add protection checks in `directory_service.go`
-- [ ] Update authorization middleware if needed
+**Location**: `pkg/models/directory.go`, `pkg/models/file.go`, `pkg/models/file_version.go`
 
-### Phase 4: Bootstrap
-- [ ] Create `bootstrapSystemFiles()` function
-- [ ] Implement `/etc` directory creation with metadata
-- [ ] Implement schema file seeding
-- [ ] Update `AutoMigrate()` to call bootstrap
-- [ ] Ensure idempotent behavior
+### Phase 2: Schema Files ✅ COMPLETE
+- [x] Create `pkg/seed/` directory (moved from `pkg/setup/seed/`)
+- [x] Write `owner.schema.json`
+- [x] Write `files.schema.json`
+- [x] Write `events.schema.json`
+- [x] Write `file.metadata.schema.json`
+- [x] Write `directory.metadata.schema.json`
+- [x] Add `go:embed` directive in `pkg/seed/seed.go`
 
-### Phase 5: Testing
+**Location**: `pkg/seed/*.schema.json`
+
+### Phase 3: Protection Logic ✅ COMPLETE
+- [x] Add `ErrProtectedSystemDirectory` error in `pkg/domain/errors.go`
+- [x] Add `IsSystemProtectedPath()` function in `pkg/domain/special_files.go`
+- [x] Add protection checks in `file_service.go` (CreateFile, UpdateFile, DeleteFile)
+- [x] Add protection checks in `directory_service.go` (CreateDirectory, DeleteDirectory)
+- [x] Authorization middleware integration (inherited from existing)
+
+**Location**: `pkg/domain/errors.go`, `pkg/domain/special_files.go`, `pkg/domain/file_service.go`, `pkg/domain/directory_service.go`
+
+### Phase 4: Bootstrap ✅ COMPLETE
+- [x] Create `bootstrapSystemFiles()` function
+- [x] Implement `/etc` directory creation with metadata
+- [x] Implement schema file seeding (always overwrites)
+- [x] Update `AutoMigrate()` to call bootstrap
+- [x] Ensure idempotent behavior
+
+**Location**: `pkg/persistence/db/migrate.go`
+
+### Phase 5: Testing ⏳ IN PROGRESS
 - [ ] Unit tests for metadata validation
-- [ ] Tests for `/etc` protection
-- [ ] Tests for bootstrap behavior
+- [x] Tests for `/etc` protection (manual verification)
+- [x] Tests for bootstrap behavior (verified via service startup)
 - [ ] Integration tests for seeding
+- [ ] E2E tests in `citest/system_files_test.go`
+
+**Status**: Basic testing complete, comprehensive test suite pending
+
+## Next Steps: Metadata & On-Behalf-Of
+
+The system file infrastructure is complete. Next phases:
+
+1. **Auth Context Infrastructure** - Extract actor/principal from requests
+2. **Metadata Population** - Auto-populate metadata on create/update
+3. **Delegation Support** - Implement on-behalf-of headers and validation
+4. **API Enhancements** - Add metadata query parameters
+5. **CLI Enhancements** - Add `--on-behalf-of` and `--metadata` flags
+6. **Audit Logging** - Log delegation operations
+
+See [../archive/metadata-delegation-implementation-plan.md](../archive/metadata-delegation-implementation-plan.md) for detailed implementation plan.
 
 ## Usage Examples
 

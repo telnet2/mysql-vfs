@@ -1,7 +1,7 @@
 # On-Behalf-Of Delegation
 
 **Version**: 1.0
-**Status**: Production Ready
+**Status**: Design Complete / Implementation Pending
 **Last Updated**: 2025-10-06
 
 ---
@@ -9,6 +9,14 @@
 ## Overview
 
 The VFS system supports **on-behalf-of delegation**, allowing authorized actors to perform operations on behalf of principals. This enables automation, administrative assistance, and service-to-service workflows while maintaining clear audit trails.
+
+### Implementation Status
+
+- ✅ **Database Schema** - Metadata fields ready for delegation tracking
+- ✅ **Design Specification** - Complete security model and patterns documented
+- ⏳ **Implementation** - Pending (Phases 2-7)
+
+See [Implementation Status](#implementation-status) below.
 
 ### Key Concepts
 
@@ -20,7 +28,7 @@ The VFS system supports **on-behalf-of delegation**, allowing authorized actors 
 
 ## Use Cases
 
-### 1. Automated Backups
+### 1. Automated Backups (Future)
 
 Backup service creates snapshots on behalf of users:
 
@@ -32,12 +40,12 @@ vfs-cli import alice-data.tar.gz /backups/alice/ \
   --reason="nightly-backup-job"
 ```
 
-**Result**:
+**Result** (once implemented):
 - File owner: `alice`
 - File creator: `service-account`
 - Audit trail: "nightly-backup-job"
 
-### 2. Admin Assistance
+### 2. Admin Assistance (Future)
 
 Administrator helps user organize workspace:
 
@@ -48,7 +56,7 @@ vfs-cli mkdir /users/newuser/projects \
   --reason="onboarding-setup"
 ```
 
-### 3. CI/CD Pipelines
+### 3. CI/CD Pipelines (Future)
 
 Jenkins deploys artifacts to application directories:
 
@@ -502,24 +510,143 @@ Regularly review delegation logs for:
 - Implement rate limiting
 - Use network policies to restrict service account access
 
+### 5. Defense in Depth
+
+The security model enforces multiple validation layers:
+
+```
+┌────────────────────────────────────┐
+│ 1. Authentication                  │ ← JWT/API key verification
+│    (Establish TRUSTED actor)       │
+└────────────────────────────────────┘
+         ↓
+┌────────────────────────────────────┐
+│ 2. Delegation Authorization        │ ← Check impersonate permission
+│    (Validate header is allowed)    │
+└────────────────────────────────────┘
+         ↓
+┌────────────────────────────────────┐
+│ 3. Rego Policy Evaluation          │ ← Policy-based rules
+│    (can_impersonate check)         │
+└────────────────────────────────────┘
+         ↓
+┌────────────────────────────────────┐
+│ 4. Operation Authorization         │ ← Resource permission check
+│    (As principal, not actor)       │
+└────────────────────────────────────┘
+```
+
+**Critical**: Headers like `X-VFS-On-Behalf-Of` are **requests**, not facts. Each layer validates the request independently.
+
+---
+
+## Implementation Status
+
+### Phase 1: Database Schema ✅ COMPLETE
+
+- [x] `metadata` JSON field on tables
+- [x] Schema support for owner/creator fields
+- [x] System file metadata population
+
+### Phase 2: Auth Context (Pending)
+
+**Goal**: Extract actor/principal from requests
+
+**Key Components**:
+1. `AuthContext` struct with ActorUserID, PrincipalUserID, Groups
+2. `ExtractAuthContext()` middleware to parse headers
+3. `validateImpersonation()` for security checks
+4. Security event logging
+
+**Reference**: See [archive/metadata-delegation-implementation-plan.md](../../archive/metadata-delegation-implementation-plan.md) lines 196-313
+
+### Phase 3: Metadata Population (Pending)
+
+**Goal**: Auto-populate metadata from AuthContext
+
+**Key Components**:
+1. `buildMetadata()` helper in domain services
+2. Population in CreateDirectory/CreateFile
+3. Update tracking in UpdateFile
+
+**Reference**: See [archive/metadata-delegation-implementation-plan.md](../../archive/metadata-delegation-implementation-plan.md) lines 442-603
+
+### Phase 4: Authorization (Pending)
+
+**Goal**: Enforce delegation via Rego policy
+
+**Key Components**:
+1. `can_impersonate` rules in `.rego`
+2. Group-based authorization (service-accounts, system-admin)
+3. Operation authorization as principal
+
+**Reference**: See [archive/metadata-delegation-implementation-plan.md](../../archive/metadata-delegation-implementation-plan.md) lines 322-393
+
+### Phase 5-7: API/CLI, Audit, Testing (Pending)
+
+See [Metadata Guide](./METADATA.md#implementation-plan) for full roadmap.
+
+**Total Estimated Time**: 6-10 days
+
+---
+
+## Industry Patterns
+
+### RFC 8693 - OAuth 2.0 Token Exchange
+
+**Actor Claim (`act`)**: Standard pattern for delegation chains
+
+```json
+{
+  "sub": "alice@example.com",
+  "act": {
+    "sub": "automation-service",
+    "client_id": "jenkins-ci"
+  }
+}
+```
+
+### Kubernetes Impersonation
+
+**HTTP Headers**: K8s uses similar header-based delegation
+
+```http
+Impersonate-User: alice@example.com
+Impersonate-Group: developers
+```
+
+Authorization: Actor must have `impersonate` verb permission (similar to our approach)
+
+### AWS IAM Source Identity
+
+**Source Identity**: AWS tracks original actor across role chains
+
+```bash
+aws sts assume-role \
+  --role-arn arn:aws:iam::123:role/MyRole \
+  --source-identity automation-service
+```
+
+Persists across delegation chains and appears in CloudTrail logs.
+
+### Our Approach
+
+VFS combines these patterns:
+- **Headers** (like K8s) for simplicity
+- **Authorization-protected** (like K8s) for security
+- **Metadata tracking** (like AWS) for audit
+- **RFC 8693 semantics** for clear actor/principal distinction
+
 ---
 
 ## Related Documentation
 
 - [Metadata Guide](./METADATA.md) - Metadata structure and usage
+- [System Files](./SYSTEM_FILES.md) - System files and schemas
 - [Authorization](./AUTHORIZATION.md) - Authorization system
 - [Security](./SECURITY.md) - Security best practices
-- [API Reference](./API_REFERENCE.md) - Complete API documentation
 
----
-
-## Examples Repository
-
-See [examples/delegation](../examples/delegation/) for:
-- Service account setup
-- Rego policy examples
-- Automation scripts
-- Monitoring queries
+**Implementation Plan**: [archive/metadata-delegation-implementation-plan.md](../../archive/metadata-delegation-implementation-plan.md) - Detailed specifications
 
 ---
 

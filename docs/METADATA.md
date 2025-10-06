@@ -21,14 +21,20 @@ All files and directories in the VFS system have **metadata** - structured JSON 
 
 ### Required Fields
 
-All resources have these fields:
+According to `/etc/file.metadata.schema.json` and `/etc/directory.metadata.schema.json`:
 
-| Field | Type | Description | Example |
-|-------|------|-------------|---------|
-| `owner` | string | Effective owner (principal if delegated) | `"alice"` |
-| `creator` | string | Actual creator (actor who performed creation) | `"service-account"` |
-| `system` | boolean | System-managed resource flag | `false` |
-| `created_at` | string | ISO 8601 timestamp of creation | `"2025-10-06T10:00:00Z"` |
+| Field | Type | Required | Description | Example | Pattern |
+|-------|------|----------|-------------|---------|---------|
+| `owner` | string | **Yes** | Effective owner (principal if delegated) | `"alice"` | `^[a-z0-9][a-z0-9-]*[a-z0-9]$` |
+| `creator` | string | **Yes** | Actual creator (actor who performed creation) | `"service-account"` | `^[a-z0-9][a-z0-9-]*[a-z0-9]$` |
+| `system` | boolean | No | System-managed resource flag | `false` | - |
+| `created_at` | string | No | ISO 8601 timestamp of creation | `"2025-10-06T10:00:00Z"` | - |
+
+**Name Requirements**:
+- Must start and end with alphanumeric character
+- May contain hyphens in the middle
+- Length: 2-64 characters
+- Lowercase only
 
 ### Optional Fields
 
@@ -265,9 +271,33 @@ vfs-cli find / --metadata=project:data-pipeline
 
 ---
 
+## Implementation Status
+
+### Current Status (Phase 1: Complete ✅)
+
+The database schema and metadata infrastructure is in place:
+
+1. ✅ **Database Schema** - `metadata` JSON column on `directories`, `files`, `file_versions` tables
+2. ✅ **JSON Schemas** - Validation schemas in `/etc/*.metadata.schema.json`
+3. ✅ **Bootstrap** - System files have metadata automatically populated
+
+### Pending Implementation (Phase 2-7)
+
+Metadata population for user-created resources is **not yet implemented**. Required:
+
+1. **Auth Context Extraction** - Extract actor/principal from HTTP headers
+2. **Metadata Population** - Auto-populate on create/update operations
+3. **API Support** - `?metadata={}` query parameter
+4. **CLI Support** - `--metadata` flag
+5. **Delegation Validation** - Verify impersonate permission
+
+See [Implementation Plan](#implementation-plan) below.
+
+---
+
 ## Metadata in Workflows
 
-### Backup Workflow
+### Backup Workflow (Future)
 
 ```bash
 # 1. Service account creates backup
@@ -275,7 +305,7 @@ vfs-cli import backup-$(date +%Y%m%d).tar.gz /backups/alice/ \
   --on-behalf-of=alice \
   --reason="daily-backup"
 
-# Metadata:
+# Metadata (auto-populated):
 # {
 #   "owner": "alice",
 #   "creator": "backup-service",
@@ -290,7 +320,7 @@ vfs-cli ls /backups/alice/
 vfs-cli cat /backups/alice/backup-20251006.tar.gz > restore.tar.gz
 ```
 
-### CI/CD Workflow
+### CI/CD Workflow (Future)
 
 ```bash
 # 1. Jenkins deploys artifact
@@ -300,7 +330,7 @@ curl -X POST "${VFS_URL}/api/v1/files?path=/prod/app/release.zip" \
   -H "X-VFS-Delegation-Reason: release-v1.2.3" \
   --data-binary @release.zip
 
-# Metadata:
+# Metadata (auto-populated):
 # {
 #   "owner": "deployment-bot",
 #   "creator": "jenkins",
@@ -558,6 +588,107 @@ echo '{"owner":"alice","creator":"alice"}' | \
 
 ---
 
+## Implementation Plan
+
+### Phase 1: Database Schema ✅ COMPLETE
+
+- [x] Add `metadata` JSON field to tables
+- [x] Create JSON schemas in `/etc`
+- [x] Bootstrap system file metadata
+
+### Phase 2: Auth Context (Pending)
+
+**Goal**: Extract actor/principal from requests
+
+**Files to Create**:
+- `pkg/middleware/auth_context.go` - AuthContext struct and extraction
+- `pkg/middleware/delegation.go` - Delegation validation
+
+**Tasks**:
+1. Define `AuthContext` struct (ActorUserID, PrincipalUserID, Groups, etc.)
+2. Implement `ExtractAuthContext()` middleware
+3. Add delegation validation (`validateImpersonation()`)
+4. Store AuthContext in request context
+5. Update handlers to use middleware
+
+**Estimated**: 1-2 days
+
+### Phase 3: Metadata Population (Pending)
+
+**Goal**: Auto-populate metadata on resource creation
+
+**Files to Modify**:
+- `pkg/domain/directory_service.go` - Add `buildMetadata()` helper
+- `pkg/domain/file_service.go` - Add `buildMetadata()` helper
+
+**Tasks**:
+1. Create `getAuthContext()` helper in domain services
+2. Create `buildMetadata()` helper function
+3. Update `CreateDirectory()` to populate metadata
+4. Update `CreateFile()` to populate metadata
+5. Update `UpdateFile()` to add `updated_by` field
+
+**Estimated**: 1-2 days
+
+### Phase 4: Authorization Integration (Pending)
+
+**Goal**: Enforce delegation permissions via Rego
+
+**Files to Modify**:
+- `.rego` policy file (root directory)
+
+**Tasks**:
+1. Add `can_impersonate` rules
+2. Add delegation authorization checks
+3. Test with service-accounts and system-admin groups
+
+**Estimated**: 1 day
+
+### Phase 5: API & CLI Support (Pending)
+
+**Goal**: Allow users to set custom metadata
+
+**Files to Modify**:
+- `services/vfs/handlers/*.go` - Add `?metadata={}` query parameter
+- `cli/cmd/*.go` - Add `--on-behalf-of`, `--reason`, `--metadata` flags
+
+**Tasks**:
+1. Parse metadata query parameter in API handlers
+2. Add CLI global flags
+3. Set headers in CLI client
+
+**Estimated**: 1 day
+
+### Phase 6: Audit Logging (Pending)
+
+**Goal**: Log all delegation operations
+
+**Files to Create**:
+- `pkg/middleware/audit_logger.go` - Audit logging
+
+**Tasks**:
+1. Implement `LogOperation()` function
+2. Log delegation attempts (success + failure)
+3. Include actor, principal, reason in logs
+
+**Estimated**: 1 day
+
+### Phase 7: Testing (Pending)
+
+**Goal**: Comprehensive test coverage
+
+**Files to Create**:
+- `pkg/domain/file_service_test.go` - Metadata unit tests
+- `pkg/domain/directory_service_test.go` - Metadata unit tests
+- `citest/delegation_test.go` - E2E delegation tests
+- `citest/metadata_test.go` - E2E metadata tests
+
+**Estimated**: 1-2 days
+
+**Total Estimated Time**: 6-10 days
+
+---
+
 ## Future Enhancements
 
 ### Metadata Search API
@@ -592,6 +723,16 @@ vfs-cli import data.csv /data/ \
   --metadata='{"project":"web"}' \
   --validate-schema=/schemas/project.json
 ```
+
+---
+
+## Related Documentation
+
+- [On-Behalf-Of Delegation](./ON_BEHALF_OF.md) - Delegation guide
+- [System Files](./SYSTEM_FILES.md) - System files and schemas
+- [Authorization](./AUTHORIZATION.md) - Authorization system
+
+See [../../archive/metadata-delegation-implementation-plan.md](../../archive/metadata-delegation-implementation-plan.md) for detailed implementation specifications.
 
 ---
 
