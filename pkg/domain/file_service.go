@@ -573,6 +573,56 @@ func (s *FileService) GetFile(ctx context.Context, filePath string, version int6
 	return fileData, reader, nil
 }
 
+// GetFileMetadata retrieves file metadata without content
+func (s *FileService) GetFileMetadata(ctx context.Context, filePath string, version int64) (*models.File, error) {
+	// Parse path
+	dirPath, fileName := s.parsePath(filePath)
+
+	// Find file
+	var file models.File
+	err := s.db.Joins("JOIN directories ON directories.id = files.directory_id").
+		Where("directories.path = ? AND files.name = ? AND files.deleted_at IS NULL", dirPath, fileName).
+		First(&file).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, fmt.Errorf("file not found: %s", filePath)
+		}
+		return nil, err
+	}
+
+	if version == 0 || version == file.Version {
+		// Return current version metadata
+		return &file, nil
+	} else {
+		// Get specific version metadata
+		var fileVersion models.FileVersion
+		err := s.db.Where("file_id = ? AND version_number = ?", file.ID, version).First(&fileVersion).Error
+		if err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return nil, fmt.Errorf("version %d not found for file: %s", version, filePath)
+			}
+			return nil, err
+		}
+
+		// Create a file struct from the version data (metadata only)
+		fileData := &models.File{
+			ID:             file.ID,
+			Name:           file.Name,
+			ContentType:    fileVersion.ContentType,
+			SizeBytes:      fileVersion.SizeBytes,
+			StorageType:    fileVersion.StorageType,
+			ChecksumSHA256: fileVersion.ChecksumSHA256,
+			Version:        fileVersion.VersionNumber,
+			DirectoryID:    file.DirectoryID,
+			Metadata:       fileVersion.Metadata,
+			CreatedAt:      fileVersion.CreatedAt,
+			UpdatedAt:      file.CreatedAt, // Use file's updated_at for versions
+		}
+
+		return fileData, nil
+	}
+}
+
 // UpdateFile updates an existing file with lifecycle event tracking
 func (s *FileService) UpdateFile(ctx context.Context, filePath, contentType string, size int64, content io.Reader, expectedVersion int64) (*models.File, error) {
 	// Parse path first to check protection
@@ -912,6 +962,46 @@ func (s *FileService) UpdateFile(ctx context.Context, filePath, contentType stri
 	}
 
 	return file, nil
+}
+
+// UpdateFileMetadata updates only the metadata of a file without changing content
+func (s *FileService) UpdateFileMetadata(ctx context.Context, filePath, contentType string) (*models.File, error) {
+	// Parse path first to check protection
+	dirPath, fileName := s.parsePath(filePath)
+
+	// Check if path is system-protected
+	if IsSystemProtectedPath(dirPath) {
+		return nil, ErrProtectedSystemDirectory
+	}
+
+	// Find and update the file
+	var file models.File
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		// Find the file
+		if err := tx.Where("directory_id = (SELECT id FROM directories WHERE path = ?) AND name = ?",
+			dirPath, fileName).First(&file).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return fmt.Errorf("file not found: %s", filePath)
+			}
+			return fmt.Errorf("failed to find file: %w", err)
+		}
+
+		// Update only the content type
+		file.ContentType = contentType
+		file.UpdatedAt = time.Now()
+
+		if err := tx.Save(&file).Error; err != nil {
+			return fmt.Errorf("failed to update file metadata: %w", err)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &file, nil
 }
 
 // ListVersions lists all versions of a file (latest first)

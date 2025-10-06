@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -284,6 +285,19 @@ func (c *Client) CreateFile(directoryPath, name, contentType, content string) (*
 
 	if resp.StatusCode != http.StatusCreated {
 		body, _ := io.ReadAll(resp.Body)
+		// Try to parse structured error response
+		var errorResp struct {
+			Error   string   `json:"error"`
+			Details []string `json:"details,omitempty"`
+		}
+		if err := json.Unmarshal(body, &errorResp); err == nil && errorResp.Error != "" {
+			if len(errorResp.Details) > 0 {
+				// Format field-specific validation errors
+				details := strings.Join(errorResp.Details, "; ")
+				return nil, fmt.Errorf("failed to create file: %s (%s)", errorResp.Error, details)
+			}
+			return nil, fmt.Errorf("failed to create file: %s", errorResp.Error)
+		}
 		return nil, fmt.Errorf("failed to create file: %s (status: %d)", string(body), resp.StatusCode)
 	}
 
@@ -313,6 +327,19 @@ func (c *Client) UpdateFile(path, contentType, content string, expectedVersion i
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		// Try to parse structured error response
+		var errorResp struct {
+			Error   string   `json:"error"`
+			Details []string `json:"details,omitempty"`
+		}
+		if err := json.Unmarshal(body, &errorResp); err == nil && errorResp.Error != "" {
+			if len(errorResp.Details) > 0 {
+				// Format field-specific validation errors
+				details := strings.Join(errorResp.Details, "; ")
+				return nil, fmt.Errorf("failed to update file: %s (%s)", errorResp.Error, details)
+			}
+			return nil, fmt.Errorf("failed to update file: %s", errorResp.Error)
+		}
 		return nil, fmt.Errorf("failed to update file: %s (status: %d)", string(body), resp.StatusCode)
 	}
 
@@ -346,20 +373,22 @@ func (c *Client) ListVersions(path string) ([]*FileVersion, error) {
 }
 
 // GetFile retrieves a file's content
-func (c *Client) GetFile(path string) ([]byte, string, int64, error) {
+func (c *Client) GetFile(path string) ([]byte, string, int64, time.Time, error) {
 	resp, err := c.request("GET", "/api/v1/files"+path, nil, "")
 	if err != nil {
-		return nil, "", 0, err
+		return nil, "", 0, time.Time{}, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, "", 0, fmt.Errorf("failed to get file: %s (status: %d)", string(body), resp.StatusCode)
+		return nil, "", 0, time.Time{}, fmt.Errorf("failed to get file: %s (status: %d)", string(body), resp.StatusCode)
 	}
 
 	contentType := resp.Header.Get("Content-Type")
 	versionStr := resp.Header.Get("X-File-Version")
+	modifiedStr := resp.Header.Get("X-File-Modified-At")
+
 	var version int64 = 1 // Default to 1
 	if versionStr != "" {
 		if parsed, err := strconv.ParseInt(versionStr, 10, 64); err == nil {
@@ -367,12 +396,19 @@ func (c *Client) GetFile(path string) ([]byte, string, int64, error) {
 		}
 	}
 
-	content, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, "", 0, fmt.Errorf("failed to read file content: %w", err)
+	var modifiedAt time.Time
+	if modifiedStr != "" {
+		if parsed, err := time.Parse(time.RFC3339, modifiedStr); err == nil {
+			modifiedAt = parsed
+		}
 	}
 
-	return content, contentType, version, nil
+	content, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", 0, time.Time{}, fmt.Errorf("failed to read file content: %w", err)
+	}
+
+	return content, contentType, version, modifiedAt, nil
 }
 
 // GetFileStream retrieves a file's content as a stream
@@ -497,6 +533,71 @@ func (c *Client) Login(username, password string) (string, error) {
 	}
 
 	return result.Token, nil
+}
+
+// UpdateFileMetadata updates only the metadata of a file
+func (c *Client) UpdateFileMetadata(path, contentType string) error {
+	requestID := uuid.New().String()
+
+	req := map[string]string{
+		"content_type": contentType,
+	}
+
+	resp, err := c.request("PATCH", "/api/v1/files"+path, req, requestID)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		// Try to parse structured error response
+		var errorResp struct {
+			Error   string   `json:"error"`
+			Details []string `json:"details,omitempty"`
+		}
+		if err := json.Unmarshal(body, &errorResp); err == nil && errorResp.Error != "" {
+			if len(errorResp.Details) > 0 {
+				// Format field-specific validation errors
+				details := strings.Join(errorResp.Details, "; ")
+				return fmt.Errorf("failed to update file metadata: %s (%s)", errorResp.Error, details)
+			}
+			return fmt.Errorf("failed to update file metadata: %s", errorResp.Error)
+		}
+		return fmt.Errorf("failed to update file metadata: %s (status: %d)", string(body), resp.StatusCode)
+	}
+
+	return nil
+}
+
+// GetFileMetadata retrieves file metadata without content
+func (c *Client) GetFileMetadata(path string, version int64) (map[string]interface{}, error) {
+	params := url.Values{}
+	if version > 0 {
+		params.Set("version", fmt.Sprintf("%d", version))
+	}
+	queryString := ""
+	if len(params) > 0 {
+		queryString = "?" + params.Encode()
+	}
+
+	resp, err := c.request("GET", "/api/v1/files-metadata"+path+queryString, nil, "")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to get file metadata: %s (status: %d)", string(body), resp.StatusCode)
+	}
+
+	var metadata map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&metadata); err != nil {
+		return nil, fmt.Errorf("failed to decode metadata response: %w", err)
+	}
+
+	return metadata, nil
 }
 
 // GetFileVersion retrieves a specific version of a file

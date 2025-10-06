@@ -121,6 +121,19 @@ func NewLazySchema(raw interface{}, loader *VFSSchemaLoader) *LazySchema {
 	}
 }
 
+// ValidationError represents a structured validation error with field-specific messages
+type ValidationError struct {
+	Message string
+	Errors  []string
+}
+
+func (e *ValidationError) Error() string {
+	if len(e.Errors) > 0 {
+		return fmt.Sprintf("%s: %s", e.Message, strings.Join(e.Errors, "; "))
+	}
+	return e.Message
+}
+
 // Validate validates data against the schema, resolving $ref dynamically
 func (s *LazySchema) Validate(data interface{}) error {
 	// Resolve all $ref references into inline schemas
@@ -132,7 +145,7 @@ func (s *LazySchema) Validate(data interface{}) error {
 	// Cache key based on resolved schema hash
 	key := s.hashData(resolved)
 	if schema, ok := s.cache[key]; ok {
-		return schema.Validate(data)
+		return s.validateWithSchema(schema, data)
 	}
 
 	// Compile the resolved schema
@@ -161,8 +174,42 @@ func (s *LazySchema) Validate(data interface{}) error {
 	s.cache[key] = schema
 
 	// Validate the data
+	return s.validateWithSchema(schema, data)
+}
+
+// validateWithSchema performs validation and returns structured errors
+func (s *LazySchema) validateWithSchema(schema *jsonschema.Schema, data interface{}) error {
 	if err := schema.Validate(data); err != nil {
-		return fmt.Errorf("validation failed: %w", err)
+		// Try to extract detailed validation errors
+		if validationErr, ok := err.(*jsonschema.ValidationError); ok {
+			var errors []string
+			// The jsonschema library has Causes field for detailed errors
+			for _, cause := range validationErr.Causes {
+				field := cause.InstanceLocation
+				if field == "" {
+					field = "root"
+				} else {
+					// Clean up the field path - remove leading slash and #/
+					field = strings.TrimPrefix(field, "/")
+					field = strings.TrimPrefix(field, "#/")
+				}
+				message := cause.Message
+				errors = append(errors, fmt.Sprintf("%s: %s", field, message))
+			}
+
+			if len(errors) > 0 {
+				return &ValidationError{
+					Message: "content validation failed",
+					Errors:  errors,
+				}
+			}
+		}
+
+		// Fallback to generic error
+		return &ValidationError{
+			Message: "validation failed",
+			Errors:  []string{err.Error()},
+		}
 	}
 
 	return nil

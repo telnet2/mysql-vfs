@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -153,9 +154,9 @@ func main() {
 	// API v1 routes
 	v1 := h.Group("/api/v1")
 	v1.Use(idempotencyService.Middleware())
-	v1.Use(authMiddleware.Handler())     // Authentication (JWT, OAuth, etc.)
+	v1.Use(authMiddleware.Handler())       // Authentication (JWT, OAuth, etc.)
 	v1.Use(delegationMiddleware.Handler()) // Delegation (on-behalf-of)
-	v1.Use(authzMiddleware.Handler())    // Authorization (OPA policies)
+	v1.Use(authzMiddleware.Handler())      // Authorization (OPA policies)
 
 	// Directory routes
 	v1.POST("/directories", vfsServer.createDirectory)
@@ -165,7 +166,9 @@ func main() {
 	// File routes
 	v1.POST("/files", vfsServer.createFile)
 	v1.GET("/files/*path", vfsServer.getFile)
+	v1.GET("/files-metadata/*path", vfsServer.getFileMetadata)
 	v1.PUT("/files/*path", vfsServer.updateFile)
+	v1.PATCH("/files/*path", vfsServer.updateFileMetadata)
 	v1.DELETE("/files/*path", vfsServer.deleteFile)
 	v1.POST("/files/move", vfsServer.moveFile)
 	v1.GET("/files-version/*path", vfsServer.listVersions)
@@ -390,9 +393,7 @@ func (s *VFSServer) createFile(ctx context.Context, c *app.RequestContext) {
 	size := int64(len(req.Content))
 	file, err := s.fileService.CreateFile(ctx, req.DirectoryPath, req.Name, req.ContentType, size, io.NopCloser(strings.NewReader(req.Content)))
 	if err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]string{
-			"error": err.Error(),
-		})
+		s.handleValidationError(c, err)
 		return
 	}
 
@@ -412,6 +413,63 @@ func (s *VFSServer) createFile(ctx context.Context, c *app.RequestContext) {
 	}
 
 	c.JSON(consts.StatusCreated, response)
+}
+
+// getFileMetadata retrieves file metadata without content
+func (s *VFSServer) getFileMetadata(ctx context.Context, c *app.RequestContext) {
+	path := string(c.Param("path"))
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+
+	// Check for version parameter
+	versionStr := string(c.Query("version"))
+	var version int64
+	var err error
+	if versionStr != "" {
+		version, err = strconv.ParseInt(versionStr, 10, 64)
+		if err != nil {
+			c.JSON(consts.StatusBadRequest, map[string]string{
+				"error": "invalid version parameter",
+			})
+			return
+		}
+	}
+
+	file, err := s.fileService.GetFileMetadata(ctx, path, version)
+	if err != nil {
+		c.JSON(consts.StatusNotFound, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	// Parse metadata JSON
+	var metadata map[string]interface{}
+	if file.Metadata != nil {
+		if err := json.Unmarshal([]byte(*file.Metadata), &metadata); err != nil {
+			// If metadata is malformed, return empty object
+			metadata = make(map[string]interface{})
+		}
+	} else {
+		metadata = make(map[string]interface{})
+	}
+
+	response := map[string]interface{}{
+		"id":           file.ID,
+		"name":         file.Name,
+		"path":         path,
+		"content_type": file.ContentType,
+		"size_bytes":   file.SizeBytes,
+		"storage_type": file.StorageType,
+		"checksum":     file.ChecksumSHA256,
+		"version":      file.Version,
+		"created_at":   file.CreatedAt,
+		"updated_at":   file.UpdatedAt,
+		"metadata":     metadata,
+	}
+
+	c.JSON(consts.StatusOK, response)
 }
 
 // getFile retrieves a file
@@ -449,6 +507,7 @@ func (s *VFSServer) getFile(ctx context.Context, c *app.RequestContext) {
 	c.Response.Header.Set("Content-Length", fmt.Sprintf("%d", file.SizeBytes))
 	c.Response.Header.Set("X-File-Version", fmt.Sprintf("%d", file.Version))
 	c.Response.Header.Set("X-Checksum-SHA256", file.ChecksumSHA256)
+	c.Response.Header.Set("X-File-Modified-At", file.UpdatedAt.Format(time.RFC3339))
 
 	// Stream content
 	c.Response.SetStatusCode(consts.StatusOK)
@@ -485,6 +544,52 @@ func (s *VFSServer) updateFile(ctx context.Context, c *app.RequestContext) {
 
 	size := int64(len(req.Content))
 	file, err := s.fileService.UpdateFile(ctx, path, req.ContentType, size, io.NopCloser(strings.NewReader(req.Content)), req.ExpectedVersion)
+	if err != nil {
+		s.handleValidationError(c, err)
+		return
+	}
+
+	response := map[string]interface{}{
+		"id":           file.ID,
+		"name":         file.Name,
+		"content_type": file.ContentType,
+		"size_bytes":   file.SizeBytes,
+		"version":      file.Version,
+		"updated_at":   file.UpdatedAt,
+	}
+
+	if requestID != "" {
+		s.idempotencyService.CacheResponse(requestID, response)
+	}
+
+	c.JSON(consts.StatusOK, response)
+}
+
+// updateFileMetadata updates only the metadata of a file (no content change)
+func (s *VFSServer) updateFileMetadata(ctx context.Context, c *app.RequestContext) {
+	path := string(c.Param("path"))
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+
+	var req struct {
+		ContentType string `json:"content_type"`
+	}
+
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(consts.StatusBadRequest, map[string]string{
+			"error": "invalid request body",
+		})
+		return
+	}
+
+	// Get request ID and add to context
+	requestID := idempotency.GetRequestID(c)
+	if requestID != "" {
+		ctx = context.WithValue(ctx, "requestID", requestID)
+	}
+
+	file, err := s.fileService.UpdateFileMetadata(ctx, path, req.ContentType)
 	if err != nil {
 		c.JSON(consts.StatusConflict, map[string]string{
 			"error": err.Error(),
@@ -578,6 +683,22 @@ func (s *VFSServer) deleteFile(ctx context.Context, c *app.RequestContext) {
 	}
 
 	c.JSON(consts.StatusOK, response)
+}
+
+// handleValidationError handles validation errors with detailed field-specific messages
+func (s *VFSServer) handleValidationError(c *app.RequestContext, err error) {
+	if validationErr, ok := err.(*domain.ValidationError); ok {
+		c.JSON(consts.StatusBadRequest, map[string]interface{}{
+			"error":   validationErr.Message,
+			"details": validationErr.Errors,
+		})
+		return
+	}
+
+	// Default error handling
+	c.JSON(consts.StatusBadRequest, map[string]string{
+		"error": err.Error(),
+	})
 }
 
 // moveFile moves or renames a file

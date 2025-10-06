@@ -101,6 +101,11 @@ func initRootCmd() {
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(rmCmd)
 	rootCmd.AddCommand(mvCmd)
+	rootCmd.AddCommand(cpCmd)
+	rootCmd.AddCommand(grepCmd)
+	rootCmd.AddCommand(findCmd)
+	rootCmd.AddCommand(attrCmd)
+	rootCmd.AddCommand(aliasCmd)
 	rootCmd.AddCommand(jqCmd)
 	rootCmd.AddCommand(loginCmd)
 	rootCmd.AddCommand(logoutCmd)
@@ -229,6 +234,7 @@ func runInteractiveMode() {
 
 		// Add to history for history command reuse
 		cmdHistory = append(cmdHistory, input)
+		saveHistory(cmdHistory)
 
 		if state.shellMode {
 			if err := runShellCommand(input); err != nil {
@@ -248,6 +254,13 @@ func runInteractiveMode() {
 		args := strings.Fields(input)
 		if len(args) == 0 {
 			return
+		}
+
+		// Check for aliases and expand if found
+		if expanded := expandAlias(args[0]); expanded != args[0] {
+			// Replace the alias with its expansion
+			expandedArgs := strings.Fields(expanded)
+			args = append(expandedArgs, args[1:]...)
 		}
 
 		// Get the command name for better error messages

@@ -13,7 +13,8 @@ func TestCommandRegistration(t *testing.T) {
 	// Test that all expected commands are registered
 	expectedCommands := []string{
 		"ls", "cd", "pwd", "mkdir", "rmdir",
-		"cat", "import", "rm", "mv", "jq", "help",
+		"cat", "import", "rm", "mv", "cp", "jq", "help",
+		"attr", "grep", "find",
 	}
 
 	vfsClient := client.NewClient("http://localhost:8080")
@@ -29,6 +30,10 @@ func TestCommandRegistration(t *testing.T) {
 		"import": &commands.ImportCommand{},
 		"rm":     &commands.RmCommand{},
 		"mv":     &commands.MvCommand{},
+		"cp":     &commands.CpCommand{},
+		"grep":   &commands.GrepCommand{},
+		"find":   &commands.FindCommand{},
+		"attr":   &commands.AttrCommand{},
 		"jq":     &commands.JqCommand{},
 		"help":   commands.NewHelpCommand(nil),
 	}

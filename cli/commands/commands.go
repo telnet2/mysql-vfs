@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/telnet2/mysql-vfs/cli/client"
@@ -88,37 +89,6 @@ func hasGlobChars(s string) bool {
 	return strings.ContainsAny(s, "*?[")
 }
 
-// detectContentType detects content type based on file extension
-func (c *LsCommand) detectContentType(filename string) string {
-	ext := strings.ToLower(filepath.Ext(filename))
-	switch ext {
-	case ".json":
-		return "application/json"
-	case ".txt", ".md":
-		return "text/plain"
-	case ".html":
-		return "text/html"
-	case ".xml":
-		return "application/xml"
-	case ".csv":
-		return "text/csv"
-	case ".jpg", ".jpeg":
-		return "image/jpeg"
-	case ".png":
-		return "image/png"
-	case ".pdf":
-		return "application/pdf"
-	case ".zip":
-		return "application/zip"
-	case ".rego":
-		return "application/rego"
-	case ".group":
-		return "application/group"
-	default:
-		return "application/octet-stream"
-	}
-}
-
 // formatSize formats file size in human readable format
 func (c *LsCommand) formatSize(size int64) string {
 	if size < 1024 {
@@ -191,7 +161,7 @@ func (c *LsCommand) Execute(ctx *Context, args []string) error {
 	}
 
 	// Try to get as file
-	_, _, _, err = ctx.Client.GetFile(targetPath)
+	_, _, _, _, err = ctx.Client.GetFile(targetPath)
 	if err != nil {
 		return fmt.Errorf("path not found: %s", targetPath)
 	}
@@ -245,19 +215,24 @@ func (c *LsCommand) listFile(ctx *Context, path string, long bool) error {
 
 func (c *LsCommand) listFileLong(ctx *Context, path string) error {
 	// Get file metadata
-	content, contentType, version, err := ctx.Client.GetFile(path)
+	content, contentType, version, modifiedAt, err := ctx.Client.GetFile(path)
 	if err != nil {
 		return err
 	}
 
 	// Detect content type if not provided
 	if contentType == "" {
-		contentType = c.detectContentType(filepath.Base(path))
+		contentType = detectContentType(filepath.Base(path))
 	}
 
 	// Use version from GetFile response
 	latestVersion := version
-	timestamp := "unknown" // For single file, we don't have timestamp from GetFile
+
+	// Use modification time from GetFile response
+	timestamp := "unknown"
+	if !modifiedAt.IsZero() {
+		timestamp = modifiedAt.Format("2006-01-02 15:04:05")
+	}
 
 	// Print table header
 	fmt.Fprintf(ctx.Stdout, "%-19s %-12s %-8s %-18s %s\n",
@@ -323,11 +298,11 @@ func (c *LsCommand) listDirectoryLong(ctx *Context, dirPath string, entries []cl
 		}
 
 		// For files, get detailed metadata
-		content, contentType, _, err := ctx.Client.GetFile(fullPath)
+		content, contentType, _, _, err := ctx.Client.GetFile(fullPath)
 		if err != nil {
 			// Fallback to basic info if we can't get file details
 			sizeStr := c.formatSize(entry.SizeBytes)
-			contentType = c.detectContentType(name)
+			contentType = detectContentType(name)
 			versionStr := fmt.Sprintf("%d", entry.Version)
 			if entry.Version == 0 {
 				versionStr = "-"
@@ -339,7 +314,7 @@ func (c *LsCommand) listDirectoryLong(ctx *Context, dirPath string, entries []cl
 
 		// Detect content type if not provided
 		if contentType == "" {
-			contentType = c.detectContentType(name)
+			contentType = detectContentType(name)
 		}
 
 		// Get version from directory entry
@@ -415,9 +390,9 @@ func (c *LsCommand) listRecursive(ctx *Context, path string, depth int, long boo
 			if long {
 				// For long recursive listing, show detailed info with indentation
 				fullPath := filepath.Join(path, entry.Name)
-				content, contentType, _, err := ctx.Client.GetFile(fullPath)
+				content, contentType, _, _, err := ctx.Client.GetFile(fullPath)
 				if err != nil {
-					contentType = c.detectContentType(entry.Name)
+					contentType = detectContentType(entry.Name)
 					versionStr := fmt.Sprintf("%d", entry.Version)
 					if entry.Version == 0 {
 						versionStr = "-"
@@ -430,7 +405,7 @@ func (c *LsCommand) listRecursive(ctx *Context, path string, depth int, long boo
 
 				// Detect content type if not provided
 				if contentType == "" {
-					contentType = c.detectContentType(entry.Name)
+					contentType = detectContentType(entry.Name)
 				}
 
 				// Get version from directory entry
@@ -933,6 +908,519 @@ func (c *MvCommand) Help() string {
 	return "mv <source> <destination> - Move or rename file"
 }
 
+// CpCommand copies files
+type CpCommand struct{}
+
+func (c *CpCommand) Execute(ctx *Context, args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: cp <source> <destination>")
+	}
+
+	sourcePattern := ctx.Session.ResolvePath(args[0])
+	destPattern := ctx.Session.ResolvePath(args[1])
+
+	// Expand source pattern if it contains globs
+	var sourcePaths []string
+	if hasGlobChars(sourcePattern) {
+		matches, err := expandVFSGlob(ctx, sourcePattern)
+		if err != nil {
+			return err
+		}
+		sourcePaths = matches
+	} else {
+		if !session.IsValidPath(sourcePattern) {
+			return fmt.Errorf("invalid source path: %s", sourcePattern)
+		}
+		sourcePaths = []string{sourcePattern}
+	}
+
+	// Check if any source is a directory
+	for _, sourcePath := range sourcePaths {
+		// Try to list as directory - if successful, it's a directory
+		if _, err := ctx.Client.ListDirectory(sourcePath, 1, ""); err == nil {
+			return fmt.Errorf("cp does not support copying directories: %s", sourcePath)
+		}
+	}
+
+	// Check if destination is a directory
+	isDestDir := false
+	if _, err := ctx.Client.ListDirectory(destPattern, 1, ""); err == nil {
+		isDestDir = true
+	}
+
+	copiedCount := 0
+	for _, sourcePath := range sourcePaths {
+		var finalDest string
+
+		if isDestDir {
+			// Copying into a directory - keep the original filename
+			fileName := filepath.Base(sourcePath)
+			finalDest = filepath.Join(destPattern, fileName)
+		} else if len(sourcePaths) > 1 {
+			// Multiple sources but destination is not a directory - not allowed
+			return fmt.Errorf("cannot copy multiple files to a single destination file")
+		} else {
+			// Single file copy
+			finalDest = destPattern
+		}
+
+		if !session.IsValidPath(finalDest) {
+			return fmt.Errorf("invalid destination path: %s", finalDest)
+		}
+
+		// Get source file content
+		content, contentType, _, _, err := ctx.Client.GetFile(sourcePath)
+		if err != nil {
+			fmt.Fprintf(ctx.Stderr, "Failed to read source file %s: %v\n", sourcePath, err)
+			continue
+		}
+
+		// Show progress for large files
+		fileSize := len(content)
+		if fileSize > 1024*1024 { // Show progress for files > 1MB
+			fmt.Fprintf(ctx.Stdout, "Copying %s (%d bytes)...\n", sourcePath, fileSize)
+		}
+
+		// Create destination file
+		dirPath := filepath.Dir(finalDest)
+		fileName := filepath.Base(finalDest)
+
+		_, err = ctx.Client.CreateFile(dirPath, fileName, contentType, string(content))
+		if err != nil {
+			fmt.Fprintf(ctx.Stderr, "Failed to copy %s to %s: %v\n", sourcePath, finalDest, err)
+			continue
+		}
+
+		if fileSize > 1024*1024 {
+			fmt.Fprintf(ctx.Stdout, "Completed: %s -> %s\n", sourcePath, finalDest)
+		} else {
+			fmt.Fprintf(ctx.Stdout, "Copied: %s -> %s\n", sourcePath, finalDest)
+		}
+		copiedCount++
+	}
+
+	if copiedCount == 0 {
+		return fmt.Errorf("no files were copied")
+	}
+
+	fmt.Fprintf(ctx.Stdout, "Copied %d file(s)\n", copiedCount)
+	return nil
+}
+
+func (c *CpCommand) Help() string {
+	return "cp <source> <destination> - Copy file(s) (supports glob patterns)"
+}
+
+// GrepCommand searches for patterns in files
+type GrepCommand struct{}
+
+func (c *GrepCommand) Execute(ctx *Context, args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: grep <pattern> <path>")
+	}
+
+	pattern := args[0]
+	searchPath := ctx.Session.ResolvePath(args[1])
+
+	if !session.IsValidPath(searchPath) {
+		return fmt.Errorf("invalid path: %s", searchPath)
+	}
+
+	// Check if search path is a directory or file
+	isDir := false
+	if _, err := ctx.Client.ListDirectory(searchPath, 1, ""); err == nil {
+		isDir = true
+	}
+
+	if isDir {
+		return c.searchDirectory(ctx, pattern, searchPath)
+	} else {
+		return c.searchFile(ctx, pattern, searchPath)
+	}
+}
+
+func (c *GrepCommand) searchDirectory(ctx *Context, pattern, dirPath string) error {
+	// Walk through directory recursively
+	return c.walkDirectory(ctx, pattern, dirPath, "")
+}
+
+func (c *GrepCommand) walkDirectory(ctx *Context, pattern, dirPath, prefix string) error {
+	resp, err := ctx.Client.ListDirectory(dirPath, 1000, "")
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range resp.Entries {
+		fullPath := filepath.Join(dirPath, entry.Name)
+
+		if entry.Type == "directory" {
+			// Recurse into subdirectory
+			if err := c.walkDirectory(ctx, pattern, fullPath, prefix+entry.Name+"/"); err != nil {
+				return err
+			}
+		} else {
+			// Search in file
+			if err := c.searchFile(ctx, pattern, fullPath); err != nil {
+				// Continue on error, just log it
+				fmt.Fprintf(ctx.Stderr, "Warning: failed to search %s: %v\n", fullPath, err)
+			}
+		}
+	}
+
+	return nil
+}
+
+func (c *GrepCommand) searchFile(ctx *Context, pattern, filePath string) error {
+	// Get file content
+	content, contentType, _, _, err := ctx.Client.GetFile(filePath)
+	if err != nil {
+		return err
+	}
+
+	// Skip binary files (non-text content types)
+	if !strings.Contains(contentType, "text/") &&
+		!strings.Contains(contentType, "json") &&
+		!strings.Contains(contentType, "xml") &&
+		contentType != "application/octet-stream" { // Allow octet-stream as it might be text
+		return nil
+	}
+
+	contentStr := string(content)
+	lines := strings.Split(contentStr, "\n")
+
+	found := false
+	for i, line := range lines {
+		if strings.Contains(line, pattern) {
+			if !found {
+				fmt.Fprintf(ctx.Stdout, "%s:\n", filePath)
+				found = true
+			}
+			fmt.Fprintf(ctx.Stdout, "%d: %s\n", i+1, line)
+		}
+	}
+
+	return nil
+}
+
+func (c *GrepCommand) Help() string {
+	return "grep <pattern> <path> - Search for pattern in file contents"
+}
+
+// FindCommand finds files and directories
+type FindCommand struct{}
+
+func (c *FindCommand) Execute(ctx *Context, args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: find <path> [-name pattern] [-type f|d] [-size +n|-n|n]")
+	}
+
+	searchPath := ctx.Session.ResolvePath(args[0])
+
+	if !session.IsValidPath(searchPath) {
+		return fmt.Errorf("invalid path: %s", searchPath)
+	}
+
+	// Parse options
+	var namePattern string
+	var fileType string
+	var sizeOp string
+	var sizeValue int64
+
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "-name":
+			if i+1 < len(args) {
+				namePattern = args[i+1]
+				i++
+			}
+		case "-type":
+			if i+1 < len(args) {
+				fileType = args[i+1]
+				i++
+			}
+		case "-size":
+			if i+1 < len(args) {
+				sizeStr := args[i+1]
+				if len(sizeStr) > 0 {
+					switch sizeStr[0] {
+					case '+':
+						sizeOp = "+"
+						sizeStr = sizeStr[1:]
+					case '-':
+						sizeOp = "-"
+						sizeStr = sizeStr[1:]
+					default:
+						sizeOp = "="
+					}
+				}
+				// Parse size (assume bytes for now)
+				if _, err := fmt.Sscanf(sizeStr, "%d", &sizeValue); err != nil {
+					return fmt.Errorf("invalid size format: %s", args[i+1])
+				}
+				i++
+			}
+		default:
+			return fmt.Errorf("unknown option: %s", args[i])
+		}
+	}
+
+	// Start search
+	return c.findRecursive(ctx, searchPath, namePattern, fileType, sizeOp, sizeValue, "")
+}
+
+func (c *FindCommand) findRecursive(ctx *Context, path, namePattern, fileType, sizeOp string, sizeValue int64, prefix string) error {
+	// Check if current path matches criteria
+	if c.matchesCriteria(path, namePattern, fileType, sizeOp, sizeValue, ctx) {
+		fmt.Fprintln(ctx.Stdout, path)
+	}
+
+	// If it's a directory, recurse
+	resp, err := ctx.Client.ListDirectory(path, 1000, "")
+	if err != nil {
+		// Not a directory, continue
+		return nil
+	}
+
+	for _, entry := range resp.Entries {
+		fullPath := filepath.Join(path, entry.Name)
+
+		// Check if entry matches criteria
+		if c.matchesEntry(entry, fullPath, namePattern, fileType, sizeOp, sizeValue) {
+			fmt.Fprintln(ctx.Stdout, fullPath)
+		}
+
+		// Recurse into directories
+		if entry.Type == "directory" {
+			if err := c.findRecursive(ctx, fullPath, namePattern, fileType, sizeOp, sizeValue, prefix+entry.Name+"/"); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func (c *FindCommand) matchesCriteria(path, namePattern, fileType, sizeOp string, sizeValue int64, ctx *Context) bool {
+	// For the root path, check if it matches
+	baseName := filepath.Base(path)
+
+	// Check name pattern
+	if namePattern != "" {
+		if !c.matchesPattern(baseName, namePattern) {
+			return false
+		}
+	}
+
+	// Check file type
+	if fileType != "" {
+		isDir := false
+		if _, err := ctx.Client.ListDirectory(path, 1, ""); err == nil {
+			isDir = true
+		}
+
+		if fileType == "d" && !isDir {
+			return false
+		}
+		if fileType == "f" && isDir {
+			return false
+		}
+	}
+
+	// Size check for files
+	if sizeOp != "" && !c.isDirectory(path, ctx) {
+		content, _, _, _, err := ctx.Client.GetFile(path)
+		if err != nil {
+			return false
+		}
+		fileSize := int64(len(content))
+
+		switch sizeOp {
+		case "+":
+			if fileSize <= sizeValue {
+				return false
+			}
+		case "-":
+			if fileSize >= sizeValue {
+				return false
+			}
+		case "=":
+			if fileSize != sizeValue {
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
+func (c *FindCommand) matchesEntry(entry client.DirectoryEntry, fullPath, namePattern, fileType, sizeOp string, sizeValue int64) bool {
+	// Check name pattern
+	if namePattern != "" {
+		if !c.matchesPattern(entry.Name, namePattern) {
+			return false
+		}
+	}
+
+	// Check file type
+	if fileType != "" {
+		var entryType string
+		if entry.Type == "directory" {
+			entryType = "d"
+		} else {
+			entryType = "f"
+		}
+
+		if fileType != entryType {
+			return false
+		}
+	}
+
+	// Size check
+	if sizeOp != "" && entry.Type != "directory" {
+		fileSize := entry.SizeBytes
+
+		switch sizeOp {
+		case "+":
+			if fileSize <= sizeValue {
+				return false
+			}
+		case "-":
+			if fileSize >= sizeValue {
+				return false
+			}
+		case "=":
+			if fileSize != sizeValue {
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
+func (c *FindCommand) matchesPattern(name, pattern string) bool {
+	// Simple glob matching for now
+	if strings.Contains(pattern, "*") {
+		// Convert simple glob to regex
+		regexPattern := strings.ReplaceAll(pattern, "*", ".*")
+		regexPattern = "^" + regexPattern + "$"
+		matched, _ := regexp.MatchString(regexPattern, name)
+		return matched
+	}
+	return name == pattern
+}
+
+func (c *FindCommand) isDirectory(path string, ctx *Context) bool {
+	_, err := ctx.Client.ListDirectory(path, 1, "")
+	return err == nil
+}
+
+func (c *FindCommand) Help() string {
+	return "find <path> [-name pattern] [-type f|d] [-size +n|-n|n] - Find files and directories"
+}
+
+// AttrCommand gets or sets file attributes
+type AttrCommand struct{}
+
+func (c *AttrCommand) Execute(ctx *Context, args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: attr <command> <path> [key or key=value] ...\nCommands: get, set")
+	}
+
+	command := args[0]
+	path := ctx.Session.ResolvePath(args[1])
+
+	if !session.IsValidPath(path) {
+		return fmt.Errorf("invalid path: %s", path)
+	}
+
+	switch command {
+	case "get":
+		return c.getAttributes(ctx, path)
+	case "set":
+		if len(args) < 3 {
+			return fmt.Errorf("usage: attr set <path> key=value")
+		}
+		return c.setAttributes(ctx, path, args[2:])
+	default:
+		return fmt.Errorf("unknown command: %s. Use 'get' or 'set'", command)
+	}
+}
+
+func (c *AttrCommand) getAttributes(ctx *Context, path string) error {
+	// Get file metadata
+	metadata, err := ctx.Client.GetFileMetadata(path, 0)
+	if err != nil {
+		return fmt.Errorf("failed to get file metadata: %w", err)
+	}
+
+	fmt.Fprintf(ctx.Stdout, "Path: %s\n", path)
+	fmt.Fprintf(ctx.Stdout, "ID: %s\n", metadata["id"])
+	fmt.Fprintf(ctx.Stdout, "Name: %s\n", metadata["name"])
+	fmt.Fprintf(ctx.Stdout, "Content-Type: %s\n", metadata["content_type"])
+	fmt.Fprintf(ctx.Stdout, "Size: %v bytes\n", metadata["size_bytes"])
+	fmt.Fprintf(ctx.Stdout, "Version: %v\n", metadata["version"])
+	fmt.Fprintf(ctx.Stdout, "Storage-Type: %s\n", metadata["storage_type"])
+	fmt.Fprintf(ctx.Stdout, "Checksum: %s\n", metadata["checksum"])
+	fmt.Fprintf(ctx.Stdout, "Created-At: %s\n", metadata["created_at"])
+	fmt.Fprintf(ctx.Stdout, "Updated-At: %s\n", metadata["updated_at"])
+
+	// Display metadata fields
+	if meta, ok := metadata["metadata"].(map[string]interface{}); ok {
+		fmt.Fprintf(ctx.Stdout, "Owner: %v\n", meta["owner"])
+		fmt.Fprintf(ctx.Stdout, "Creator: %v\n", meta["creator"])
+		if updatedBy, exists := meta["updated_by"]; exists {
+			fmt.Fprintf(ctx.Stdout, "Updated-By: %v\n", updatedBy)
+		}
+		if system, exists := meta["system"].(bool); exists && system {
+			fmt.Fprintf(ctx.Stdout, "System: %v\n", system)
+		}
+		if delegated, exists := meta["delegated"].(bool); exists && delegated {
+			fmt.Fprintf(ctx.Stdout, "Delegated: %v\n", delegated)
+			if reason, exists := meta["delegation_reason"]; exists {
+				fmt.Fprintf(ctx.Stdout, "Delegation-Reason: %v\n", reason)
+			}
+		}
+	}
+
+	return nil
+}
+
+func (c *AttrCommand) setAttributes(ctx *Context, path string, attrs []string) error {
+	var newContentType string
+
+	// Parse attributes
+	for _, attr := range attrs {
+		parts := strings.SplitN(attr, "=", 2)
+		if len(parts) != 2 {
+			return fmt.Errorf("invalid attribute format: %s (expected key=value)", attr)
+		}
+
+		key := strings.ToLower(parts[0])
+		value := parts[1]
+
+		switch key {
+		case "content-type":
+			newContentType = value
+		default:
+			return fmt.Errorf("unsupported attribute: %s (currently only content-type is supported for setting)", key)
+		}
+	}
+
+	// Update file metadata with new content-type
+	err := ctx.Client.UpdateFileMetadata(path, newContentType)
+	if err != nil {
+		return fmt.Errorf("failed to update file attributes: %w", err)
+	}
+
+	fmt.Fprintf(ctx.Stdout, "Updated attributes for %s\n", path)
+	return nil
+}
+
+func (c *AttrCommand) Help() string {
+	return "attr <command> <path> [key or key=value] ... - Get or set file attributes"
+}
+
 // JqCommand queries JSON files
 type JqCommand struct{}
 
@@ -952,7 +1440,7 @@ func (c *JqCommand) Execute(ctx *Context, args []string) error {
 	}
 
 	// Get file content
-	content, contentType, _, err := ctx.Client.GetFile(path)
+	content, contentType, _, _, err := ctx.Client.GetFile(path)
 	if err != nil {
 		return err
 	}
@@ -1010,6 +1498,37 @@ func LoadToken() (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
+// detectContentType detects content type based on file extension
+func detectContentType(filename string) string {
+	ext := strings.ToLower(filepath.Ext(filename))
+	switch ext {
+	case ".json":
+		return "application/json"
+	case ".txt", ".md":
+		return "text/plain"
+	case ".html":
+		return "text/html"
+	case ".xml":
+		return "application/xml"
+	case ".csv":
+		return "text/csv"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".png":
+		return "image/png"
+	case ".pdf":
+		return "application/pdf"
+	case ".zip":
+		return "application/zip"
+	case ".rego":
+		return "application/rego"
+	case ".group":
+		return "application/group"
+	default:
+		return "application/octet-stream" // Default to octet-stream for unknown extensions
+	}
+}
+
 // RemoveToken removes the saved auth token
 func RemoveToken() error {
 	homeDir, err := os.UserHomeDir()
@@ -1043,7 +1562,11 @@ func (c *HelpCommand) Execute(ctx *Context, args []string) error {
 	fmt.Fprintln(ctx.Stdout, "  cat <path>                         Display file contents")
 	fmt.Fprintln(ctx.Stdout, "  version <path>                     Show file version history")
 	fmt.Fprintln(ctx.Stdout, "  jq <path> [expression]             Query JSON file (default: ., supports coloring)")
+	fmt.Fprintln(ctx.Stdout, "  grep <pattern> <path>              Search for pattern in file contents")
+	fmt.Fprintln(ctx.Stdout, "  find <path> [options]              Find files and directories")
+	fmt.Fprintln(ctx.Stdout, "  attr <cmd> <path> [key=value]      Get or set file attributes (content-type)")
 	fmt.Fprintln(ctx.Stdout, "  mv <src> <dst>                     Move/rename file(s) (supports globs)")
+	fmt.Fprintln(ctx.Stdout, "  cp <src> <dst>                     Copy file(s) (supports globs)")
 	fmt.Fprintln(ctx.Stdout, "  rm <path>                          Remove file(s) (supports globs)")
 	fmt.Fprintln(ctx.Stdout, "")
 	fmt.Fprintln(ctx.Stdout, "Authentication:")
@@ -1157,7 +1680,19 @@ func (c *EditCommand) Execute(ctx *Context, args []string) error {
 	}
 
 	// Download file to temp location
-	tmpFile, err := os.CreateTemp("", "vfs-edit-*")
+	// Use original filename with extension for better editor support
+	originalFileName := filepath.Base(path)
+	baseName := strings.TrimSuffix(originalFileName, filepath.Ext(originalFileName))
+	extension := filepath.Ext(originalFileName)
+
+	var pattern string
+	if extension != "" {
+		pattern = fmt.Sprintf("vfs-edit-%s-*.%s", baseName, extension[1:]) // Remove the leading dot
+	} else {
+		pattern = fmt.Sprintf("vfs-edit-%s-*", baseName)
+	}
+
+	tmpFile, err := os.CreateTemp("", pattern)
 	if err != nil {
 		return fmt.Errorf("failed to create temp file: %w", err)
 	}
@@ -1166,7 +1701,7 @@ func (c *EditCommand) Execute(ctx *Context, args []string) error {
 
 	// Try to get existing content
 	fileExists := false
-	content, _, _, err := ctx.Client.GetFile(path)
+	content, _, _, _, err := ctx.Client.GetFile(path)
 	if err == nil {
 		fileExists = true
 		if _, err := tmpFile.Write(content); err != nil {
@@ -1199,17 +1734,19 @@ func (c *EditCommand) Execute(ctx *Context, args []string) error {
 	}
 
 	// Upload to VFS
+	fileName := filepath.Base(path)
+	contentType := detectContentType(fileName)
+
 	if fileExists {
 		// Update existing file
-		_, err = ctx.Client.UpdateFile(path, "text/plain", string(editedContent), 0) // ExpectedVersion 0 means any version
+		_, err = ctx.Client.UpdateFile(path, contentType, string(editedContent), 0) // ExpectedVersion 0 means any version
 		if err != nil {
 			return fmt.Errorf("failed to update file: %w", err)
 		}
 	} else {
 		// Create new file
 		dirPath := filepath.Dir(path)
-		fileName := filepath.Base(path)
-		_, err = ctx.Client.CreateFile(dirPath, fileName, "text/plain", string(editedContent))
+		_, err = ctx.Client.CreateFile(dirPath, fileName, contentType, string(editedContent))
 		if err != nil {
 			return fmt.Errorf("failed to create file: %w", err)
 		}
@@ -1627,7 +2164,7 @@ func (c *CreateTriggerCommand) Execute(ctx *Context, args []string) error {
 	fileName := filepath.Base(eventsPath)
 
 	// Check if .events already exists
-	_, _, _, err = ctx.Client.GetFile(eventsPath)
+	_, _, _, _, err = ctx.Client.GetFile(eventsPath)
 	if err == nil {
 		return fmt.Errorf(".events file already exists at %s, please edit it manually or delete it first", eventsPath)
 	}

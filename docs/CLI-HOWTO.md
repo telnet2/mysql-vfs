@@ -2,10 +2,7 @@
 
 ## Overview
 
-The VFS CLI provides two interfaces for interacting with the MySQL-based Virtual File System:
-
-1. **vfs-cli-prompt** (Recommended) - Rich REPL with auto-completion, dual-mode shell support
-2. **vfs-cli** (Legacy) - Basic REPL interface
+The VFS CLI provides a rich interactive interface for interacting with the MySQL-based Virtual File System with auto-completion, dual-mode shell support, and comprehensive file operations.
 
 ## Quick Start
 
@@ -27,13 +24,13 @@ docker compose run --rm cli
 ```bash
 # 1. Build the CLI
 cd cli
-go build -o vfs-cli-prompt main_prompt.go
+go build -o vfs-cli main.go
 
 # 2. Set VFS service URL
 export VFS_SERVICE_URL=http://localhost:18080
 
 # 3. Run
-./vfs-cli-prompt
+./vfs-cli
 ```
 
 ## Installation
@@ -63,21 +60,18 @@ cd cli
 # Install dependencies
 go mod download
 
-# Build new prompt-based CLI
-go build -o vfs-cli-prompt main_prompt.go
-
-# Or build legacy CLI
+# Build the CLI
 go build -o vfs-cli main.go
 
 # Run
-./vfs-cli-prompt
+./vfs-cli
 ```
 
 ### Makefile Targets
 
 ```bash
-make cli-prompt      # Build and run prompt CLI locally
-make cli-build       # Build prompt CLI only
+make cli-build       # Build CLI only
+make cli             # Build and run CLI locally
 make up-cli          # Start services + CLI with docker-compose
 ```
 
@@ -140,7 +134,7 @@ AWS_REGION: us-east-1
 AWS_S3_FORCE_PATH_STYLE: "true"  # Important for LocalStack
 ```
 
-## Using vfs-cli-prompt (New Interface)
+## Using the VFS CLI
 
 ### Features
 
@@ -149,52 +143,48 @@ AWS_S3_FORCE_PATH_STYLE: "true"  # Important for LocalStack
 ✅ Path-aware completions for both VFS and local filesystem
 ✅ Command history with arrow keys (↑/↓)
 ✅ Live prompt showing current mode and directory
-✅ Supports zsh for local shell commands
+✅ Supports shell commands for local operations
 
 ### Interface Overview
 
 ```
-=== VFS CLI (go-prompt) ===
-VFS Service: http://vfs-service:8080
-Local Dir: /app
+=== VFS CLI ===
+Connecting to: http://vfs-service:8080
+Connected successfully!
+Type 'help' for available commands or 'exit' to quit
+Type '$' to toggle between VFS mode and shell mode, or '$<command>' or '$ <command>' to run a single shell command
+Press TAB to autocomplete commands
+Press CTRL+C twice to exit
 
-Commands:
-  VFS: ls, cd, pwd, mkdir, rmdir, cat, import, rm, mv, jq
-  Local: $<cmd> (e.g., $ls, $cat, $pwd)
-  Mode: $ (local mode), / (VFS mode)
-  Quit: exit, quit, Ctrl+D
-
-✓ Connected to VFS service
-
-vfs:/>
+/>
 ```
 
 ### Mode Switching
 
 **VFS Mode (default):**
 ```bash
-vfs:/> ls              # List VFS directory
-vfs:/> cd data         # Change VFS directory
-vfs:/> pwd             # Show VFS working directory
+/> ls              # List VFS directory
+/> cd data         # Change VFS directory
+/> pwd             # Show VFS working directory
 ```
 
 **Switch to Local Mode:**
 ```bash
-vfs:/> $               # Switch to local shell mode
-local:/app>            # Now in local mode
+/> $               # Switch to local shell mode
+shell:/app$        # Now in local mode
 ```
 
 **Switch back to VFS Mode:**
 ```bash
-local:/app> /          # Switch to VFS mode
-vfs:/>                 # Back to VFS mode
+shell:/app$ $      # Switch back to VFS mode
+/>                 # Back to VFS mode
 ```
 
 **One-off Local Commands (from VFS mode):**
 ```bash
-vfs:/> $ls -la         # Run local ls command
-vfs:/> $pwd            # Show local directory
-vfs:/> $cat file.txt   # Read local file
+/> $ls -la         # Run local ls command
+/> $pwd            # Show local directory
+/> $cat file.txt   # Read local file
 ```
 
 ### VFS Commands
@@ -203,72 +193,97 @@ vfs:/> $cat file.txt   # Read local file
 
 ```bash
 # List directory
-vfs:/> ls
-vfs:/> ls /data
-vfs:/> ls -r /data     # Recursive listing
+/> ls
+/> ls /data
+/> ls -r /data     # Recursive listing
+/> ls -l /data     # Long listing with details
 
 # Change directory
-vfs:/> cd /data
-vfs:/data> cd subdir
-vfs:/data/subdir> cd ..
-vfs:/data> cd /        # Go to root
+/> cd /data
+/data> cd subdir
+/data/subdir> cd ..
+/data> cd /        # Go to root
 
 # Print working directory
-vfs:/> pwd
+/> pwd
 ```
 
 #### Directory Management
 
 ```bash
 # Create directory
-vfs:/> mkdir projects
-vfs:/> cd projects
+/> mkdir projects
+/> cd projects
 
 # Remove directory
-vfs:/> rmdir projects
+/> rmdir projects
 
 # Remove directory recursively
-vfs:/> rmdir -r projects
+/> rmdir -r projects
 ```
 
 #### File Operations
 
 ```bash
 # Import local file to VFS
-vfs:/> import /local/path/file.txt /vfs/destination.txt
-vfs:/> import ~/document.pdf /docs/document.pdf
+/> import /local/path/file.txt /vfs/destination.txt
+/> import ~/document.pdf /docs/document.pdf
 
 # Display file contents
-vfs:/> cat /data/file.txt
+/> cat /data/file.txt
+
+# Copy files
+/> cp /source/file.txt /dest/file.txt
+/> cp *.json /backup/     # Copy with glob patterns
 
 # Move/rename file
-vfs:/> mv /data/old.txt /data/new.txt
-vfs:/> mv /data/file.txt /backup/file.txt
+/> mv /data/old.txt /data/new.txt
+/> mv /data/file.txt /backup/file.txt
 
 # Delete file
-vfs:/> rm /data/file.txt
+/> rm /data/file.txt
+```
+
+#### Search Operations
+
+```bash
+# Find files and directories
+/> find /data -name "*.json"    # Find JSON files
+/> find / -type d               # Find directories
+/> find /data -size +1000       # Find files > 1000 bytes
+
+# Search file contents
+/> grep "error" /logs/app.log   # Search for "error" in file
+/> grep "user_id" /data/        # Search recursively in directory
 ```
 
 #### JSON Operations
 
 ```bash
 # Query JSON file with jq
-vfs:/> jq /data/config.json '.'
-vfs:/> jq /users.json '.users[] | select(.active)'
-vfs:/> jq /config.json '.database.host'
+/> jq /data/config.json '.'
+/> jq /users.json '.users[] | select(.active)'
+/> jq /config.json '.database.host'
+```
+
+#### Version Control
+
+```bash
+# Show file version history
+/> version /data/file.txt
 ```
 
 ### Local Shell Commands
 
 **In Local Mode:**
 ```bash
-local:/app> ls -la              # Local directory listing
-local:/app> cd /tmp             # Change local directory
-local:/app> pwd                 # Local working directory
-local:/app> cat file.txt        # Read local file
-local:/app> find . -name "*.go" # Find files
-local:/app> grep -r "TODO" .    # Search in files
-local:/app> tree                # Directory tree
+shell:/app$ ls -la              # Local directory listing
+shell:/app$ cd /tmp             # Change local directory
+shell:/app$ pwd                 # Local working directory
+shell:/app$ cat file.txt        # Read local file
+shell:/app$ find . -name "*.go" # Find files
+shell:/app$ grep -r "TODO" .    # Search in files
+shell:/app$ tree                # Directory tree
 ```
 
 **Common local commands available:**
@@ -277,26 +292,28 @@ local:/app> tree                # Directory tree
 - `find`, `grep` - Searching
 - `tree` - Directory visualization
 - `wc`, `file`, `du`, `df` - File utilities
-- Any zsh command
+- Any shell command
 
 ### Tab Completion
 
 **Command Completion:**
 ```bash
-vfs:/> l<TAB>          # Shows: ls
-vfs:/> mk<TAB>         # Shows: mkdir
+/> l<TAB>          # Shows: ls
+/> mk<TAB>         # Shows: mkdir
+/> gr<TAB>         # Shows: grep
 ```
 
 **VFS Path Completion:**
 ```bash
-vfs:/> ls /da<TAB>     # Completes to: /data/
-vfs:/> cat /data/co<TAB>  # Shows files starting with 'co'
+/> ls /da<TAB>     # Completes to: /data/
+/> cat /data/co<TAB>  # Shows files starting with 'co'
+/> find /da<TAB>   # Completes paths for find command
 ```
 
 **Local Path Completion:**
 ```bash
-local:/app> ls cl<TAB>     # Completes to: cli/
-local:/app> cat main<TAB>  # Completes to: main.go
+shell:/app$ ls cl<TAB>     # Completes to: cli/
+shell:/app$ cat main<TAB>  # Completes to: main.go
 $cat /tmp/te<TAB>          # Completes local paths
 ```
 
@@ -312,80 +329,118 @@ $cat /tmp/te<TAB>          # Completes local paths
 
 ```bash
 # Switch to local mode to find file
-vfs:/> $
-local:/app> ls Documents/
-local:/app> pwd
+/> $
+shell:/app$ ls Documents/
+shell:/app$ pwd
 /home/user
 
 # Switch back to VFS mode
-local:/app> /
+shell:/app$ $
 
 # Import the file
-vfs:/> mkdir uploads
-vfs:/> cd uploads
-vfs:/uploads> import /home/user/Documents/data.json data.json
+/> mkdir uploads
+/> cd uploads
+/uploads> import /home/user/Documents/data.json data.json
 
 # Process the JSON
-vfs:/uploads> jq data.json '.results[]'
+/uploads> jq data.json '.results[]'
 ```
 
 #### Working with Multiple Files
 
 ```bash
 # Use local commands to list files
-vfs:/> $ls ~/Downloads/*.pdf
-vfs:/> $find ~/Documents -name "*.txt"
+/> $ls ~/Downloads/*.pdf
+/> $find ~/Documents -name "*.txt"
 
 # Import multiple files
-vfs:/> mkdir documents
-vfs:/> import ~/Documents/report.txt /documents/report.txt
-vfs:/> import ~/Documents/notes.txt /documents/notes.txt
+/> mkdir documents
+/> import ~/Documents/report.txt /documents/report.txt
+/> import ~/Documents/notes.txt /documents/notes.txt
 
 # Verify
-vfs:/> ls documents/
+/> ls documents/
 ```
 
 #### Combining VFS and Local Operations
 
 ```bash
 # Search local files
-vfs:/> $grep -l "TODO" *.go
+/> $grep -l "TODO" *.go
 
 # Read local file
-vfs:/> $cat main.go
+/> $cat main.go
 
 # Import to VFS
-vfs:/> import main.go /backup/main.go
+/> import main.go /backup/main.go
 
 # Verify in VFS
-vfs:/> cat /backup/main.go
+/> cat /backup/main.go
 ```
 
-## Using vfs-cli (Legacy Interface)
-
-### Basic REPL
+#### Search and Copy Operations
 
 ```bash
-=== VFS CLI ===
-Connecting to: http://vfs-service:8080
-Connected successfully!
-Type 'help' for available commands or 'exit' to quit
+# Find all JSON files in VFS
+/> find /data -name "*.json"
 
-/>
+# Search for specific content
+/> grep "error" /logs/
+
+# Copy found files to backup
+/> cp /data/*.json /backup/
 ```
 
-### Available Commands
+## Command Reference
+
+### All Available Commands
 
 ```bash
-# Same commands as prompt version, but no tab completion
-/> ls
-/> cd data
-/> mkdir test
-/> import local.txt /remote.txt
-/> cat /remote.txt
-/> rm /remote.txt
-/> help
-/> exit
+# Directory operations
+ls [-r] [-l] [path]                # List directory contents
+cd [path]                         # Change directory
+pwd                               # Print working directory
+mkdir <name>                      # Create directory
+rmdir [-r] <path>                 # Remove directory
+
+# File operations
+cat <path>                        # Display file contents
+import <local> [vfs]               # Import local file to VFS
+cp <src> <dst>                    # Copy files (supports globs)
+mv <src> <dst>                    # Move/rename files (supports globs)
+rm <path>                         # Remove files (supports globs)
+
+# Search operations
+grep <pattern> <path>             # Search for pattern in files
+find <path> [options]             # Find files and directories
+
+# JSON operations
+jq <path> [expression]            # Query JSON files
+
+# Version control
+version <path>                    # Show file version history
+
+# Special files
+edit <path>                       # Edit file with $EDITOR
+create-sample-files <dir>         # Create sample .files configs
+create-trigger <dir> <url>        # Create webhook triggers
+
+# Authentication
+login <user> <pass>               # Authenticate with VFS
+logout                            # Clear authentication
+
+# Help
+help                              # Show available commands
+```
+
+### Find Command Options
+
+```bash
+find <path> -name <pattern>        # Files matching name pattern
+find <path> -type f|d              # Files (f) or directories (d)
+find <path> -size <n>              # Files of exact size n bytes
+find <path> -size +<n>             # Files larger than n bytes
+find <path> -size -<n>             # Files smaller than n bytes
 ```
 
 ### Piping Support
@@ -468,9 +523,9 @@ vfs:/> import part_ab /data/part_ab
 **Issue:** Tab key doesn't complete paths
 
 **Solutions:**
-1. Ensure you're using `vfs-cli-prompt`, not `vfs-cli`
-2. Check you're not in a nested terminal (Docker in Docker)
-3. Verify terminal supports ANSI codes: `echo $TERM`
+1. Check you're not in a nested terminal (Docker in Docker)
+2. Verify terminal supports ANSI codes: `echo $TERM`
+3. Ensure you're running the CLI interactively
 
 ### Local Commands Not Working
 
@@ -503,12 +558,11 @@ vfs:/> cat /v<TAB>/l<TAB>/p<TAB>/f<TAB>
 
 ```bash
 # Find files locally first
-vfs:/> $
-local:/> find . -name "*.json"
-local:/> /
-
+/> $
+shell:/> find . -name "*.json"
+shell:/> $
 # Then import them to VFS
-vfs:/> import ./found-file.json /data/imported.json
+/> import ./found-file.json /data/imported.json
 ```
 
 ### 3. Verify Before Importing
@@ -577,7 +631,7 @@ docker compose run --rm \
 ### Using with Scripts
 
 ```bash
-# Non-interactive commands (legacy CLI only)
+# Non-interactive commands
 echo "ls /" | docker compose run --rm cli ./vfs-cli
 
 # Or with heredoc
@@ -635,17 +689,19 @@ docker compose down -v
 
 ## Summary
 
-| Feature | vfs-cli-prompt | vfs-cli (legacy) |
-|---------|----------------|------------------|
-| Tab Completion | ✅ | ❌ |
-| Path-aware Completion | ✅ | ❌ |
-| Local Shell Mode | ✅ | ❌ |
-| Command History | ✅ | ✅ |
-| Piping Support | ❌ | ✅ |
-| Interactive Mode | ✅ | ✅ |
-| Script-friendly | ❌ | ✅ |
+The VFS CLI provides a comprehensive interface for managing files in the Virtual File System with:
 
-**Recommendation:** Use `vfs-cli-prompt` for interactive work and `vfs-cli` for scripting.
+- **Full command set**: Directory operations, file management, search, JSON processing
+- **Rich completion**: Tab completion for commands and paths
+- **Dual mode**: VFS operations and local shell commands
+- **Piping support**: Chain commands together for complex operations
+- **Interactive and scriptable**: Works for both manual use and automation
+
+**Key Commands:**
+- File operations: `ls`, `cat`, `cp`, `mv`, `rm`, `import`
+- Search: `grep`, `find`
+- JSON processing: `jq`
+- Directory management: `cd`, `pwd`, `mkdir`, `rmdir`
 
 ## Next Steps
 
@@ -653,3 +709,4 @@ docker compose down -v
 - Check [docs/](docs/) for VFS API documentation
 - Review [docker-compose.yml](docker-compose.yml) for service configuration
 - Run `make help` to see all available make targets
+- Check [SECURITY.md](SECURITY.md) for authentication and authorization details
