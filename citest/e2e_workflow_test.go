@@ -11,8 +11,8 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/telnet2/mysql-vfs/citest/fixtures"
-	"github.com/telnet2/mysql-vfs/pkg/models"
 	"github.com/telnet2/mysql-vfs/pkg/domain"
+	"github.com/telnet2/mysql-vfs/pkg/models"
 )
 
 var _ = Describe("End-to-End VFS Workflow", Ordered, func() {
@@ -165,7 +165,7 @@ This is a sample application for testing the VFS system.
 				io.NopCloser(strings.NewReader(readmeContent)),
 			)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(readmeFile.Name).To(Equal("README.md"))
+			Expect(readmeFile.Name).To(Equal("readme.md"))
 
 			apiDocsContent := `# API Documentation
 
@@ -208,7 +208,7 @@ This is a sample application for testing the VFS system.
 			Expect(updatedConfigFile.Version).To(Equal(int64(2)))
 
 			// Verify the content was updated
-			retrievedFile, reader, err := fileService.GetFile(ctx, "/projects/app/src/config.json")
+			retrievedFile, reader, err := fileService.GetFile(ctx, "/projects/app/src/config.json", 0)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(retrievedFile.Version).To(Equal(int64(2)))
 			content, err := io.ReadAll(reader)
@@ -232,7 +232,7 @@ This is a sample application for testing the VFS system.
 			}
 
 			// Verify final version
-			retrievedMainFile, mainReader, err := fileService.GetFile(ctx, "/projects/app/src/main.go")
+			retrievedMainFile, mainReader, err := fileService.GetFile(ctx, "/projects/app/src/main.go", 0)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(retrievedMainFile.Version).To(Equal(int64(5)))
 			mainReader.Close() // Close the reader to prevent resource leak
@@ -265,10 +265,10 @@ This is a sample application for testing the VFS system.
 			_, docsFiles, _, err := dirService.ListDirectory("/projects/app/docs", 100, "")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(docsFiles).To(HaveLen(1))
-			Expect(docsFiles[0].Name).To(Equal("README.md"))
+			Expect(docsFiles[0].Name).To(Equal("readme.md"))
 
 			// Verify we can't access the deleted file
-			_, deletedReader, err := fileService.GetFile(ctx, "/projects/app/docs/api.md")
+			_, deletedReader, err := fileService.GetFile(ctx, "/projects/app/docs/api.md", 0)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("not found"))
 			if deletedReader != nil {
@@ -311,7 +311,7 @@ func TestAdd(t *testing.T) {
 			Expect(err.Error()).To(ContainSubstring("not found"))
 
 			// Verify files in that directory are also deleted
-			_, deletedMainReader, err := fileService.GetFile(ctx, "/projects/app/src/main.go")
+			_, deletedMainReader, err := fileService.GetFile(ctx, "/projects/app/src/main.go", 0)
 			Expect(err).To(HaveOccurred())
 			if deletedMainReader != nil {
 				deletedMainReader.Close()
@@ -415,7 +415,7 @@ func TestAdd(t *testing.T) {
 			Expect(string(largeFile.StorageType)).To(Equal("s3")) // Large files (>16MB) go to S3
 
 			By("Retrieving and verifying large file content")
-			retrievedFile, reader, err := fileService.GetFile(ctx, "/data/large.txt")
+			retrievedFile, reader, err := fileService.GetFile(ctx, "/data/large.txt", 0)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(retrievedFile.SizeBytes).To(Equal(largeFile.SizeBytes))
 

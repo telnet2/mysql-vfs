@@ -64,6 +64,10 @@ func (r *mockFileRepo) CreateVersion(ctx context.Context, version *models.FileVe
 	return nil // Not used in these tests
 }
 
+func (r *mockFileRepo) ListVersions(ctx context.Context, fileID string) ([]*models.FileVersion, error) {
+	return []*models.FileVersion{}, nil // Not used in these tests
+}
+
 func (r *mockFileRepo) GetLatestVersion(ctx context.Context, fileID string) (*models.FileVersion, error) {
 	return nil, db.ErrNotFound // Not used in these tests
 }

@@ -111,9 +111,9 @@ func TestSupportsInheritance(t *testing.T) {
 	}{
 		{"files config", ".files", true},
 		{"rego policy", ".rego", true},
-		{"events file", ".events", true},  // events inherit and merge
-		{"user file", ".user", false},     // no inheritance
-		{"group file", ".group", false},   // no inheritance
+		{"events file", ".events", true}, // events inherit and merge
+		{"user file", ".user", false},    // no inheritance
+		{"group file", ".group", false},  // no inheritance
 	}
 
 	for _, tt := range tests {
@@ -405,6 +405,125 @@ func TestValidateEventsConfig(t *testing.T) {
 			err := validateEventsConfig([]byte(tt.content))
 			if (err != nil) != tt.wantErr {
 				t.Errorf("validateEventsConfig() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateAndNormalizeName(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{
+			name:    "valid lowercase name",
+			input:   "testfile",
+			want:    "testfile",
+			wantErr: false,
+		},
+		{
+			name:    "valid mixed case name",
+			input:   "TestFile",
+			want:    "testfile",
+			wantErr: false,
+		},
+		{
+			name:    "valid name with numbers",
+			input:   "file123",
+			want:    "file123",
+			wantErr: false,
+		},
+		{
+			name:    "valid name with underscore",
+			input:   "my_file",
+			want:    "my_file",
+			wantErr: false,
+		},
+		{
+			name:    "valid name with hyphen",
+			input:   "my-file",
+			want:    "my-file",
+			wantErr: false,
+		},
+		{
+			name:    "valid name with dot",
+			input:   "test.json",
+			want:    "test.json",
+			wantErr: false,
+		},
+		{
+			name:    "valid name with multiple allowed chars",
+			input:   "My_File-123.json",
+			want:    "my_file-123.json",
+			wantErr: false,
+		},
+		{
+			name:    "empty name",
+			input:   "",
+			want:    "",
+			wantErr: true,
+		},
+		{
+			name:    "current directory",
+			input:   ".",
+			want:    "",
+			wantErr: true,
+		},
+		{
+			name:    "parent directory",
+			input:   "..",
+			want:    "",
+			wantErr: true,
+		},
+		{
+			name:    "name with forward slash",
+			input:   "path/file",
+			want:    "",
+			wantErr: true,
+		},
+		{
+			name:    "name with backslash",
+			input:   "path\\file",
+			want:    "",
+			wantErr: true,
+		},
+		{
+			name:    "name with space",
+			input:   "my file",
+			want:    "",
+			wantErr: true,
+		},
+		{
+			name:    "name with special character",
+			input:   "file@home",
+			want:    "",
+			wantErr: true,
+		},
+		{
+			name:    "name with control character",
+			input:   "file\x00name",
+			want:    "",
+			wantErr: true,
+		},
+		{
+			name:    "name with newline",
+			input:   "file\nname",
+			want:    "",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ValidateAndNormalizeName(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateAndNormalizeName(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+				return
+			}
+			if !tt.wantErr && got != tt.want {
+				t.Errorf("ValidateAndNormalizeName(%q) = %v, want %v", tt.input, got, tt.want)
 			}
 		})
 	}

@@ -72,6 +72,7 @@ Content-Type: application/json
 ```
 
 **Validation:**
+- **Name restrictions:** Only alphanumeric characters, underscores (`_`), hyphens (`-`), and dots (`.`) allowed. Names are automatically converted to lowercase.
 - Checks `.files` config for schema validation
 - Triggers `file.create.*` events
 - Requires write permission (via `.rego` policy)
@@ -197,6 +198,7 @@ Content-Type: application/json
 ```
 
 **Behavior:**
+- **Name restrictions:** Only alphanumeric characters, underscores (`_`), hyphens (`-`), and dots (`.`) allowed. Names are automatically converted to lowercase.
 - Creates parent directories if needed (optional)
 - Inherits policies from parent
 - Triggers `directory.create.*` events

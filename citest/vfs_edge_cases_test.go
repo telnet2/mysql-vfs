@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"strings"
 
@@ -11,8 +12,8 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/telnet2/mysql-vfs/citest/fixtures"
-	"github.com/telnet2/mysql-vfs/pkg/models"
 	"github.com/telnet2/mysql-vfs/pkg/domain"
+	"github.com/telnet2/mysql-vfs/pkg/models"
 )
 
 var _ = Describe("VFS Edge Cases", Ordered, func() {
@@ -64,7 +65,7 @@ var _ = Describe("VFS Edge Cases", Ordered, func() {
 			// Create nested directories
 			path := "/"
 			for i := 1; i <= 10; i++ {
-				name := "level" + string(rune('0'+i))
+				name := fmt.Sprintf("level%d", i)
 				dir, err := dirService.CreateDirectory(ctx, path, name)
 				Expect(err).NotTo(HaveOccurred())
 				path = dir.Path
@@ -104,7 +105,7 @@ var _ = Describe("VFS Edge Cases", Ordered, func() {
 	})
 
 	Context("special characters in names", func() {
-		It("should handle unicode characters", func() {
+		It("should reject unicode characters", func() {
 			unicodeNames := []string{
 				"日本語",
 				"Ñoño",
@@ -114,29 +115,16 @@ var _ = Describe("VFS Edge Cases", Ordered, func() {
 			}
 
 			for _, name := range unicodeNames {
-				dir, err := dirService.CreateDirectory(ctx, "/", name)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(dir.Name).To(Equal(name))
+				_, err := dirService.CreateDirectory(ctx, "/", name)
+				Expect(err).To(HaveOccurred(), "should reject unicode name: %s", name)
+				Expect(err.Error()).To(ContainSubstring("name"))
 			}
 		})
 
-		It("should handle names with spaces", func() {
-			dir, err := dirService.CreateDirectory(ctx, "/", "my directory")
-			Expect(err).NotTo(HaveOccurred())
-			Expect(dir.Name).To(Equal("my directory"))
-
-			// Verify can be listed
-			dirs, _, _, err := dirService.ListDirectory("/", 100, "")
-			Expect(err).NotTo(HaveOccurred())
-
-			found := false
-			for _, d := range dirs {
-				if d.Name == "my directory" {
-					found = true
-					break
-				}
-			}
-			Expect(found).To(BeTrue())
+		It("should reject names with spaces", func() {
+			_, err := dirService.CreateDirectory(ctx, "/", "my directory")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("name"))
 		})
 
 		It("should reject names with path separators", func() {
@@ -285,7 +273,7 @@ var _ = Describe("VFS Edge Cases", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			// Read it back
-			retrievedFile, reader, err := fileService.GetFile(ctx, "/content-tests/hello.txt")
+			retrievedFile, reader, err := fileService.GetFile(ctx, "/content-tests/hello.txt", 0)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(retrievedFile.ID).To(Equal(file.ID))
 

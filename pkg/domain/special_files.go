@@ -3,22 +3,25 @@ package domain
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
+	"bytes"
+
+	"github.com/santhosh-tekuri/jsonschema/v5"
 	"github.com/telnet2/mysql-vfs/pkg/events"
-	"github.com/xeipuuv/gojsonschema"
 )
 
 // SpecialFileType represents a type of special file
 type SpecialFileType string
 
 const (
-	SpecialFileTypeFiles   SpecialFileType = ".files"  // File pattern rules with schemas
-	SpecialFileTypePolicy  SpecialFileType = ".rego"
-	SpecialFileTypeEvents  SpecialFileType = ".events"
-	SpecialFileTypeUser    SpecialFileType = ".user"
-	SpecialFileTypeGroup   SpecialFileType = ".group"
-	SpecialFileTypeOwner   SpecialFileType = ".owner"  // Directory ownership
+	SpecialFileTypeFiles  SpecialFileType = ".files" // File pattern rules with schemas
+	SpecialFileTypePolicy SpecialFileType = ".rego"
+	SpecialFileTypeEvents SpecialFileType = ".events"
+	SpecialFileTypeUser   SpecialFileType = ".user"
+	SpecialFileTypeGroup  SpecialFileType = ".group"
+	SpecialFileTypeOwner  SpecialFileType = ".owner" // Directory ownership
 )
 
 // SpecialFileDefinition defines metadata for a special file type
@@ -29,6 +32,44 @@ type SpecialFileDefinition struct {
 	AdminOnly         bool
 	ValidateFunc      func(content []byte) error
 	InheritFromParent bool
+}
+
+var (
+	// validNameRegex allows alphanumeric characters, underscores, hyphens, and dots
+	validNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`)
+)
+
+// ValidateAndNormalizeName validates and normalizes a file/directory name
+// Names must contain only alphanumeric characters, underscores, hyphens, and dots
+// Names are automatically converted to lowercase
+func ValidateAndNormalizeName(name string) (string, error) {
+	if name == "" {
+		return "", fmt.Errorf("name cannot be empty")
+	}
+
+	if name == "." || name == ".." {
+		return "", fmt.Errorf("name cannot be '.' or '..'")
+	}
+
+	// Check for path separators
+	if strings.Contains(name, "/") || strings.Contains(name, "\\") {
+		return "", fmt.Errorf("name cannot contain path separators")
+	}
+
+	// Check for control characters
+	for _, r := range name {
+		if r < 32 || r == 127 {
+			return "", fmt.Errorf("name cannot contain control characters")
+		}
+	}
+
+	// Check character restrictions
+	if !validNameRegex.MatchString(name) {
+		return "", fmt.Errorf("name can only contain alphanumeric characters, underscores, hyphens, and dots")
+	}
+
+	// Convert to lowercase
+	return strings.ToLower(name), nil
 }
 
 // SpecialFileRegistry holds all registered special file types
@@ -164,7 +205,7 @@ type FilesConfig struct {
 
 type FileRule struct {
 	Pattern     string                 `json:"pattern"`
-	Type        string                 `json:"type"` // "glob" or "regex"
+	Type        string                 `json:"type"`             // "glob" or "regex"
 	Schema      map[string]interface{} `json:"schema,omitempty"` // Can include $ref with schema:// protocol
 	Description string                 `json:"description,omitempty"`
 }
@@ -204,7 +245,7 @@ func validateFilesConfig(content []byte) error {
 				return fmt.Errorf("rule %d: invalid schema JSON: %w", i, err)
 			}
 
-			// Skip validation if schema is just a $ref to schema://
+			// Skip validation if schema contains $ref to schema://
 			// These will be validated at runtime when files are uploaded
 			if isSchemaProtocolRef(rule.Schema) {
 				// Just check it's valid JSON, don't validate the $ref yet
@@ -212,9 +253,16 @@ func validateFilesConfig(content []byte) error {
 			}
 
 			// Basic validation - just check it parses as a schema
-			// $ref resolution will happen at validation time
-			schemaLoader := gojsonschema.NewBytesLoader(schemaBytes)
-			_, err = gojsonschema.NewSchema(schemaLoader)
+			compiler := jsonschema.NewCompiler()
+			compiler.Draft = jsonschema.Draft2020
+
+			// Add the schema with a temporary URL
+			err = compiler.AddResource("temp://schema.json", bytes.NewReader(schemaBytes))
+			if err != nil {
+				return fmt.Errorf("rule %d: invalid JSON schema: %w", i, err)
+			}
+
+			_, err = compiler.Compile("temp://schema.json")
 			if err != nil {
 				return fmt.Errorf("rule %d: invalid JSON schema: %w", i, err)
 			}
@@ -224,13 +272,33 @@ func validateFilesConfig(content []byte) error {
 	return nil
 }
 
-// isSchemaProtocolRef checks if a schema is a simple $ref to schema://
+// isSchemaProtocolRef checks if a schema contains any schema:// references
 func isSchemaProtocolRef(schema map[string]interface{}) bool {
-	ref, ok := schema["$ref"].(string)
-	if !ok {
-		return false
+	return hasSchemaProtocolRef(schema)
+}
+
+// hasSchemaProtocolRef recursively checks for schema:// in $ref
+func hasSchemaProtocolRef(obj interface{}) bool {
+	switch v := obj.(type) {
+	case map[string]interface{}:
+		if ref, ok := v["$ref"].(string); ok {
+			if len(ref) >= 9 && ref[:9] == "schema://" {
+				return true
+			}
+		}
+		for _, val := range v {
+			if hasSchemaProtocolRef(val) {
+				return true
+			}
+		}
+	case []interface{}:
+		for _, val := range v {
+			if hasSchemaProtocolRef(val) {
+				return true
+			}
+		}
 	}
-	return len(schema) == 1 && len(ref) >= 9 && ref[:9] == "schema://"
+	return false
 }
 
 // validateRegoPolicy validates .rego file content
@@ -259,10 +327,10 @@ func validateEventsConfig(content []byte) error {
 	// we'll do basic JSON validation here
 	var eventsFile struct {
 		Handlers []struct {
-			Name    string   `json:"name"`
-			Events  []string `json:"events"`
-			Type    string   `json:"type"`
-			Enabled *bool    `json:"enabled,omitempty"`
+			Name    string      `json:"name"`
+			Events  []string    `json:"events"`
+			Type    string      `json:"type"`
+			Enabled *bool       `json:"enabled,omitempty"`
 			Config  interface{} `json:"config"`
 		} `json:"handlers"`
 	}
@@ -336,7 +404,7 @@ type UserConfig struct {
 
 type UserCredential struct {
 	UserID       string   `json:"user_id"`
-	PasswordHash string   `json:"password_hash"`  // bcrypt hash
+	PasswordHash string   `json:"password_hash"`   // bcrypt hash
 	Token        string   `json:"token,omitempty"` // Optional static token
 	Groups       []string `json:"groups"`          // User's group memberships
 }

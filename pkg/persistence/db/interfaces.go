@@ -85,6 +85,9 @@ type FileRepository interface {
 	// GetLatestVersion gets the latest version of a file
 	GetLatestVersion(ctx context.Context, fileID string) (*models.FileVersion, error)
 
+	// ListVersions lists all versions of a file (latest first)
+	ListVersions(ctx context.Context, fileID string) ([]*models.FileVersion, error)
+
 	// Exists checks if a file exists with the given directory ID and name
 	Exists(ctx context.Context, dirID, name string) (bool, error)
 }

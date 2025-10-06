@@ -42,6 +42,19 @@ type ListDirectoryResponse struct {
 	NextCursor  *string             `json:"next_cursor,omitempty"`
 }
 
+// DirectoryEntry represents a directory or file entry
+type DirectoryEntry struct {
+	Name      string `json:"name"`
+	Type      string `json:"type"` // "directory" or "file"
+	SizeBytes int64  `json:"size_bytes"`
+}
+
+// ListDirectoryEntriesResponse represents a combined list of directories and files
+type ListDirectoryEntriesResponse struct {
+	Entries    []DirectoryEntry `json:"entries"`
+	NextCursor *string          `json:"next_cursor,omitempty"`
+}
+
 // CreateDirectory handles directory creation
 func (h *DirectoryHandler) CreateDirectory(ctx context.Context, c *app.RequestContext) {
 	// Get validated request from context (set by validation middleware)
@@ -109,29 +122,42 @@ func (h *DirectoryHandler) ListDirectory(ctx context.Context, c *app.RequestCont
 		return
 	}
 
-	// Format response
-	dirResponses := make([]DirectoryResponse, len(directories))
-	for i, dir := range directories {
-		dirResponses[i] = DirectoryResponse{
-			ID:        dir.ID,
-			Name:      dir.Name,
-			Path:      dir.Path,
-			ParentID:  dir.ParentID,
-			CreatedAt: dir.CreatedAt,
-			UpdatedAt: dir.UpdatedAt,
+	// Format response - create entries array combining directories and files
+	entries := make([]DirectoryEntry, 0, len(directories)+len(files))
+
+	// Add directories (exclude current directory to prevent recursion)
+	for _, dir := range directories {
+		// Skip the current directory itself (e.g., "/" when listing "/")
+		if dir.Path == path {
+			continue
 		}
+		// Skip parent directory references
+		if dir.Name == "." || dir.Name == ".." {
+			continue
+		}
+		entries = append(entries, DirectoryEntry{
+			Name:      dir.Name,
+			Type:      "directory",
+			SizeBytes: 0,
+		})
 	}
 
-	response := ListDirectoryResponse{
-		Directories: dirResponses,
+	// Add files
+	for _, file := range files {
+		entries = append(entries, DirectoryEntry{
+			Name:      file.Name,
+			Type:      "file",
+			SizeBytes: file.SizeBytes,
+		})
+	}
+
+	response := ListDirectoryEntriesResponse{
+		Entries: entries,
 	}
 
 	if nextCursor != "" {
 		response.NextCursor = &nextCursor
 	}
-
-	// Note: files are currently not included in the response, but they are available if needed
-	_ = files
 
 	c.JSON(200, response)
 }

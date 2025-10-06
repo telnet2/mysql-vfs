@@ -29,7 +29,7 @@ type FileService struct {
 	db           *gorm.DB
 	storage      storage.Storage
 	filesLoader  *FilesLoader
-	groupLoader  *GroupLoader  // For .owner validation
+	groupLoader  *GroupLoader // For .owner validation
 	eventTrigger EventTrigger // For lifecycle events
 }
 
@@ -184,9 +184,11 @@ func (s *FileService) CreateFile(ctx context.Context, directoryPath, name, conte
 	// ========== VALIDATION STAGE ==========
 	opCtx.CurrentStage = events.StageValidation
 
+	var err error
+
 	// Basic validation
 	if size > MaxFileSize {
-		err := fmt.Errorf("file size %d exceeds maximum %d bytes", size, MaxFileSize)
+		err = fmt.Errorf("file size %d exceeds maximum %d bytes", size, MaxFileSize)
 		if s.eventTrigger != nil {
 			valPayload := s.buildValidationPayload(opCtx, user, requestID, name, contentType, size, checksum, events.ActionChecked, events.OutcomeFailed)
 			valPayload.ValidationType = "size"
@@ -208,15 +210,16 @@ func (s *FileService) CreateFile(ctx context.Context, directoryPath, name, conte
 		return nil, err
 	}
 
-	// Validate name
-	if name == "" || name == "." || name == ".." {
-		err := fmt.Errorf("invalid file name")
+	// Validate and normalize name
+	var normalizedName string
+	normalizedName, err = ValidateAndNormalizeName(name)
+	if err != nil {
 		if s.eventTrigger != nil {
 			valPayload := s.buildValidationPayload(opCtx, user, requestID, name, contentType, size, checksum, events.ActionChecked, events.OutcomeFailed)
 			valPayload.ValidationType = "name"
 			valPayload.Violations = []events.Violation{{
 				Field:   "name",
-				Message: "invalid file name",
+				Message: err.Error(),
 				Code:    "invalid_name",
 			}}
 			s.eventTrigger.Emit(ctx, "file.create.validation.failed", valPayload)
@@ -231,62 +234,13 @@ func (s *FileService) CreateFile(ctx context.Context, directoryPath, name, conte
 		}
 		return nil, err
 	}
-
-	// Reject path separators
-	if strings.Contains(name, "/") || strings.Contains(name, "\\") {
-		err := fmt.Errorf("invalid file name")
-		if s.eventTrigger != nil {
-			valPayload := s.buildValidationPayload(opCtx, user, requestID, name, contentType, size, checksum, events.ActionChecked, events.OutcomeFailed)
-			valPayload.ValidationType = "name"
-			valPayload.Violations = []events.Violation{{
-				Field:   "name",
-				Message: "file name cannot contain path separators",
-				Code:    "invalid_name",
-			}}
-			s.eventTrigger.Emit(ctx, "file.create.validation.failed", valPayload)
-
-			// Emit completion.failed for early validation failure
-			opCtx.Status = "failed"
-			opCtx.ErrorMessage = err.Error()
-			completedAt := time.Now()
-			opCtx.CompletedAt = &completedAt
-			completionPayload := s.buildCompletionPayload(opCtx, user, requestID, nil, false, err.Error())
-			s.eventTrigger.Emit(ctx, "file.create.completion.failed", completionPayload)
-		}
-		return nil, err
-	}
-
-	// Reject control characters
-	for _, r := range name {
-		if r < 32 || r == 127 {
-			err := fmt.Errorf("invalid file name")
-			if s.eventTrigger != nil {
-				valPayload := s.buildValidationPayload(opCtx, user, requestID, name, contentType, size, checksum, events.ActionChecked, events.OutcomeFailed)
-				valPayload.ValidationType = "name"
-				valPayload.Violations = []events.Violation{{
-					Field:   "name",
-					Message: "file name contains control characters",
-					Code:    "invalid_name",
-				}}
-				s.eventTrigger.Emit(ctx, "file.create.validation.failed", valPayload)
-
-				// Emit completion.failed for early validation failure
-				opCtx.Status = "failed"
-				opCtx.ErrorMessage = err.Error()
-				completedAt := time.Now()
-				opCtx.CompletedAt = &completedAt
-				completionPayload := s.buildCompletionPayload(opCtx, user, requestID, nil, false, err.Error())
-				s.eventTrigger.Emit(ctx, "file.create.completion.failed", completionPayload)
-			}
-			return nil, err
-		}
-	}
+	name = normalizedName
 
 	// ========== EXECUTION STAGE ==========
 	opCtx.CurrentStage = events.StageExecution
 
 	var file *models.File
-	err := s.db.Transaction(func(tx *gorm.DB) error {
+	err = s.db.Transaction(func(tx *gorm.DB) error {
 		execStartTime := time.Now()
 		opCtx.ExecutionStartedAt = &execStartTime
 
@@ -491,7 +445,7 @@ func (s *FileService) CreateFile(ctx context.Context, directoryPath, name, conte
 }
 
 // GetFile retrieves file metadata and content
-func (s *FileService) GetFile(ctx context.Context, filePath string) (*models.File, io.ReadCloser, error) {
+func (s *FileService) GetFile(ctx context.Context, filePath string, version int64) (*models.File, io.ReadCloser, error) {
 	// Parse path
 	dirPath, fileName := s.parsePath(filePath)
 
@@ -507,21 +461,61 @@ func (s *FileService) GetFile(ctx context.Context, filePath string) (*models.Fil
 		return nil, nil, err
 	}
 
-	// Get content
+	var fileData *models.File
 	var reader io.ReadCloser
-	if file.StorageType == models.StorageTypeJSON {
-		reader = io.NopCloser(strings.NewReader(*file.JSONContent))
-	} else if file.StorageType == models.StorageTypeText {
-		reader = io.NopCloser(strings.NewReader(*file.TextContent))
-	} else {
-		r, err := s.storage.Get(ctx, *file.S3Key)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to retrieve from S3: %w", err)
+
+	if version == 0 || version == file.Version {
+		// Get current version
+		fileData = &file
+		if file.StorageType == models.StorageTypeJSON {
+			reader = io.NopCloser(strings.NewReader(*file.JSONContent))
+		} else if file.StorageType == models.StorageTypeText {
+			reader = io.NopCloser(strings.NewReader(*file.TextContent))
+		} else {
+			r, err := s.storage.Get(ctx, *file.S3Key)
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to retrieve from S3: %w", err)
+			}
+			reader = r
 		}
-		reader = r
+	} else {
+		// Get specific version
+		var fileVersion models.FileVersion
+		err := s.db.Where("file_id = ? AND version_number = ?", file.ID, version).First(&fileVersion).Error
+		if err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return nil, nil, fmt.Errorf("version %d not found for file: %s", version, filePath)
+			}
+			return nil, nil, err
+		}
+
+		// Create a file struct from the version data
+		fileData = &models.File{
+			ID:             file.ID,
+			Name:           file.Name,
+			ContentType:    fileVersion.ContentType,
+			SizeBytes:      fileVersion.SizeBytes,
+			StorageType:    fileVersion.StorageType,
+			ChecksumSHA256: fileVersion.ChecksumSHA256,
+			Version:        fileVersion.VersionNumber,
+			DirectoryID:    file.DirectoryID,
+		}
+
+		// Get content from version
+		if fileVersion.StorageType == models.StorageTypeJSON {
+			reader = io.NopCloser(strings.NewReader(*fileVersion.JSONContent))
+		} else if fileVersion.StorageType == models.StorageTypeText {
+			reader = io.NopCloser(strings.NewReader(*fileVersion.TextContent))
+		} else {
+			r, err := s.storage.Get(ctx, *fileVersion.S3Key)
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to retrieve from S3: %w", err)
+			}
+			reader = r
+		}
 	}
 
-	return &file, reader, nil
+	return fileData, reader, nil
 }
 
 // UpdateFile updates an existing file with lifecycle event tracking
@@ -841,6 +835,35 @@ func (s *FileService) UpdateFile(ctx context.Context, filePath, contentType stri
 	return file, nil
 }
 
+// ListVersions lists all versions of a file (latest first)
+func (s *FileService) ListVersions(ctx context.Context, filePath string) ([]*models.FileVersion, error) {
+	// Parse path
+	directoryPath, name := s.parsePath(filePath)
+
+	// Find file
+	var file models.File
+	err := s.db.Joins("JOIN directories ON directories.id = files.directory_id").
+		Where("directories.path = ? AND files.name = ? AND files.deleted_at IS NULL", directoryPath, name).
+		First(&file).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, fmt.Errorf("file not found: %s", filePath)
+		}
+		return nil, err
+	}
+
+	// List versions
+	var versions []*models.FileVersion
+	err = s.db.Where("file_id = ?", file.ID).
+		Order("version_number DESC").
+		Find(&versions).Error
+	if err != nil {
+		return nil, err
+	}
+
+	return versions, nil
+}
+
 // DeleteFile deletes a file with lifecycle event tracking
 func (s *FileService) DeleteFile(ctx context.Context, filePath string) error {
 	// Get user context
@@ -1004,6 +1027,13 @@ func (s *FileService) MoveFile(ctx context.Context, sourcePath, destPath string)
 
 	srcDir, srcName := s.parsePath(sourcePath)
 	dstDir, dstName := s.parsePath(destPath)
+
+	// Validate and normalize destination name
+	normalizedDstName, nameErr := ValidateAndNormalizeName(dstName)
+	if nameErr != nil {
+		return nil, nameErr
+	}
+	dstName = normalizedDstName
 
 	// Create operation context
 	opCtx := &events.OperationContext{

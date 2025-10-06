@@ -150,8 +150,8 @@ func main() {
 	// API v1 routes
 	v1 := h.Group("/api/v1")
 	v1.Use(idempotencyService.Middleware())
-	v1.Use(authMiddleware.Handler())   // Authentication (JWT, OAuth, etc.)
-	v1.Use(authzMiddleware.Handler())  // Authorization (OPA policies)
+	v1.Use(authMiddleware.Handler())  // Authentication (JWT, OAuth, etc.)
+	v1.Use(authzMiddleware.Handler()) // Authorization (OPA policies)
 
 	// Directory routes
 	v1.POST("/directories", vfsServer.createDirectory)
@@ -164,6 +164,7 @@ func main() {
 	v1.PUT("/files/*path", vfsServer.updateFile)
 	v1.DELETE("/files/*path", vfsServer.deleteFile)
 	v1.POST("/files/move", vfsServer.moveFile)
+	v1.GET("/files-version/*path", vfsServer.listVersions)
 
 	log.Printf("VFS Service starting on port %s", cfg.ServerPort)
 	log.Printf("Authentication: %s", cfg.Auth.Provider)
@@ -220,7 +221,7 @@ func (s *VFSServer) healthHandler(ctx context.Context, c *app.RequestContext) {
 func (s *VFSServer) readyHandler(ctx context.Context, c *app.RequestContext) {
 	if err := persistencedb.HealthCheck(s.db); err != nil {
 		c.JSON(consts.StatusServiceUnavailable, map[string]interface{}{
-			"ready": false,
+			"ready":  false,
 			"reason": err.Error(),
 		})
 		return
@@ -316,6 +317,7 @@ func (s *VFSServer) listDirectory(ctx context.Context, c *app.RequestContext) {
 			"name":        file.Name,
 			"type":        "file",
 			"size_bytes":  file.SizeBytes,
+			"version":     file.Version,
 			"modified_at": file.UpdatedAt,
 		})
 	}
@@ -415,7 +417,21 @@ func (s *VFSServer) getFile(ctx context.Context, c *app.RequestContext) {
 		path = "/" + path
 	}
 
-	file, reader, err := s.fileService.GetFile(ctx, path)
+	// Check for version parameter
+	versionStr := string(c.Query("version"))
+	var version int64
+	var err error
+	if versionStr != "" {
+		version, err = strconv.ParseInt(versionStr, 10, 64)
+		if err != nil {
+			c.JSON(consts.StatusBadRequest, map[string]string{
+				"error": "invalid version parameter",
+			})
+			return
+		}
+	}
+
+	file, reader, err := s.fileService.GetFile(ctx, path, version)
 	if err != nil {
 		c.JSON(consts.StatusNotFound, map[string]string{
 			"error": err.Error(),
@@ -479,6 +495,46 @@ func (s *VFSServer) updateFile(ctx context.Context, c *app.RequestContext) {
 		"size_bytes":   file.SizeBytes,
 		"version":      file.Version,
 		"updated_at":   file.UpdatedAt,
+	}
+
+	if requestID != "" {
+		s.idempotencyService.CacheResponse(requestID, response)
+	}
+
+	c.JSON(consts.StatusOK, response)
+}
+
+// listVersions lists all versions of a file
+func (s *VFSServer) listVersions(ctx context.Context, c *app.RequestContext) {
+	path := string(c.Param("path"))
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+
+	// Get request ID and add to context
+	requestID := idempotency.GetRequestID(c)
+	if requestID != "" {
+		ctx = context.WithValue(ctx, "requestID", requestID)
+	}
+
+	versions, err := s.fileService.ListVersions(ctx, path)
+	if err != nil {
+		c.JSON(consts.StatusNotFound, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	response := make([]map[string]interface{}, len(versions))
+	for i, version := range versions {
+		response[i] = map[string]interface{}{
+			"version":      version.VersionNumber,
+			"content_type": version.ContentType,
+			"size_bytes":   version.SizeBytes,
+			"storage_type": version.StorageType,
+			"checksum":     version.ChecksumSHA256,
+			"created_at":   version.CreatedAt,
+		}
 	}
 
 	if requestID != "" {

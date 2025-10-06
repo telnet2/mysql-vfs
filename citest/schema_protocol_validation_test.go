@@ -246,6 +246,10 @@ var _ = Describe("Schema Protocol ($ref with schema://) Validation E2E", Ordered
 
 	Context("Nested $ref Support", func() {
 		It("should support $ref within schemas", func() {
+			// Ensure /schemas directory exists (may already exist from previous tests)
+			// Try to create it, ignore error if it already exists
+			dirService.CreateDirectory(ctx, "/", "schemas")
+
 			// Create address schema
 			addressSchema := `{
 				"type": "object",

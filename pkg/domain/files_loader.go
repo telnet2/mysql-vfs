@@ -6,12 +6,10 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/telnet2/mysql-vfs/pkg/persistence/db"
-	"github.com/xeipuuv/gojsonschema"
 )
 
 // FilesLoader loads and caches .files rules
@@ -113,118 +111,24 @@ func (l *FilesLoader) matchPattern(fileName, pattern, patternType string) (bool,
 
 // validateAgainstSchema validates content against JSON schema with $ref support
 func (l *FilesLoader) validateAgainstSchema(ctx context.Context, fileName string, content []byte, schema map[string]interface{}) error {
-	// Convert schema to JSON bytes
-	schemaBytes, err := json.Marshal(schema)
-	if err != nil {
-		return fmt.Errorf("invalid schema: %w", err)
+	// Create VFS schema loader
+	vfsLoader := NewVFSSchemaLoader(ctx, l.fileRepo, l.dirRepo, &l.schemaCache)
+
+	// Create lazy schema that will resolve $ref dynamically
+	lazySchema := NewLazySchema(schema, vfsLoader)
+
+	// Parse the content to validate
+	var data interface{}
+	if err := json.Unmarshal(content, &data); err != nil {
+		return fmt.Errorf("invalid JSON content: %w", err)
 	}
 
-	// Create a custom schema loader that supports schema:// protocol for VFS
-	factory := NewVFSSchemaLoaderFactory(ctx, l.fileRepo, l.dirRepo, &l.schemaCache)
-
-	// Create schema loader with custom reference loader
-	sl := gojsonschema.NewSchemaLoader()
-	sl.Validate = true
-
-	// First, load the base schema
-	baseLoader := gojsonschema.NewBytesLoader(schemaBytes)
-
-	// If the schema contains schema:// references, preload them
-	if needsVFSResolution(schema) {
-		// Extract and preload schema:// references
-		if err := l.preloadSchemaRefs(ctx, sl, schema, factory); err != nil {
-			return fmt.Errorf("failed to preload schema references: %w", err)
-		}
-	}
-
-	// Compile the schema
-	compiledSchema, err := sl.Compile(baseLoader)
-	if err != nil {
-		return fmt.Errorf("schema compilation error: %w", err)
-	}
-
-	// Validate the document
-	documentLoader := gojsonschema.NewBytesLoader(content)
-	result, err := compiledSchema.Validate(documentLoader)
-	if err != nil {
-		return fmt.Errorf("schema validation error: %w", err)
-	}
-
-	if !result.Valid() {
-		errMsg := fmt.Sprintf("content validation failed for %s:", fileName)
-		for _, desc := range result.Errors() {
-			errMsg += fmt.Sprintf("\n  - %s", desc)
-		}
-		return fmt.Errorf("%s", errMsg)
+	// Validate using lazy schema (automatically resolves all $ref)
+	if err := lazySchema.Validate(data); err != nil {
+		return fmt.Errorf("content validation failed for %s: %w", fileName, err)
 	}
 
 	return nil
-}
-
-// needsVFSResolution checks if schema contains schema:// references
-func needsVFSResolution(schema map[string]interface{}) bool {
-	return containsSchemaProtocol(schema)
-}
-
-// containsSchemaProtocol recursively checks for schema:// in $ref
-func containsSchemaProtocol(obj interface{}) bool {
-	switch v := obj.(type) {
-	case map[string]interface{}:
-		if ref, ok := v["$ref"].(string); ok {
-			if strings.HasPrefix(ref, "schema://") {
-				return true
-			}
-		}
-		for _, val := range v {
-			if containsSchemaProtocol(val) {
-				return true
-			}
-		}
-	case []interface{}:
-		for _, val := range v {
-			if containsSchemaProtocol(val) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// preloadSchemaRefs extracts and preloads all schema:// references
-func (l *FilesLoader) preloadSchemaRefs(ctx context.Context, sl *gojsonschema.SchemaLoader, schema map[string]interface{}, factory *VFSSchemaLoaderFactory) error {
-	refs := extractSchemaRefs(schema)
-	for _, ref := range refs {
-		loader := NewVFSSchemaLoader(ctx, l.fileRepo, l.dirRepo, &l.schemaCache, ref, factory)
-		if err := sl.AddSchema(ref, loader); err != nil {
-			return fmt.Errorf("failed to add schema %s: %w", ref, err)
-		}
-	}
-	return nil
-}
-
-// extractSchemaRefs recursively extracts all schema:// $ref values
-func extractSchemaRefs(obj interface{}) []string {
-	var refs []string
-	extractRefsRecursive(obj, &refs)
-	return refs
-}
-
-func extractRefsRecursive(obj interface{}, refs *[]string) {
-	switch v := obj.(type) {
-	case map[string]interface{}:
-		if ref, ok := v["$ref"].(string); ok {
-			if strings.HasPrefix(ref, "schema://") {
-				*refs = append(*refs, ref)
-			}
-		}
-		for _, val := range v {
-			extractRefsRecursive(val, refs)
-		}
-	case []interface{}:
-		for _, val := range v {
-			extractRefsRecursive(val, refs)
-		}
-	}
 }
 
 // Load loads .files config for a directory (with inheritance)

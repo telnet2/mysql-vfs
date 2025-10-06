@@ -6,6 +6,7 @@ import (
 )
 
 var lsRecursive bool
+var lsLong bool
 
 var lsCmd = &cobra.Command{
 	Use:   "ls [path]",
@@ -19,6 +20,9 @@ var lsCmd = &cobra.Command{
 		if lsRecursive {
 			cmdArgs = append(cmdArgs, "-r")
 		}
+		if lsLong {
+			cmdArgs = append(cmdArgs, "-l")
+		}
 		if len(args) > 0 {
 			cmdArgs = append(cmdArgs, args[0])
 		}
@@ -29,4 +33,5 @@ var lsCmd = &cobra.Command{
 
 func init() {
 	lsCmd.Flags().BoolVarP(&lsRecursive, "recursive", "r", false, "List directories recursively")
+	lsCmd.Flags().BoolVarP(&lsLong, "long", "l", false, "Show detailed listing with content-type, size, version, and timestamp")
 }

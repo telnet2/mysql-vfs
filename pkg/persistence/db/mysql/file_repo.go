@@ -154,6 +154,16 @@ func (r *GormFileRepository) GetLatestVersion(ctx context.Context, fileID string
 	return &version, err
 }
 
+// ListVersions lists all versions of a file (latest first)
+func (r *GormFileRepository) ListVersions(ctx context.Context, fileID string) ([]*models.FileVersion, error) {
+	var versions []*models.FileVersion
+	err := r.db.WithContext(ctx).
+		Where("file_id = ?", fileID).
+		Order("version_number DESC").
+		Find(&versions).Error
+	return versions, err
+}
+
 // Exists checks if a file exists with the given directory ID and name
 func (r *GormFileRepository) Exists(ctx context.Context, dirID, name string) (bool, error) {
 	var count int64

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -79,6 +80,7 @@ type DirectoryEntry struct {
 	Name       string    `json:"name"`
 	Type       string    `json:"type"` // "directory" or "file"
 	SizeBytes  int64     `json:"size_bytes"`
+	Version    int64     `json:"version"`
 	ModifiedAt time.Time `json:"modified_at"`
 }
 
@@ -213,6 +215,33 @@ type CreateFileResponse struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
+// UpdateFileRequest is the request to update a file
+type UpdateFileRequest struct {
+	ContentType     string `json:"content_type"`
+	Content         string `json:"content"`
+	ExpectedVersion int64  `json:"expected_version"`
+}
+
+// UpdateFileResponse is the response from updating a file
+type UpdateFileResponse struct {
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	ContentType string    `json:"content_type"`
+	SizeBytes   int64     `json:"size_bytes"`
+	Version     int64     `json:"version"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// FileVersion represents a version of a file
+type FileVersion struct {
+	Version     int64     `json:"version"`
+	ContentType string    `json:"content_type"`
+	SizeBytes   int64     `json:"size_bytes"`
+	StorageType string    `json:"storage_type"`
+	Checksum    string    `json:"checksum"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
 // CreateFile creates a new file
 func (c *Client) CreateFile(directoryPath, name, contentType, content string) (*CreateFileResponse, error) {
 	requestID := uuid.New().String()
@@ -243,26 +272,84 @@ func (c *Client) CreateFile(directoryPath, name, contentType, content string) (*
 	return &result, nil
 }
 
-// GetFile retrieves a file's content
-func (c *Client) GetFile(path string) ([]byte, string, error) {
-	resp, err := c.request("GET", "/api/v1/files"+path, nil, "")
+// UpdateFile updates an existing file
+func (c *Client) UpdateFile(path, contentType, content string, expectedVersion int64) (*UpdateFileResponse, error) {
+	requestID := uuid.New().String()
+
+	req := UpdateFileRequest{
+		ContentType:     contentType,
+		Content:         content,
+		ExpectedVersion: expectedVersion,
+	}
+
+	resp, err := c.request("PUT", "/api/v1/files"+path, req, requestID)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, "", fmt.Errorf("failed to get file: %s (status: %d)", string(body), resp.StatusCode)
+		return nil, fmt.Errorf("failed to update file: %s (status: %d)", string(body), resp.StatusCode)
+	}
+
+	var result UpdateFileResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &result, nil
+}
+
+// ListVersions lists all versions of a file
+func (c *Client) ListVersions(path string) ([]*FileVersion, error) {
+	resp, err := c.request("GET", "/api/v1/files-version"+path, nil, "")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to list versions: %s (status: %d)", string(body), resp.StatusCode)
+	}
+
+	var result []*FileVersion
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return result, nil
+}
+
+// GetFile retrieves a file's content
+func (c *Client) GetFile(path string) ([]byte, string, int64, error) {
+	resp, err := c.request("GET", "/api/v1/files"+path, nil, "")
+	if err != nil {
+		return nil, "", 0, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, "", 0, fmt.Errorf("failed to get file: %s (status: %d)", string(body), resp.StatusCode)
 	}
 
 	contentType := resp.Header.Get("Content-Type")
-	content, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, "", fmt.Errorf("failed to read file content: %w", err)
+	versionStr := resp.Header.Get("X-File-Version")
+	var version int64 = 1 // Default to 1
+	if versionStr != "" {
+		if parsed, err := strconv.ParseInt(versionStr, 10, 64); err == nil {
+			version = parsed
+		}
 	}
 
-	return content, contentType, nil
+	content, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", 0, fmt.Errorf("failed to read file content: %w", err)
+	}
+
+	return content, contentType, version, nil
 }
 
 // GetFileStream retrieves a file's content as a stream

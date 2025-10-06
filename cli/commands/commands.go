@@ -21,6 +21,117 @@ type Context struct {
 	Stderr  io.Writer
 }
 
+// expandVFSGlob expands glob patterns in VFS paths
+func expandVFSGlob(ctx *Context, pattern string) ([]string, error) {
+	// Check if pattern contains glob characters
+	if !strings.ContainsAny(pattern, "*?[") {
+		// No glob characters, return as-is if it exists
+		if !session.IsValidPath(pattern) {
+			return nil, fmt.Errorf("invalid path: %s", pattern)
+		}
+		return []string{pattern}, nil
+	}
+
+	// Split pattern into directory and filename parts
+	dir := filepath.Dir(pattern)
+	base := filepath.Base(pattern)
+
+	// If pattern starts with /, dir will be "/"
+	if dir == "." {
+		dir = ""
+	}
+
+	// Resolve the directory path
+	var searchDir string
+	if dir == "" || dir == "/" {
+		searchDir = "/"
+	} else {
+		searchDir = ctx.Session.ResolvePath(dir)
+	}
+
+	if !session.IsValidPath(searchDir) {
+		return nil, fmt.Errorf("invalid directory: %s", searchDir)
+	}
+
+	// List directory contents
+	resp, err := ctx.Client.ListDirectory(searchDir, 1000, "") // Use larger limit for globbing
+	if err != nil {
+		return nil, fmt.Errorf("failed to list directory %s: %w", searchDir, err)
+	}
+
+	var matches []string
+	for _, entry := range resp.Entries {
+		// Match the filename against the glob pattern
+		matched, err := filepath.Match(base, entry.Name)
+		if err != nil {
+			continue // Skip invalid patterns
+		}
+		if matched {
+			// Construct full path
+			if searchDir == "/" {
+				matches = append(matches, "/"+entry.Name)
+			} else {
+				matches = append(matches, filepath.Join(searchDir, entry.Name))
+			}
+		}
+	}
+
+	if len(matches) == 0 {
+		return nil, fmt.Errorf("no files match pattern: %s", pattern)
+	}
+
+	return matches, nil
+}
+
+// hasGlobChars checks if a string contains glob characters
+func hasGlobChars(s string) bool {
+	return strings.ContainsAny(s, "*?[")
+}
+
+// detectContentType detects content type based on file extension
+func (c *LsCommand) detectContentType(filename string) string {
+	ext := strings.ToLower(filepath.Ext(filename))
+	switch ext {
+	case ".json":
+		return "application/json"
+	case ".txt", ".md":
+		return "text/plain"
+	case ".html":
+		return "text/html"
+	case ".xml":
+		return "application/xml"
+	case ".csv":
+		return "text/csv"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".png":
+		return "image/png"
+	case ".pdf":
+		return "application/pdf"
+	case ".zip":
+		return "application/zip"
+	case ".rego":
+		return "application/rego"
+	case ".group":
+		return "application/group"
+	default:
+		return "application/octet-stream"
+	}
+}
+
+// formatSize formats file size in human readable format
+func (c *LsCommand) formatSize(size int64) string {
+	if size < 1024 {
+		return fmt.Sprintf("%d", size)
+	} else if size < 1024*1024 {
+		return fmt.Sprintf("%.1fK", float64(size)/1024)
+	} else if size < 1024*1024*1024 {
+		return fmt.Sprintf("%.1fM", float64(size)/(1024*1024))
+	} else {
+		return fmt.Sprintf("%.1fG", float64(size)/(1024*1024*1024))
+	}
+}
+
 // Command represents a CLI command
 type Command interface {
 	Execute(ctx *Context, args []string) error
@@ -32,12 +143,16 @@ type LsCommand struct{}
 
 func (c *LsCommand) Execute(ctx *Context, args []string) error {
 	recursive := false
+	long := false
 	targetPath := ""
+	var err error
 
 	// Parse flags
 	for _, arg := range args {
 		if arg == "-r" || arg == "--recursive" {
 			recursive = true
+		} else if arg == "-l" || arg == "--long" {
+			long = true
 		} else if !strings.HasPrefix(arg, "-") {
 			targetPath = arg
 		}
@@ -50,18 +165,118 @@ func (c *LsCommand) Execute(ctx *Context, args []string) error {
 		targetPath = ctx.Session.ResolvePath(targetPath)
 	}
 
-	if !session.IsValidPath(targetPath) {
-		return fmt.Errorf("invalid path: %s", targetPath)
-	}
-
 	if recursive {
-		return c.listRecursive(ctx, targetPath, 0)
+		if hasGlobChars(targetPath) {
+			return fmt.Errorf("recursive listing with glob patterns is not supported")
+		}
+		return c.listRecursive(ctx, targetPath, 0, long)
 	}
 
-	return c.listSingle(ctx, targetPath)
+	// Check if path contains glob characters
+	if hasGlobChars(targetPath) {
+		return c.listGlob(ctx, targetPath, long)
+	}
+
+	// Check if it's a file or directory
+	if strings.HasSuffix(targetPath, "/") {
+		// Explicitly a directory
+		return c.listSingle(ctx, strings.TrimSuffix(targetPath, "/"), long)
+	}
+
+	// Try to list as directory first
+	_, err = ctx.Client.ListDirectory(targetPath, 1, "")
+	if err == nil {
+		// It's a directory
+		return c.listSingle(ctx, targetPath, long)
+	}
+
+	// Try to get as file
+	_, _, _, err = ctx.Client.GetFile(targetPath)
+	if err != nil {
+		return fmt.Errorf("path not found: %s", targetPath)
+	}
+
+	// It's a file - show file info
+	return c.listFile(ctx, targetPath, long)
 }
 
-func (c *LsCommand) listSingle(ctx *Context, path string) error {
+func (c *LsCommand) listGlob(ctx *Context, pattern string, long bool) error {
+	matches, err := expandVFSGlob(ctx, pattern)
+	if err != nil {
+		return err
+	}
+
+	for _, match := range matches {
+		if err := c.listFile(ctx, match, long); err != nil {
+			fmt.Fprintf(ctx.Stderr, "Warning: failed to list %s: %v\n", match, err)
+		}
+	}
+
+	return nil
+}
+
+func (c *LsCommand) listFile(ctx *Context, path string, long bool) error {
+	if long {
+		return c.listFileLong(ctx, path)
+	}
+
+	// For files, we need to get file info from the parent directory
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+
+	resp, err := ctx.Client.ListDirectory(dir, 100, "")
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range resp.Entries {
+		if entry.Name == base {
+			if entry.Type == "directory" {
+				fmt.Fprintf(ctx.Stdout, "%s/\n", path)
+			} else {
+				fmt.Fprintf(ctx.Stdout, "%s  (%d bytes)\n", path, entry.SizeBytes)
+			}
+			return nil
+		}
+	}
+
+	return fmt.Errorf("file not found: %s", path)
+}
+
+func (c *LsCommand) listFileLong(ctx *Context, path string) error {
+	// Get file metadata
+	content, contentType, version, err := ctx.Client.GetFile(path)
+	if err != nil {
+		return err
+	}
+
+	// Detect content type if not provided
+	if contentType == "" {
+		contentType = c.detectContentType(filepath.Base(path))
+	}
+
+	// Use version from GetFile response
+	latestVersion := version
+	timestamp := "unknown" // For single file, we don't have timestamp from GetFile
+
+	// Print table header
+	fmt.Fprintf(ctx.Stdout, "%-35s %-18s %-12s %-8s %s\n",
+		"Name", "Type", "Size", "Version", "Modified")
+	fmt.Fprintf(ctx.Stdout, "%-35s %-18s %-12s %-8s %s\n",
+		strings.Repeat("-", 35), strings.Repeat("-", 18), strings.Repeat("-", 12), strings.Repeat("-", 8), strings.Repeat("-", 19))
+
+	// Print file info
+	name := filepath.Base(path)
+	sizeStr := c.formatSize(int64(len(content)))
+	versionStr := fmt.Sprintf("%d", latestVersion)
+
+	fmt.Fprintf(ctx.Stdout, "%-35s %-18s %-12s %-8s %s\n",
+		name, contentType, sizeStr, versionStr, timestamp)
+
+	return nil
+}
+
+func (c *LsCommand) listSingle(ctx *Context, path string, long bool) error {
 	resp, err := ctx.Client.ListDirectory(path, 100, "")
 	if err != nil {
 		return err
@@ -70,6 +285,10 @@ func (c *LsCommand) listSingle(ctx *Context, path string) error {
 	if len(resp.Entries) == 0 {
 		fmt.Fprintln(ctx.Stdout, "(empty directory)")
 		return nil
+	}
+
+	if long {
+		return c.listDirectoryLong(ctx, path, resp.Entries)
 	}
 
 	for _, entry := range resp.Entries {
@@ -83,7 +302,75 @@ func (c *LsCommand) listSingle(ctx *Context, path string) error {
 	return nil
 }
 
-func (c *LsCommand) listRecursive(ctx *Context, path string, depth int) error {
+func (c *LsCommand) listDirectoryLong(ctx *Context, dirPath string, entries []client.DirectoryEntry) error {
+	// Print table header with adjusted widths
+	fmt.Fprintf(ctx.Stdout, "%-35s %-18s %-12s %-8s %s\n",
+		"Name", "Type", "Size", "Version", "Modified")
+	fmt.Fprintf(ctx.Stdout, "%-35s %-18s %-12s %-8s %s\n",
+		strings.Repeat("-", 35), strings.Repeat("-", 18), strings.Repeat("-", 12), strings.Repeat("-", 8), strings.Repeat("-", 19))
+
+	// For each entry, get detailed information
+	for _, entry := range entries {
+		name := entry.Name
+		entryType := entry.Type
+
+		fullPath := filepath.Join(dirPath, name)
+		if entryType == "directory" {
+			// For directories, show basic info
+			fmt.Fprintf(ctx.Stdout, "%-35s %-18s %-12s %-8s %s\n",
+				name+"/", "directory", "-", "-", entry.ModifiedAt.Format("2006-01-02 15:04:05"))
+			continue
+		}
+
+		// For files, get detailed metadata
+		content, contentType, _, err := ctx.Client.GetFile(fullPath)
+		if err != nil {
+			// Fallback to basic info if we can't get file details
+			sizeStr := c.formatSize(entry.SizeBytes)
+			contentType = c.detectContentType(name)
+			fmt.Fprintf(ctx.Stdout, "%-35s %-18s %-12s %-8s %s\n",
+				name, contentType, sizeStr, "-", entry.ModifiedAt.Format("2006-01-02 15:04:05"))
+			continue
+		}
+
+		// Detect content type if not provided
+		if contentType == "" {
+			contentType = c.detectContentType(name)
+		}
+
+		// Get version from directory entry
+		var latestVersion int64 = entry.Version
+		var timestamp string = entry.ModifiedAt.Format("2006-01-02 15:04:05")
+
+		// If version is not available in directory entry, try to get from version history
+		if latestVersion == 0 {
+			versions, err := ctx.Client.ListVersions(fullPath)
+			if err == nil && len(versions) > 0 {
+				// Find latest version
+				latest := versions[0]
+				for _, v := range versions {
+					if v.Version > latest.Version {
+						latest = v
+					}
+				}
+				latestVersion = latest.Version
+				timestamp = latest.CreatedAt.Format("2006-01-02 15:04:05")
+			} else {
+				latestVersion = 1 // Default to 1 if we can't get version info
+			}
+		}
+
+		sizeStr := c.formatSize(int64(len(content)))
+		versionStr := fmt.Sprintf("%d", latestVersion)
+
+		fmt.Fprintf(ctx.Stdout, "%-35s %-18s %-12s %-8s %s\n",
+			name, contentType, sizeStr, versionStr, timestamp)
+	}
+
+	return nil
+}
+
+func (c *LsCommand) listRecursive(ctx *Context, path string, depth int, long bool) error {
 	if depth > 100 {
 		return fmt.Errorf("maximum recursion depth (100) exceeded")
 	}
@@ -103,11 +390,56 @@ func (c *LsCommand) listRecursive(ctx *Context, path string, depth int) error {
 		if entry.Type == "directory" {
 			fmt.Fprintf(ctx.Stdout, "%s%s/\n", indent, entry.Name)
 			subPath := filepath.Join(path, entry.Name)
-			if err := c.listRecursive(ctx, subPath, depth+1); err != nil {
+			if err := c.listRecursive(ctx, subPath, depth+1, long); err != nil {
 				return err
 			}
 		} else {
-			fmt.Fprintf(ctx.Stdout, "%s%s  (%d bytes)\n", indent, entry.Name, entry.SizeBytes)
+			if long {
+				// For long recursive listing, show detailed info with indentation
+				fullPath := filepath.Join(path, entry.Name)
+				content, contentType, _, err := ctx.Client.GetFile(fullPath)
+				if err != nil {
+					contentType = c.detectContentType(entry.Name)
+					fmt.Fprintf(ctx.Stdout, "%s%-35s %-18s %-12s %-8s %s\n",
+						indent, entry.Name, contentType, c.formatSize(entry.SizeBytes), "-", entry.ModifiedAt.Format("2006-01-02 15:04:05"))
+					continue
+				}
+
+				// Detect content type if not provided
+				if contentType == "" {
+					contentType = c.detectContentType(entry.Name)
+				}
+
+				// Get version from directory entry
+				var latestVersion int64 = entry.Version
+				var timestamp string = entry.ModifiedAt.Format("2006-01-02 15:04:05")
+
+				// If version is not available in directory entry, try to get from version history
+				if latestVersion == 0 {
+					versions, err := ctx.Client.ListVersions(fullPath)
+					if err == nil && len(versions) > 0 {
+						// Find latest version
+						latest := versions[0]
+						for _, v := range versions {
+							if v.Version > latest.Version {
+								latest = v
+							}
+						}
+						latestVersion = latest.Version
+						timestamp = latest.CreatedAt.Format("2006-01-02 15:04:05")
+					} else {
+						latestVersion = 1 // Default to 1 if we can't get version info
+					}
+				}
+
+				sizeStr := c.formatSize(int64(len(content)))
+				versionStr := fmt.Sprintf("%d", latestVersion)
+
+				fmt.Fprintf(ctx.Stdout, "%s%-35s %-18s %-12s %-8s %s\n",
+					indent, entry.Name, contentType, sizeStr, versionStr, timestamp)
+			} else {
+				fmt.Fprintf(ctx.Stdout, "%s%s  (%d bytes)\n", indent, entry.Name, entry.SizeBytes)
+			}
 		}
 	}
 
@@ -303,74 +635,142 @@ func (c *CatCommand) Help() string {
 type ImportCommand struct{}
 
 func (c *ImportCommand) Execute(ctx *Context, args []string) error {
-	if len(args) < 2 {
-		return fmt.Errorf("usage: import <local_path> <vfs_path>")
+	if len(args) < 1 {
+		return fmt.Errorf("usage: import <local_path> [vfs_path]")
 	}
 
-	localPath := args[0]
-	vfsPath := args[1]
+	localPattern := args[0]
+	var vfsBasePath string
 
-	// Read local file
-	fileInfo, err := os.Stat(localPath)
+	if len(args) == 2 {
+		vfsBasePath = args[1]
+	} else {
+		// Single argument: use current directory
+		vfsBasePath = ctx.Session.GetCurrentDirectory()
+	}
+
+	// Expand local glob pattern
+	localMatches, err := filepath.Glob(localPattern)
 	if err != nil {
-		return fmt.Errorf("failed to read local file: %w", err)
+		return fmt.Errorf("invalid glob pattern: %w", err)
 	}
 
-	if fileInfo.IsDir() {
-		return fmt.Errorf("cannot import directory (only files supported)")
+	if len(localMatches) == 0 {
+		return fmt.Errorf("no files match pattern: %s", localPattern)
 	}
 
-	if fileInfo.Size() > client.MaxFileSize {
-		return fmt.Errorf("file size (%d bytes) exceeds maximum allowed (%d bytes)",
-			fileInfo.Size(), client.MaxFileSize)
+	// Filter out directories
+	var localFiles []string
+	for _, match := range localMatches {
+		fileInfo, err := os.Stat(match)
+		if err != nil {
+			continue // Skip files that can't be accessed
+		}
+		if !fileInfo.IsDir() {
+			localFiles = append(localFiles, match)
+		}
 	}
 
-	content, err := os.ReadFile(localPath)
-	if err != nil {
-		return fmt.Errorf("failed to read file: %w", err)
+	if len(localFiles) == 0 {
+		return fmt.Errorf("no files found matching pattern: %s", localPattern)
 	}
 
-	// Detect content type
-	contentType := "application/octet-stream"
-	ext := filepath.Ext(localPath)
-	switch ext {
-	case ".json":
-		contentType = "application/json"
-	case ".txt":
-		contentType = "text/plain"
-	case ".xml":
-		contentType = "application/xml"
-	case ".csv":
-		contentType = "text/csv"
+	// Resolve VFS base path
+	vfsBaseResolved := ctx.Session.ResolvePath(vfsBasePath)
+	if !session.IsValidPath(vfsBaseResolved) {
+		return fmt.Errorf("invalid VFS path: %s", vfsBaseResolved)
 	}
 
-	// Parse VFS path
-	vfsFullPath := ctx.Session.ResolvePath(vfsPath)
-	if !session.IsValidPath(vfsFullPath) {
-		return fmt.Errorf("invalid VFS path: %s", vfsFullPath)
+	// Check if VFS base path is a directory
+	isVfsDir := false
+	if _, err := ctx.Client.ListDirectory(vfsBaseResolved, 1, ""); err == nil {
+		isVfsDir = true
 	}
 
-	dirPath := filepath.Dir(vfsFullPath)
-	fileName := filepath.Base(vfsFullPath)
+	importedCount := 0
+	for _, localFile := range localFiles {
+		// Read local file
+		fileInfo, err := os.Stat(localFile)
+		if err != nil {
+			fmt.Fprintf(ctx.Stderr, "Failed to read local file %s: %v\n", localFile, err)
+			continue
+		}
 
-	// Show progress for large files
-	if fileInfo.Size() > 10*1024*1024 {
-		fmt.Fprintf(ctx.Stdout, "Uploading %s (%d bytes)...\n", fileName, fileInfo.Size())
+		if fileInfo.Size() > client.MaxFileSize {
+			fmt.Fprintf(ctx.Stderr, "File %s size (%d bytes) exceeds maximum allowed (%d bytes)\n",
+				localFile, fileInfo.Size(), client.MaxFileSize)
+			continue
+		}
+
+		content, err := os.ReadFile(localFile)
+		if err != nil {
+			fmt.Fprintf(ctx.Stderr, "Failed to read file %s: %v\n", localFile, err)
+			continue
+		}
+
+		// Detect content type
+		contentType := "application/octet-stream"
+		ext := filepath.Ext(localFile)
+		switch ext {
+		case ".json":
+			contentType = "application/json"
+		case ".txt":
+			contentType = "text/plain"
+		case ".xml":
+			contentType = "application/xml"
+		case ".csv":
+			contentType = "text/csv"
+		}
+
+		// Determine VFS path
+		var vfsFullPath string
+		if isVfsDir {
+			// Import into directory with original filename
+			fileName := filepath.Base(localFile)
+			vfsFullPath = filepath.Join(vfsBaseResolved, fileName)
+		} else if len(localFiles) == 1 {
+			// Single file to specific path
+			vfsFullPath = vfsBaseResolved
+		} else {
+			// Multiple files but destination is not a directory
+			fmt.Fprintf(ctx.Stderr, "Cannot import multiple files to a single destination file\n")
+			continue
+		}
+
+		if !session.IsValidPath(vfsFullPath) {
+			fmt.Fprintf(ctx.Stderr, "Invalid VFS path: %s\n", vfsFullPath)
+			continue
+		}
+
+		dirPath := filepath.Dir(vfsFullPath)
+		fileName := filepath.Base(vfsFullPath)
+
+		// Show progress for large files
+		if fileInfo.Size() > 10*1024*1024 {
+			fmt.Fprintf(ctx.Stdout, "Uploading %s (%d bytes)...\n", fileName, fileInfo.Size())
+		}
+
+		resp, err := ctx.Client.CreateFile(dirPath, fileName, contentType, string(content))
+		if err != nil {
+			fmt.Fprintf(ctx.Stderr, "Failed to import %s: %v\n", localFile, err)
+			continue
+		}
+
+		fmt.Fprintf(ctx.Stdout, "Imported: %s -> %s (ID: %s, Version: %d)\n",
+			localFile, vfsFullPath, resp.ID, resp.Version)
+		importedCount++
 	}
 
-	resp, err := ctx.Client.CreateFile(dirPath, fileName, contentType, string(content))
-	if err != nil {
-		return err
+	if importedCount == 0 {
+		return fmt.Errorf("no files were imported")
 	}
 
-	fmt.Fprintf(ctx.Stdout, "Imported: %s (ID: %s, Version: %d)\n",
-		vfsFullPath, resp.ID, resp.Version)
-
+	fmt.Fprintf(ctx.Stdout, "Imported %d file(s)\n", importedCount)
 	return nil
 }
 
 func (c *ImportCommand) Help() string {
-	return "import <local_path> <vfs_path> - Import local file to VFS"
+	return "import <local_path> [vfs_path] - Import local file to VFS"
 }
 
 // RmCommand removes a file
@@ -381,17 +781,43 @@ func (c *RmCommand) Execute(ctx *Context, args []string) error {
 		return fmt.Errorf("usage: rm <path>")
 	}
 
-	path := ctx.Session.ResolvePath(args[0])
+	pattern := ctx.Session.ResolvePath(args[0])
 
-	if !session.IsValidPath(path) {
-		return fmt.Errorf("invalid path: %s", path)
+	// Check if pattern contains glob characters
+	if hasGlobChars(pattern) {
+		matches, err := expandVFSGlob(ctx, pattern)
+		if err != nil {
+			return err
+		}
+
+		deletedCount := 0
+		for _, match := range matches {
+			if err := ctx.Client.DeleteFile(match); err != nil {
+				fmt.Fprintf(ctx.Stderr, "Failed to delete %s: %v\n", match, err)
+			} else {
+				fmt.Fprintf(ctx.Stdout, "Deleted file: %s\n", match)
+				deletedCount++
+			}
+		}
+
+		if deletedCount == 0 {
+			return fmt.Errorf("no files were deleted")
+		}
+
+		fmt.Fprintf(ctx.Stdout, "Deleted %d file(s)\n", deletedCount)
+		return nil
 	}
 
-	if err := ctx.Client.DeleteFile(path); err != nil {
+	// Single file deletion
+	if !session.IsValidPath(pattern) {
+		return fmt.Errorf("invalid path: %s", pattern)
+	}
+
+	if err := ctx.Client.DeleteFile(pattern); err != nil {
 		return err
 	}
 
-	fmt.Fprintf(ctx.Stdout, "Deleted file: %s\n", path)
+	fmt.Fprintf(ctx.Stdout, "Deleted file: %s\n", pattern)
 	return nil
 }
 
@@ -407,23 +833,65 @@ func (c *MvCommand) Execute(ctx *Context, args []string) error {
 		return fmt.Errorf("usage: mv <source> <destination>")
 	}
 
-	sourcePath := ctx.Session.ResolvePath(args[0])
-	destPath := ctx.Session.ResolvePath(args[1])
+	sourcePattern := ctx.Session.ResolvePath(args[0])
+	destPattern := ctx.Session.ResolvePath(args[1])
 
-	if !session.IsValidPath(sourcePath) {
-		return fmt.Errorf("invalid source path: %s", sourcePath)
+	// Expand source pattern if it contains globs
+	var sourcePaths []string
+	if hasGlobChars(sourcePattern) {
+		matches, err := expandVFSGlob(ctx, sourcePattern)
+		if err != nil {
+			return err
+		}
+		sourcePaths = matches
+	} else {
+		if !session.IsValidPath(sourcePattern) {
+			return fmt.Errorf("invalid source path: %s", sourcePattern)
+		}
+		sourcePaths = []string{sourcePattern}
 	}
 
-	if !session.IsValidPath(destPath) {
-		return fmt.Errorf("invalid destination path: %s", destPath)
+	// Check if destination is a directory
+	isDestDir := false
+	if _, err := ctx.Client.ListDirectory(destPattern, 1, ""); err == nil {
+		isDestDir = true
 	}
 
-	resp, err := ctx.Client.MoveFile(sourcePath, destPath)
-	if err != nil {
-		return err
+	movedCount := 0
+	for _, sourcePath := range sourcePaths {
+		var finalDest string
+
+		if isDestDir {
+			// Moving into a directory - keep the original filename
+			fileName := filepath.Base(sourcePath)
+			finalDest = filepath.Join(destPattern, fileName)
+		} else if len(sourcePaths) > 1 {
+			// Multiple sources but destination is not a directory - not allowed
+			return fmt.Errorf("cannot move multiple files to a single destination file")
+		} else {
+			// Single file rename/move
+			finalDest = destPattern
+		}
+
+		if !session.IsValidPath(finalDest) {
+			return fmt.Errorf("invalid destination path: %s", finalDest)
+		}
+
+		resp, err := ctx.Client.MoveFile(sourcePath, finalDest)
+		if err != nil {
+			fmt.Fprintf(ctx.Stderr, "Failed to move %s: %v\n", sourcePath, err)
+			continue
+		}
+
+		fmt.Fprintf(ctx.Stdout, "Moved: %s -> %s (ID: %s)\n", sourcePath, finalDest, resp.ID)
+		movedCount++
 	}
 
-	fmt.Fprintf(ctx.Stdout, "Moved: %s -> %s (ID: %s)\n", sourcePath, destPath, resp.ID)
+	if movedCount == 0 {
+		return fmt.Errorf("no files were moved")
+	}
+
+	fmt.Fprintf(ctx.Stdout, "Moved %d file(s)\n", movedCount)
 	return nil
 }
 
@@ -447,7 +915,7 @@ func (c *JqCommand) Execute(ctx *Context, args []string) error {
 	}
 
 	// Get file content
-	content, contentType, err := ctx.Client.GetFile(path)
+	content, contentType, _, err := ctx.Client.GetFile(path)
 	if err != nil {
 		return err
 	}
@@ -470,7 +938,7 @@ func (c *JqCommand) Execute(ctx *Context, args []string) error {
 }
 
 func (c *JqCommand) Help() string {
-	return "jq <path> <expression> - Query JSON file with jq"
+	return "jq <path> <expression> - Query JSON file with jq (supports syntax coloring)"
 }
 
 // SaveToken saves the auth token to a file (for external auth providers)
@@ -529,16 +997,17 @@ func (c *HelpCommand) Execute(ctx *Context, args []string) error {
 	fmt.Fprintln(ctx.Stdout, "Available commands:")
 	fmt.Fprintln(ctx.Stdout, "")
 	fmt.Fprintln(ctx.Stdout, "Files & Directories:")
-	fmt.Fprintln(ctx.Stdout, "  ls [-r] [path]                     List directory contents")
+	fmt.Fprintln(ctx.Stdout, "  ls [-r] [-l] [path]                List directory contents (supports globs, -l for details)")
 	fmt.Fprintln(ctx.Stdout, "  cd [path]                          Change directory")
 	fmt.Fprintln(ctx.Stdout, "  pwd                                Print working directory")
 	fmt.Fprintln(ctx.Stdout, "  mkdir <name>                       Create directory")
 	fmt.Fprintln(ctx.Stdout, "  rmdir [-r] <path>                  Remove directory")
-	fmt.Fprintln(ctx.Stdout, "  import <local> <vfs>               Import file to VFS")
+	fmt.Fprintln(ctx.Stdout, "  import <local> [vfs]                Import file(s) to VFS (supports globs)")
 	fmt.Fprintln(ctx.Stdout, "  cat <path>                         Display file contents")
-	fmt.Fprintln(ctx.Stdout, "  jq <path> <expression>             Query JSON file")
-	fmt.Fprintln(ctx.Stdout, "  mv <src> <dst>                     Move/rename file")
-	fmt.Fprintln(ctx.Stdout, "  rm <path>                          Remove file")
+	fmt.Fprintln(ctx.Stdout, "  version <path>                     Show file version history")
+	fmt.Fprintln(ctx.Stdout, "  jq <path> <expression>             Query JSON file (supports coloring)")
+	fmt.Fprintln(ctx.Stdout, "  mv <src> <dst>                     Move/rename file(s) (supports globs)")
+	fmt.Fprintln(ctx.Stdout, "  rm <path>                          Remove file(s) (supports globs)")
 	fmt.Fprintln(ctx.Stdout, "")
 	fmt.Fprintln(ctx.Stdout, "Authentication:")
 	fmt.Fprintln(ctx.Stdout, "  login <username> <password>        Authenticate with VFS")
@@ -549,7 +1018,9 @@ func (c *HelpCommand) Execute(ctx *Context, args []string) error {
 	fmt.Fprintln(ctx.Stdout, "  create-user <user> <email> <pw>    Create new user (admin)")
 	fmt.Fprintln(ctx.Stdout, "  list-users                         List all users (admin)")
 	fmt.Fprintln(ctx.Stdout, "")
-	fmt.Fprintln(ctx.Stdout, "Special Files:")
+	fmt.Fprintln(ctx.Stdout, "Special Files & Triggers:")
+	fmt.Fprintln(ctx.Stdout, "  create-sample-files <dir>          Create sample _files configs")
+	fmt.Fprintln(ctx.Stdout, "  create-trigger <dir> <url>         Create webhook trigger for file events")
 	fmt.Fprintln(ctx.Stdout, "  create-schema <dir> <file>         Create .jsonschema (admin)")
 	fmt.Fprintln(ctx.Stdout, "  create-policy <dir> <file>         Create .rego policy (admin)")
 	fmt.Fprintln(ctx.Stdout, "")
@@ -657,8 +1128,10 @@ func (c *EditCommand) Execute(ctx *Context, args []string) error {
 	defer os.Remove(tmpPath)
 
 	// Try to get existing content
-	content, _, err := ctx.Client.GetFile(path)
+	fileExists := false
+	content, _, _, err := ctx.Client.GetFile(path)
 	if err == nil {
+		fileExists = true
 		if _, err := tmpFile.Write(content); err != nil {
 			tmpFile.Close()
 			return fmt.Errorf("failed to write temp file: %w", err)
@@ -689,12 +1162,20 @@ func (c *EditCommand) Execute(ctx *Context, args []string) error {
 	}
 
 	// Upload to VFS
-	dirPath := filepath.Dir(path)
-	fileName := filepath.Base(path)
-
-	_, err = ctx.Client.CreateFile(dirPath, fileName, "text/plain", string(editedContent))
-	if err != nil {
-		return fmt.Errorf("failed to save file: %w", err)
+	if fileExists {
+		// Update existing file
+		_, err = ctx.Client.UpdateFile(path, "text/plain", string(editedContent), 0) // ExpectedVersion 0 means any version
+		if err != nil {
+			return fmt.Errorf("failed to update file: %w", err)
+		}
+	} else {
+		// Create new file
+		dirPath := filepath.Dir(path)
+		fileName := filepath.Base(path)
+		_, err = ctx.Client.CreateFile(dirPath, fileName, "text/plain", string(editedContent))
+		if err != nil {
+			return fmt.Errorf("failed to create file: %w", err)
+		}
 	}
 
 	fmt.Fprintf(ctx.Stdout, "File saved: %s\n", path)
@@ -703,6 +1184,55 @@ func (c *EditCommand) Execute(ctx *Context, args []string) error {
 
 func (c *EditCommand) Help() string {
 	return "edit <path> - Edit file using $EDITOR or vim"
+}
+
+// VersionCommand shows version history of a file
+type VersionCommand struct{}
+
+func (c *VersionCommand) Execute(ctx *Context, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: version <path>")
+	}
+
+	path := ctx.Session.ResolvePath(args[0])
+	if !session.IsValidPath(path) {
+		return fmt.Errorf("invalid path: %s", path)
+	}
+
+	versions, err := ctx.Client.ListVersions(path)
+	if err != nil {
+		return fmt.Errorf("failed to list versions: %w", err)
+	}
+
+	if len(versions) == 0 {
+		fmt.Fprintln(ctx.Stdout, "No versions found")
+		return nil
+	}
+
+	fmt.Fprintf(ctx.Stdout, "Version history for %s:\n", path)
+	fmt.Fprintln(ctx.Stdout, "Version  Size       Created At          Content Type")
+	fmt.Fprintln(ctx.Stdout, "-------- ---------- ------------------- ----------------")
+
+	for _, version := range versions {
+		sizeStr := fmt.Sprintf("%d bytes", version.SizeBytes)
+		if version.SizeBytes >= 1024*1024 {
+			sizeStr = fmt.Sprintf("%.1f MB", float64(version.SizeBytes)/(1024*1024))
+		} else if version.SizeBytes >= 1024 {
+			sizeStr = fmt.Sprintf("%.1f KB", float64(version.SizeBytes)/1024)
+		}
+
+		fmt.Fprintf(ctx.Stdout, "%-8d %-10s %-19s %s\n",
+			version.Version,
+			sizeStr,
+			version.CreatedAt.Format("2006-01-02 15:04:05"),
+			version.ContentType)
+	}
+
+	return nil
+}
+
+func (c *VersionCommand) Help() string {
+	return "version <path> - Show version history of a file"
 }
 
 // LoginCommand authenticates with VFS
@@ -813,3 +1343,277 @@ func (c *SetCwdCommand) Help() string {
 	return "set-cwd <path> - Change local working directory"
 }
 
+// CreateSampleFilesCommand creates sample _files configuration files
+type CreateSampleFilesCommand struct{}
+
+func (c *CreateSampleFilesCommand) Execute(ctx *Context, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: create-sample-files <directory>")
+	}
+
+	targetDir := ctx.Session.ResolvePath(args[0])
+	if !session.IsValidPath(targetDir) {
+		return fmt.Errorf("invalid path: %s", targetDir)
+	}
+
+	// Verify directory exists
+	_, err := ctx.Client.ListDirectory(targetDir, 1, "")
+	if err != nil {
+		return fmt.Errorf("directory not found: %s", targetDir)
+	}
+
+	// Create sample _files for different scenarios
+	samples := []struct {
+		name        string
+		content     string
+		description string
+	}{
+		{
+			name: "_files_basic",
+			content: `{
+  "rules": [
+    {
+      "pattern": "*.json",
+      "type": "glob",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "name": {"type": "string"},
+          "age": {"type": "integer", "minimum": 0}
+        },
+        "required": ["name"]
+      }
+    }
+  ]
+}`,
+			description: "Basic inline schema validation",
+		},
+		{
+			name: "_files_external_schema",
+			content: `{
+  "rules": [
+    {
+      "pattern": "user-*.json",
+      "type": "glob",
+      "schema": {
+        "$ref": "schema:///schemas/user.json"
+      }
+    }
+  ]
+}`,
+			description: "External schema reference",
+		},
+		{
+			name: "_files_nested_schema",
+			content: `{
+  "rules": [
+    {
+      "pattern": "*.json",
+      "type": "glob",
+      "schema": {
+        "$ref": "schema:///schemas/person.json"
+      }
+    }
+  ]
+}`,
+			description: "Nested schema references",
+		},
+		{
+			name: "_files_multiple_rules",
+			content: `{
+  "rules": [
+    {
+      "pattern": "config-*.json",
+      "type": "glob",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "version": {"type": "string"},
+          "settings": {"type": "object"}
+        },
+        "required": ["version"]
+      }
+    },
+    {
+      "pattern": "data-*.json",
+      "type": "glob",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "id": {"type": "integer"},
+          "data": {"type": "string"}
+        },
+        "required": ["id", "data"]
+      }
+    }
+  ]
+}`,
+			description: "Multiple validation rules",
+		},
+	}
+
+	// Create sample schema files first
+	schemaDir := filepath.Join(targetDir, "schemas")
+	_, err = ctx.Client.CreateDirectory(filepath.Dir(schemaDir), filepath.Base(schemaDir))
+	if err != nil {
+		// Directory might already exist, continue
+		fmt.Fprintf(ctx.Stderr, "Warning: Could not create schemas directory: %v\n", err)
+	}
+
+	schemaSamples := []struct {
+		name    string
+		content string
+	}{
+		{
+			name: "user.json",
+			content: `{
+  "type": "object",
+  "properties": {
+    "name": {"type": "string"},
+    "email": {"type": "string", "format": "email"}
+  },
+  "required": ["name", "email"]
+}`,
+		},
+		{
+			name: "address.json",
+			content: `{
+  "type": "object",
+  "properties": {
+    "street": {"type": "string"},
+    "city": {"type": "string"},
+    "zip": {"type": "string"}
+  },
+  "required": ["street", "city"]
+}`,
+		},
+		{
+			name: "person.json",
+			content: `{
+  "type": "object",
+  "properties": {
+    "name": {"type": "string"},
+    "address": {
+      "$ref": "schema:///schemas/address.json"
+    }
+  },
+  "required": ["name", "address"]
+}`,
+		},
+	}
+
+	// Create schema files
+	for _, schema := range schemaSamples {
+		schemaPath := filepath.Join(schemaDir, schema.name)
+		dirPath := filepath.Dir(schemaPath)
+		fileName := filepath.Base(schemaPath)
+
+		_, err := ctx.Client.CreateFile(dirPath, fileName, "application/json", schema.content)
+		if err != nil {
+			fmt.Fprintf(ctx.Stderr, "Warning: Could not create schema file %s: %v\n", schemaPath, err)
+		} else {
+			fmt.Fprintf(ctx.Stdout, "Created schema file: %s\n", schemaPath)
+		}
+	}
+
+	// Create _files configuration files
+	for _, sample := range samples {
+		filePath := filepath.Join(targetDir, sample.name)
+		dirPath := filepath.Dir(filePath)
+		fileName := filepath.Base(filePath)
+
+		_, err := ctx.Client.CreateFile(dirPath, fileName, "application/json", sample.content)
+		if err != nil {
+			return fmt.Errorf("failed to create %s: %v", filePath, err)
+		}
+
+		fmt.Fprintf(ctx.Stdout, "Created sample file: %s (%s)\n", filePath, sample.description)
+	}
+
+	fmt.Fprintf(ctx.Stdout, "\nSample files created successfully!\n")
+	fmt.Fprintf(ctx.Stdout, "Note: Rename _files to .files to activate validation rules.\n")
+	fmt.Fprintf(ctx.Stdout, "Example: mv %s/_files_basic %s/.files\n", targetDir, targetDir)
+
+	return nil
+}
+
+func (c *CreateSampleFilesCommand) Help() string {
+	return "create-sample-files <directory> - Create sample _files configuration files"
+}
+
+// CreateTriggerCommand creates a webhook trigger for file operations
+type CreateTriggerCommand struct{}
+
+func (c *CreateTriggerCommand) Execute(ctx *Context, args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: create-trigger <directory> <webhook_url> [event_type]")
+	}
+
+	targetDir := ctx.Session.ResolvePath(args[0])
+	webhookURL := args[1]
+	eventType := "file.create.completion.succeeded"
+
+	if len(args) >= 3 {
+		eventType = args[2]
+	}
+
+	if !session.IsValidPath(targetDir) {
+		return fmt.Errorf("invalid path: %s", targetDir)
+	}
+
+	// Verify directory exists
+	_, err := ctx.Client.ListDirectory(targetDir, 1, "")
+	if err != nil {
+		return fmt.Errorf("directory not found: %s", targetDir)
+	}
+
+	// Create .events configuration
+	eventsConfig := fmt.Sprintf(`{
+  "handlers": [
+    {
+      "name": "webhook-trigger",
+      "events": ["%s"],
+      "type": "webhook",
+      "config": {
+        "url": "%s",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json"
+        }
+      }
+    }
+  ]
+}`, eventType, webhookURL)
+
+	eventsPath := filepath.Join(targetDir, ".events")
+	dirPath := filepath.Dir(eventsPath)
+	fileName := filepath.Base(eventsPath)
+
+	// Check if .events already exists
+	_, _, _, err = ctx.Client.GetFile(eventsPath)
+	if err == nil {
+		return fmt.Errorf(".events file already exists at %s, please edit it manually or delete it first", eventsPath)
+	}
+
+	_, err = ctx.Client.CreateFile(dirPath, fileName, "application/json", eventsConfig)
+	if err != nil {
+		return fmt.Errorf("failed to create .events file: %v", err)
+	}
+
+	fmt.Fprintf(ctx.Stdout, "Created webhook trigger at: %s\n", eventsPath)
+	fmt.Fprintf(ctx.Stdout, "Event: %s\n", eventType)
+	fmt.Fprintf(ctx.Stdout, "URL: %s\n", webhookURL)
+	fmt.Fprintf(ctx.Stdout, "\nThe webhook will be called when files are created in %s\n", targetDir)
+	fmt.Fprintf(ctx.Stdout, "\nPayload structure:\n")
+	fmt.Fprintf(ctx.Stdout, "{\n")
+	fmt.Fprintf(ctx.Stdout, "  \"event\": { \"id\": \"...\", \"type\": \"%s\", ... },\n", eventType)
+	fmt.Fprintf(ctx.Stdout, "  \"actor\": { \"user_id\": \"...\", \"username\": \"...\" },\n")
+	fmt.Fprintf(ctx.Stdout, "  \"file\": { \"id\": \"...\", \"name\": \"...\", \"path\": \"...\", ... }\n")
+	fmt.Fprintf(ctx.Stdout, "}\n")
+
+	return nil
+}
+
+func (c *CreateTriggerCommand) Help() string {
+	return "create-trigger <directory> <webhook_url> [event_type] - Create webhook trigger for file events"
+}

@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -116,6 +117,7 @@ func (m *AuthorizationMiddleware) Handler() app.HandlerFunc {
 		dirPath := extractDirectoryPath(resourcePath)
 
 		// Load the .rego policy (with inheritance)
+		policySource := fmt.Sprintf("directory=%s", dirPath)
 		regoPolicy, err := m.policyLoader.LoadPolicy(authCtx, dirPath)
 		if err != nil {
 			if err == domain.ErrNotFound {
@@ -123,6 +125,7 @@ func (m *AuthorizationMiddleware) Handler() app.HandlerFunc {
 				// This should only happen if bootstrap hasn't run yet
 				// or if all .rego files have been deleted
 				regoPolicy = DefaultRegoPolicy
+				policySource = "default"
 				// Log warning
 				fmt.Printf("WARNING: No .rego policy found for path %s, using built-in default. Run bootstrap to create /.rego\n", dirPath)
 			} else {
@@ -165,6 +168,18 @@ func (m *AuthorizationMiddleware) Handler() app.HandlerFunc {
 		allowed := evaluateRegoPolicy(regoPolicy, input)
 
 		if !allowed {
+			requestID := string(c.GetHeader("X-Request-ID"))
+			route := string(c.FullPath())
+			log.Printf(
+				"AUTHZ DENY user=%q groups=%v action=%q resource=%q route=%q request_id=%q policy_source=%q",
+				userCtx.UserID,
+				userCtx.Groups,
+				action,
+				resourcePath,
+				route,
+				requestID,
+				policySource,
+			)
 			c.JSON(403, map[string]string{
 				"error": "forbidden: access denied by policy",
 			})

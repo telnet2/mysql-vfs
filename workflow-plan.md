@@ -97,7 +97,7 @@ SpecialFileTypeWorkflow: {
     },
     "states": {
       "type": "object",
-      "description": "State definitions",
+      "description": "State definitions with allowed transitions",
       "minProperties": 1,
       "patternProperties": {
         "^[a-z0-9][a-z0-9_-]*$": {
@@ -105,69 +105,20 @@ SpecialFileTypeWorkflow: {
           "properties": {
             "transitions": {
               "type": "array",
+              "description": "Valid target states for transitions",
               "items": {
                 "type": "object",
-                "required": ["to", "gates"],
+                "required": ["to"],
                 "properties": {
                   "to": {
                     "type": "string",
-                    "pattern": "^[a-z0-9][a-z0-9_-]*$"
+                    "pattern": "^[a-z0-9][a-z0-9_-]*$",
+                    "description": "Target state name"
                   },
-                  "gates": {
-                    "type": "array",
-                    "minItems": 1,
-                    "items": {
-                      "type": "object",
-                      "required": ["type"],
-                      "properties": {
-                        "type": {
-                          "type": "string",
-                          "enum": ["group", "metadata", "rego", "composite"]
-                        },
-                        "groups": {
-                          "type": "array",
-                          "items": {"type": "string"}
-                        },
-                        "conditions": {
-                          "type": "object"
-                        },
-                        "policy": {
-                          "type": "string"
-                        },
-                        "operator": {
-                          "type": "string",
-                          "enum": ["AND", "OR"]
-                        },
-                        "gates": {
-                          "type": "array",
-                          "items": {"$ref": "#/properties/states/patternProperties/%5E%5Ba-z0-9%5D%5Ba-z0-9_-%5D*%24/properties/transitions/items/properties/gates/items"}
-                        }
-                      }
-                    }
-                  },
-                  "on_success": {
-                    "type": "array",
-                    "items": {
-                      "type": "object",
-                      "required": ["type"],
-                      "properties": {
-                        "type": {
-                          "type": "string",
-                          "enum": ["webhook", "metadata_update", "cache_invalidate"]
-                        }
-                      }
-                    }
+                  "description": {
+                    "type": "string",
+                    "description": "Human-readable description of this transition"
                   }
-                }
-              }
-            },
-            "deletion_gate": {
-              "type": "object",
-              "required": ["type"],
-              "properties": {
-                "type": {
-                  "type": "string",
-                  "enum": ["group", "metadata", "rego", "composite"]
                 }
               }
             }
@@ -175,10 +126,26 @@ SpecialFileTypeWorkflow: {
         }
       },
       "additionalProperties": false
+    },
+    "gate_policy": {
+      "type": "string",
+      "description": "Inline Rego policy for gate evaluation (package vfs.workflow.gates)"
+    },
+    "gate_policy_ref": {
+      "type": "string",
+      "description": "Path to external .rego file (relative to workflow home, e.g., '.workflow.rego')",
+      "pattern": "^\\.workflow\\.rego$"
     }
-  }
+  },
+  "oneOf": [
+    {"required": ["gate_policy"]},
+    {"required": ["gate_policy_ref"]},
+    {"not": {"anyOf": [{"required": ["gate_policy"]}, {"required": ["gate_policy_ref"]}]}}
+  ]
 }
 ```
+
+**Note**: Either `gate_policy` (inline) OR `gate_policy_ref` (external file) should be provided, but not both. If neither is provided, a default deny-all policy is assumed.
 
 ### 2.1.2 Validation Rules
 
@@ -222,15 +189,16 @@ SpecialFileTypeWorkflow: {
    - Directories must be empty or contain only valid files
    - Cannot be special file directories (e.g., not `.rego`, `.events`)
 
-8. **Gate Type Validation**
-   - `group`: Must have `groups` array
-   - `metadata`: Must have `conditions` object
-   - `rego`: Must have `policy` string
-   - `composite`: Must have `operator` and `gates` array
+8. **Gate Policy Validation**
+   - If `gate_policy` is provided, validate it's valid Rego syntax
+   - If `gate_policy_ref` is provided, validate the referenced file exists
+   - Rego policy must define package `vfs.workflow.gates`
+   - Rego policy must have an `allow` or `deny` rule
+   - Cannot have both `gate_policy` and `gate_policy_ref`
 
-9. **Circular Reference Detection**
-   - No self-referencing states in composite gates
-   - State machine must be a valid DAG (warn if cycles detected)
+9. **State Machine Validation**
+   - Detect unreachable states (warn only)
+   - Validate all transition targets exist in states map
 
 ### 2.1.3 Validation Errors
 
@@ -247,8 +215,10 @@ const (
     ErrStateDirectoryNotFound   = "WORKFLOW_STATE_DIR_NOT_FOUND"
     ErrOrphanedState            = "WORKFLOW_ORPHANED_STATE"
     ErrNestedWorkflow           = "WORKFLOW_NESTING_PROHIBITED"
-    ErrInvalidGateType          = "WORKFLOW_INVALID_GATE_TYPE"
-    ErrMissingGateConfig        = "WORKFLOW_MISSING_GATE_CONFIG"
+    ErrInvalidGatePolicy        = "WORKFLOW_INVALID_GATE_POLICY"
+    ErrGatePolicyNotFound       = "WORKFLOW_GATE_POLICY_NOT_FOUND"
+    ErrBothGatePolicies         = "WORKFLOW_BOTH_GATE_POLICIES"
+    ErrGatePolicyCompilation    = "WORKFLOW_GATE_POLICY_COMPILATION_FAILED"
 )
 ```
 
@@ -283,22 +253,17 @@ type WorkflowDefinition struct {
     StateDirectories  map[string]string           // state_name → relative_path
     InitialState      string
     States            map[string]StateDefinition
-    AllowDeletion     bool                        // Global deletion gate
+    GatePolicy        string                      // Inline Rego policy (optional)
+    GatePolicyRef     string                      // Reference to .workflow.rego file (optional)
 }
 
 type StateDefinition struct {
     Transitions  []TransitionDefinition
-    DeletionGate *GateDefinition  // Optional state-specific deletion gate
 }
 
 type TransitionDefinition struct {
-    To    string
-    Gates []GateDefinition
-}
-
-type GateDefinition struct {
-    Type   string                 // "group", "metadata", "rego", "composite"
-    Config map[string]interface{}
+    To           string
+    Description  string  // Optional description of this transition
 }
 ```
 
@@ -378,31 +343,185 @@ func (e *WorkflowEngine) GetValidTransitions(
 4. **Directory Ops**: Block rename/delete of state directories
 5. **Escape Prevention**: Reject moves outside workflow scope
 
-### 3.2 Gate Evaluators
+### 3.2 Workflow Gate Evaluator (Rego-based)
 **New file:** `pkg/domain/workflow_gates.go`
 
-**Implement gate types:**
+**Purpose**: Evaluate workflow transition gates using Rego policies
+
+**Design**: Similar to authorization middleware, but for workflow gates
+- Load `.workflow` file's inline Rego policy or reference external `.rego`
+- Cache compiled Rego queries (similar to policy_loader pattern)
+- Invalidate cache when `.workflow` file changes
+
+**Gate Input Structure:**
 
 ```go
-type GateEvaluator interface {
-    Evaluate(ctx context.Context, input *GateInput) (bool, error)
-}
+type WorkflowGateInput struct {
+    User struct {
+        ID       string   `json:"id"`
+        Username string   `json:"username"`
+        Groups   []string `json:"groups"`
+    } `json:"user"`
 
-type GateInput struct {
-    Actor           string
-    ActorGroups     []string
-    FileMetadata    map[string]interface{}
-    FromState       string
-    ToState         string
-    WorkflowDef     *WorkflowDefinition
+    Transition struct {
+        From      string `json:"from"`       // Current state
+        To        string `json:"to"`         // Target state
+        Operation string `json:"operation"`  // "move", "delete", "create"
+    } `json:"transition"`
+
+    File struct {
+        Path     string                 `json:"path"`
+        Name     string                 `json:"name"`
+        Metadata map[string]interface{} `json:"metadata"`
+        Content  interface{}            `json:"content,omitempty"` // Parsed JSON if file is JSON
+        Size     int64                  `json:"size"`
+        MimeType string                 `json:"mime_type"`
+    } `json:"file"`
+
+    Workflow struct {
+        Name            string `json:"name"`
+        WorkflowHome    string `json:"workflow_home"`
+        InitialState    string `json:"initial_state"`
+        AvailableStates []string `json:"available_states"`
+    } `json:"workflow"`
 }
 ```
 
-**Gate implementations:**
-- **group**: Check if actor is in specified group(s)
-- **metadata**: Check file metadata attributes match conditions
-- **rego**: Execute custom Rego policy for complex rules
-- **composite**: Combine multiple gates with AND/OR logic
+**Rego Policy Package:**
+Workflow gates use package `vfs.workflow.gates` with rule `allow`:
+
+```rego
+package vfs.workflow.gates
+
+# Allow editors to move from draft to review
+allow {
+    input.transition.from == "draft"
+    input.transition.to == "review"
+    input.user.groups[_] == "editor"
+}
+
+# Allow approvers to move from review to published
+allow {
+    input.transition.from == "review"
+    input.transition.to == "published"
+    input.user.groups[_] == "approver"
+}
+
+# Allow anyone to delete small files in draft
+allow {
+    input.transition.operation == "delete"
+    input.transition.from == "draft"
+    input.file.size < 1000000  # < 1MB
+}
+
+# High-priority docs need senior approver
+allow {
+    input.transition.from == "review"
+    input.transition.to == "published"
+    input.file.metadata.priority == "high"
+    input.user.groups[_] == "senior-approver"
+}
+
+# JSON content validation - reject if errors exist
+deny {
+    input.transition.to == "published"
+    input.file.content.errors
+    count(input.file.content.errors) > 0
+}
+```
+
+**Implementation:**
+
+```go
+type WorkflowGateEvaluator struct {
+    workflowLoader *WorkflowLoader
+    fileRepo       db.FileRepository
+    queryCache     *sync.Map  // Cache compiled Rego queries
+    cacheTTL       time.Duration
+}
+
+// EvaluateGate evaluates transition against Rego policy
+func (e *WorkflowGateEvaluator) EvaluateGate(
+    ctx context.Context,
+    workflow *WorkflowDefinition,
+    input *WorkflowGateInput,
+) (bool, error) {
+    // Get Rego policy from workflow
+    regoPolicy := workflow.GatePolicy
+
+    // If no inline policy, look for .rego file in workflow home
+    if regoPolicy == "" {
+        policyPath := filepath.Join(workflow.WorkflowHome, ".workflow.rego")
+        policyBytes, err := e.fileRepo.GetFileContent(ctx, policyPath)
+        if err != nil {
+            return false, fmt.Errorf("no gate policy defined")
+        }
+        regoPolicy = string(policyBytes)
+    }
+
+    // Check cache for compiled query
+    cacheKey := workflow.WorkflowPath
+    if cached, ok := e.queryCache.Load(cacheKey); ok {
+        if cachedQuery, ok := cached.(*CachedRegoQuery); ok {
+            if time.Since(cachedQuery.LoadedAt) < e.cacheTTL {
+                // Use cached query
+                return e.evaluateWithQuery(ctx, cachedQuery.Query, input)
+            }
+        }
+    }
+
+    // Compile new query
+    query, err := rego.New(
+        rego.Query("data.vfs.workflow.gates.allow"),
+        rego.Module("workflow.rego", regoPolicy),
+    ).PrepareForEval(ctx)
+
+    if err != nil {
+        return false, fmt.Errorf("failed to compile gate policy: %w", err)
+    }
+
+    // Cache the compiled query
+    e.queryCache.Store(cacheKey, &CachedRegoQuery{
+        Query:     query,
+        LoadedAt:  time.Now(),
+    })
+
+    // Evaluate
+    return e.evaluateWithQuery(ctx, query, input)
+}
+
+// evaluateWithQuery executes a prepared Rego query
+func (e *WorkflowGateEvaluator) evaluateWithQuery(
+    ctx context.Context,
+    query rego.PreparedEvalQuery,
+    input *WorkflowGateInput,
+) (bool, error) {
+    results, err := query.Eval(ctx, rego.EvalInput(input))
+    if err != nil {
+        return false, fmt.Errorf("gate evaluation failed: %w", err)
+    }
+
+    // Check for explicit allow
+    if len(results) > 0 && len(results[0].Expressions) > 0 {
+        if allowed, ok := results[0].Expressions[0].Value.(bool); ok && allowed {
+            return true, nil
+        }
+    }
+
+    // Default deny
+    return false, nil
+}
+
+// InvalidateCache removes cached query for workflow
+func (e *WorkflowGateEvaluator) InvalidateCache(workflowPath string) {
+    e.queryCache.Delete(workflowPath)
+}
+
+type CachedRegoQuery struct {
+    Query    rego.PreparedEvalQuery
+    LoadedAt time.Time
+}
+```
 
 ---
 

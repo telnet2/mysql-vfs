@@ -15,6 +15,17 @@
 - [Future Work](#future-work)
 - [Design Decisions Log](#design-decisions-log)
 
+### Design Details
+
+- [1. Special Files Architecture](#1-special-files-architecture)
+- [2. Naming Restrictions](#2-naming-restrictions)
+- [3. Authorization System](#3-authorization-system)
+- [4. Group-Based Access Control](#4-group-based-access-control)
+- [5. Content Validation](#5-content-validation)
+- [6. Event System](#6-event-system)
+- [7. Storage Architecture](#7-storage-architecture)
+- [8. Caching Strategy](#8-caching-strategy)
+
 ---
 
 ## Design Philosophy
@@ -249,7 +260,57 @@ See: `pkg/domain/policy_loader.go:38-89` (walks up directory tree)
 
 ---
 
-### 2. Authorization System
+### 2. Naming Restrictions
+
+**Design Decision:** Strict Naming Convention
+
+**Why:**
+- Predictable filesystem behavior
+- Avoids encoding issues with special characters
+- Simplifies URL handling and path parsing
+- Consistent with many filesystem conventions
+
+**Tradeoff:**
+- Less flexible naming (users can't use spaces, special chars)
+- Requires user education on naming conventions
+
+**Alternative Rejected:**
+- Allow any UTF-8 characters → Complex encoding/decoding, URL issues
+
+**Restrictions:**
+- **Allowed characters:** Alphanumeric (`a-z`, `A-Z`, `0-9`), underscore (`_`), hyphen (`-`), dot (`.`)
+- **Case:** All names automatically converted to lowercase
+- **Forbidden:** Spaces, special characters, Unicode symbols, control characters
+- **Forbidden:** Path separators (`/`, `\`)
+- **Forbidden:** Reserved names (`.`, `..`)
+
+**Validation:**
+- Applied at creation time for files and directories
+- Regex pattern: `^[a-zA-Z0-9_.-]+$`
+- Automatic lowercase conversion: `MyFile.txt` → `myfile.txt`
+
+**Implementation:**
+- Shared validation function: `pkg/domain/validateAndNormalizeName()`
+- Used in: `FileService.CreateFile()`, `DirectoryService.CreateDirectory()`
+- Event logging for validation failures
+
+**Examples:**
+```go
+// Valid names
+"my-file"     → "my-file"
+"MyFile123"   → "myfile123"
+"test_file"   → "test_file"
+"data.json"   → "data.json"
+
+// Invalid names
+"my file"     → Error: spaces not allowed
+"file@home"   → Error: @ not allowed
+"test/file"   → Error: path separators not allowed
+```
+
+---
+
+### 3. Authorization System
 
 **Design Decision:** OPA (Open Policy Agent)
 
@@ -299,7 +360,7 @@ input = {
 
 ---
 
-### 3. Group-Based Access Control
+### 4. Group-Based Access Control
 
 **Design Decision:** Groups over Roles
 
@@ -342,7 +403,7 @@ See OPA policies in:
 
 ---
 
-### 4. Content Validation
+### 5. Content Validation
 
 **Design Decision:** JSON Schema + Pattern Matching
 
@@ -410,7 +471,7 @@ See OPA policies in:
 
 ---
 
-### 5. Event System
+### 6. Event System
 
 **Design Decision:** Lifecycle Events + Webhooks
 
@@ -463,7 +524,7 @@ See `.events` file format in: `pkg/domain/special_files.go:191-237`
 
 ---
 
-### 6. Storage Architecture
+### 7. Storage Architecture
 
 **Design Decision:** Dual Storage (MySQL + S3)
 
@@ -496,7 +557,7 @@ Content retrieval:
 
 ---
 
-### 7. Caching Strategy
+### 8. Caching Strategy
 
 **Cache Layers:**
 

@@ -20,10 +20,10 @@ import (
 
 const (
 	// Retry configuration for optimistic locking
-	maxRetries     = 5
-	baseBackoffMs  = 10
-	maxBackoffMs   = 500
-	jitterPercent  = 0.3
+	maxRetries    = 5
+	baseBackoffMs = 10
+	maxBackoffMs  = 500
+	jitterPercent = 0.3
 )
 
 // DirectoryService handles directory operations
@@ -69,8 +69,8 @@ func isDuplicateKeyError(err error) bool {
 	errMsg := err.Error()
 	// MySQL duplicate key errors
 	return strings.Contains(errMsg, "Error 1062") ||
-		   strings.Contains(errMsg, "Duplicate entry") ||
-		   strings.Contains(errMsg, "duplicate key")
+		strings.Contains(errMsg, "Duplicate entry") ||
+		strings.Contains(errMsg, "duplicate key")
 }
 
 // calculatePathHash calculates SHA256 hash of a path for uniqueness constraint
@@ -115,22 +115,12 @@ func (s *DirectoryService) emitEvent(ctx context.Context, tx *gorm.DB, eventType
 
 // CreateDirectory creates a new directory using optimistic locking with retries
 func (s *DirectoryService) CreateDirectory(ctx context.Context, parentPath, name string) (*models.Directory, error) {
-	// Validate name
-	if name == "" || name == "." || name == ".." {
-		return nil, fmt.Errorf("invalid directory name")
+	// Validate and normalize name
+	normalizedName, err := ValidateAndNormalizeName(name)
+	if err != nil {
+		return nil, err
 	}
-
-	// Reject path separators (both Unix and Windows style)
-	if strings.Contains(name, "/") || strings.Contains(name, "\\") {
-		return nil, fmt.Errorf("invalid directory name")
-	}
-
-	// Reject control characters (null bytes, etc.)
-	for _, r := range name {
-		if r < 32 || r == 127 { // Control characters
-			return nil, fmt.Errorf("invalid directory name")
-		}
-	}
+	name = normalizedName
 
 	// Calculate full path
 	fullPath := path.Join(parentPath, name)
@@ -367,7 +357,8 @@ func (s *DirectoryService) ListDirectory(dirPath string, limit int, cursor strin
 	query := s.db.Where("deleted_at IS NULL")
 	if dirPath == "/" {
 		// For root directory, match directories with parent_id = root, NULL, or empty string
-		query = query.Where("parent_id IS NULL OR parent_id = '' OR parent_id = 'root'")
+		// Exclude the root directory itself (id = 'root')
+		query = query.Where("(parent_id IS NULL OR parent_id = '' OR parent_id = 'root') AND id != 'root'")
 	} else {
 		query = query.Where("parent_id = ?", dir.ID)
 	}
@@ -378,7 +369,10 @@ func (s *DirectoryService) ListDirectory(dirPath string, limit int, cursor strin
 
 	// Query files
 	fileQuery := s.db.Where("deleted_at IS NULL")
-	if dirPath != "/" {
+	if dirPath == "/" {
+		// For root directory, filter by directory_id = 'root'
+		fileQuery = fileQuery.Where("directory_id = 'root'")
+	} else {
 		fileQuery = fileQuery.Where("directory_id = ?", dir.ID)
 	}
 

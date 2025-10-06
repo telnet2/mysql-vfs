@@ -10,8 +10,8 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/telnet2/mysql-vfs/citest/fixtures"
-	"github.com/telnet2/mysql-vfs/pkg/models"
 	"github.com/telnet2/mysql-vfs/pkg/domain"
+	"github.com/telnet2/mysql-vfs/pkg/models"
 )
 
 var _ = Describe("VFS File Operations", Ordered, func() {
@@ -262,7 +262,7 @@ var _ = Describe("VFS File Operations", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			// Download file
-			_, reader, err := fileService.GetFile(ctx, "/download.txt")
+			_, reader, err := fileService.GetFile(ctx, "/download.txt", 0)
 			Expect(err).NotTo(HaveOccurred())
 			defer reader.Close()
 
@@ -274,7 +274,7 @@ var _ = Describe("VFS File Operations", Ordered, func() {
 		})
 
 		It("should return error for non-existent file", func() {
-			_, _, err := fileService.GetFile(ctx, "/nonexistent.txt")
+			_, _, err := fileService.GetFile(ctx, "/nonexistent.txt", 0)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("not found"))
 		})
