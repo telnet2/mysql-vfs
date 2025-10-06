@@ -260,18 +260,18 @@ func (c *LsCommand) listFileLong(ctx *Context, path string) error {
 	timestamp := "unknown" // For single file, we don't have timestamp from GetFile
 
 	// Print table header
-	fmt.Fprintf(ctx.Stdout, "%-35s %-18s %-12s %-8s %s\n",
-		"Name", "Type", "Size", "Version", "Modified")
-	fmt.Fprintf(ctx.Stdout, "%-35s %-18s %-12s %-8s %s\n",
-		strings.Repeat("-", 35), strings.Repeat("-", 18), strings.Repeat("-", 12), strings.Repeat("-", 8), strings.Repeat("-", 19))
+	fmt.Fprintf(ctx.Stdout, "%-19s %-12s %-8s %-18s %s\n",
+		"Modified", "Size", "Version", "Type", "Name")
+	fmt.Fprintf(ctx.Stdout, "%-19s %-12s %-8s %-18s %s\n",
+		strings.Repeat("-", 19), strings.Repeat("-", 12), strings.Repeat("-", 8), strings.Repeat("-", 18), strings.Repeat("-", 35))
 
 	// Print file info
 	name := filepath.Base(path)
 	sizeStr := c.formatSize(int64(len(content)))
 	versionStr := fmt.Sprintf("%d", latestVersion)
 
-	fmt.Fprintf(ctx.Stdout, "%-35s %-18s %-12s %-8s %s\n",
-		name, contentType, sizeStr, versionStr, timestamp)
+	fmt.Fprintf(ctx.Stdout, "%-19s %-12s %-8s %-18s %s\n",
+		timestamp, sizeStr, versionStr, contentType, name)
 
 	return nil
 }
@@ -303,11 +303,11 @@ func (c *LsCommand) listSingle(ctx *Context, path string, long bool) error {
 }
 
 func (c *LsCommand) listDirectoryLong(ctx *Context, dirPath string, entries []client.DirectoryEntry) error {
-	// Print table header with adjusted widths
-	fmt.Fprintf(ctx.Stdout, "%-35s %-18s %-12s %-8s %s\n",
-		"Name", "Type", "Size", "Version", "Modified")
-	fmt.Fprintf(ctx.Stdout, "%-35s %-18s %-12s %-8s %s\n",
-		strings.Repeat("-", 35), strings.Repeat("-", 18), strings.Repeat("-", 12), strings.Repeat("-", 8), strings.Repeat("-", 19))
+	// Print table header with Linux-like format
+	fmt.Fprintf(ctx.Stdout, "%-19s %-12s %-8s %-18s %s\n",
+		"Modified", "Size", "Version", "Type", "Name")
+	fmt.Fprintf(ctx.Stdout, "%-19s %-12s %-8s %-18s %s\n",
+		strings.Repeat("-", 19), strings.Repeat("-", 12), strings.Repeat("-", 8), strings.Repeat("-", 18), strings.Repeat("-", 35))
 
 	// For each entry, get detailed information
 	for _, entry := range entries {
@@ -317,8 +317,8 @@ func (c *LsCommand) listDirectoryLong(ctx *Context, dirPath string, entries []cl
 		fullPath := filepath.Join(dirPath, name)
 		if entryType == "directory" {
 			// For directories, show basic info
-			fmt.Fprintf(ctx.Stdout, "%-35s %-18s %-12s %-8s %s\n",
-				name+"/", "directory", "-", "-", entry.ModifiedAt.Format("2006-01-02 15:04:05"))
+			fmt.Fprintf(ctx.Stdout, "%-19s %-12s %-8s %-18s %s\n",
+				entry.ModifiedAt.Format("2006-01-02 15:04:05"), "-", "-", "directory", name+"/")
 			continue
 		}
 
@@ -328,8 +328,12 @@ func (c *LsCommand) listDirectoryLong(ctx *Context, dirPath string, entries []cl
 			// Fallback to basic info if we can't get file details
 			sizeStr := c.formatSize(entry.SizeBytes)
 			contentType = c.detectContentType(name)
-			fmt.Fprintf(ctx.Stdout, "%-35s %-18s %-12s %-8s %s\n",
-				name, contentType, sizeStr, "-", entry.ModifiedAt.Format("2006-01-02 15:04:05"))
+			versionStr := fmt.Sprintf("%d", entry.Version)
+			if entry.Version == 0 {
+				versionStr = "-"
+			}
+			fmt.Fprintf(ctx.Stdout, "%-19s %-12s %-8s %-18s %s\n",
+				entry.ModifiedAt.Format("2006-01-02 15:04:05"), sizeStr, versionStr, contentType, name)
 			continue
 		}
 
@@ -363,8 +367,8 @@ func (c *LsCommand) listDirectoryLong(ctx *Context, dirPath string, entries []cl
 		sizeStr := c.formatSize(int64(len(content)))
 		versionStr := fmt.Sprintf("%d", latestVersion)
 
-		fmt.Fprintf(ctx.Stdout, "%-35s %-18s %-12s %-8s %s\n",
-			name, contentType, sizeStr, versionStr, timestamp)
+		fmt.Fprintf(ctx.Stdout, "%-19s %-12s %-8s %-18s %s\n",
+			timestamp, sizeStr, versionStr, contentType, name)
 	}
 
 	return nil
@@ -384,11 +388,25 @@ func (c *LsCommand) listRecursive(ctx *Context, path string, depth int, long boo
 
 	if depth == 0 {
 		fmt.Fprintf(ctx.Stdout, "%s/\n", path)
+		if long {
+			// Print header for long recursive listing
+			fmt.Fprintf(ctx.Stdout, "%-19s %-12s %-8s %-18s %s\n",
+				"Modified", "Size", "Version", "Type", "Name")
+			fmt.Fprintf(ctx.Stdout, "%-19s %-12s %-8s %-18s %s\n",
+				strings.Repeat("-", 19), strings.Repeat("-", 12), strings.Repeat("-", 8), strings.Repeat("-", 18), strings.Repeat("-", 35))
+		}
 	}
 
 	for _, entry := range resp.Entries {
 		if entry.Type == "directory" {
-			fmt.Fprintf(ctx.Stdout, "%s%s/\n", indent, entry.Name)
+			if long {
+				nameWithIndent := indent + entry.Name + "/"
+				fmt.Fprintf(ctx.Stdout, "%-19s %-12s %-8s %-18s %s\n",
+					entry.ModifiedAt.Format("2006-01-02 15:04:05"), "-", "-", "directory", nameWithIndent)
+			} else {
+				nameWithIndent := indent + entry.Name + "/"
+				fmt.Fprintf(ctx.Stdout, "%s\n", nameWithIndent)
+			}
 			subPath := filepath.Join(path, entry.Name)
 			if err := c.listRecursive(ctx, subPath, depth+1, long); err != nil {
 				return err
@@ -400,8 +418,13 @@ func (c *LsCommand) listRecursive(ctx *Context, path string, depth int, long boo
 				content, contentType, _, err := ctx.Client.GetFile(fullPath)
 				if err != nil {
 					contentType = c.detectContentType(entry.Name)
-					fmt.Fprintf(ctx.Stdout, "%s%-35s %-18s %-12s %-8s %s\n",
-						indent, entry.Name, contentType, c.formatSize(entry.SizeBytes), "-", entry.ModifiedAt.Format("2006-01-02 15:04:05"))
+					versionStr := fmt.Sprintf("%d", entry.Version)
+					if entry.Version == 0 {
+						versionStr = "-"
+					}
+					nameWithIndent := indent + entry.Name
+					fmt.Fprintf(ctx.Stdout, "%-19s %-12s %-8s %-18s %s\n",
+						entry.ModifiedAt.Format("2006-01-02 15:04:05"), c.formatSize(entry.SizeBytes), versionStr, contentType, nameWithIndent)
 					continue
 				}
 
@@ -434,9 +457,10 @@ func (c *LsCommand) listRecursive(ctx *Context, path string, depth int, long boo
 
 				sizeStr := c.formatSize(int64(len(content)))
 				versionStr := fmt.Sprintf("%d", latestVersion)
+				nameWithIndent := indent + entry.Name
 
-				fmt.Fprintf(ctx.Stdout, "%s%-35s %-18s %-12s %-8s %s\n",
-					indent, entry.Name, contentType, sizeStr, versionStr, timestamp)
+				fmt.Fprintf(ctx.Stdout, "%-19s %-12s %-8s %-18s %s\n",
+					timestamp, sizeStr, versionStr, contentType, nameWithIndent)
 			} else {
 				fmt.Fprintf(ctx.Stdout, "%s%s  (%d bytes)\n", indent, entry.Name, entry.SizeBytes)
 			}
@@ -607,6 +631,11 @@ func (c *CatCommand) Execute(ctx *Context, args []string) error {
 			fmt.Fprintf(ctx.Stderr, "Warning: file is binary (%s)\n", contentType)
 		}
 		_, err = ctx.Stdout.Write(content)
+		if err != nil {
+			return err
+		}
+		// Add newline to ensure prompt appears on new line
+		_, err = ctx.Stdout.Write([]byte("\n"))
 		return err
 	}
 
@@ -624,6 +653,11 @@ func (c *CatCommand) Execute(ctx *Context, args []string) error {
 
 	// Stream to stdout
 	_, err = io.Copy(ctx.Stdout, reader)
+	if err != nil {
+		return err
+	}
+	// Add newline to ensure prompt appears on new line
+	_, err = ctx.Stdout.Write([]byte("\n"))
 	return err
 }
 
@@ -903,12 +937,15 @@ func (c *MvCommand) Help() string {
 type JqCommand struct{}
 
 func (c *JqCommand) Execute(ctx *Context, args []string) error {
-	if len(args) < 2 {
-		return fmt.Errorf("usage: jq <path> <expression>")
+	if len(args) < 1 {
+		return fmt.Errorf("usage: jq <path> [expression]")
 	}
 
 	path := ctx.Session.ResolvePath(args[0])
-	expression := args[1]
+	expression := "."
+	if len(args) >= 2 {
+		expression = args[1]
+	}
 
 	if !session.IsValidPath(path) {
 		return fmt.Errorf("invalid path: %s", path)
@@ -938,7 +975,7 @@ func (c *JqCommand) Execute(ctx *Context, args []string) error {
 }
 
 func (c *JqCommand) Help() string {
-	return "jq <path> <expression> - Query JSON file with jq (supports syntax coloring)"
+	return "jq <path> [expression] - Query JSON file with jq (default expression: .)"
 }
 
 // SaveToken saves the auth token to a file (for external auth providers)
@@ -1005,7 +1042,7 @@ func (c *HelpCommand) Execute(ctx *Context, args []string) error {
 	fmt.Fprintln(ctx.Stdout, "  import <local> [vfs]                Import file(s) to VFS (supports globs)")
 	fmt.Fprintln(ctx.Stdout, "  cat <path>                         Display file contents")
 	fmt.Fprintln(ctx.Stdout, "  version <path>                     Show file version history")
-	fmt.Fprintln(ctx.Stdout, "  jq <path> <expression>             Query JSON file (supports coloring)")
+	fmt.Fprintln(ctx.Stdout, "  jq <path> [expression]             Query JSON file (default: ., supports coloring)")
 	fmt.Fprintln(ctx.Stdout, "  mv <src> <dst>                     Move/rename file(s) (supports globs)")
 	fmt.Fprintln(ctx.Stdout, "  rm <path>                          Remove file(s) (supports globs)")
 	fmt.Fprintln(ctx.Stdout, "")

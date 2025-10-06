@@ -106,12 +106,51 @@ func (s *FileService) emitEvent(ctx context.Context, tx *gorm.DB, eventType, agg
 
 // getUserContext extracts user context from request context
 func (s *FileService) getUserContext(ctx context.Context) events.UserContext {
-	// TODO: Extract from actual auth context
-	// For now, return a default user
+	// Extract from middleware auth context
+	authCtx := s.getAuthContext(ctx)
 	return events.UserContext{
+		UserID: authCtx.UserID,
+		Groups: authCtx.Groups,
+	}
+}
+
+// getAuthContext extracts AuthContext from request context
+func (s *FileService) getAuthContext(ctx context.Context) *AuthContext {
+	// Try to extract from context
+	if authCtx, ok := ctx.Value("authContext").(*AuthContext); ok && authCtx != nil {
+		return authCtx
+	}
+
+	// Fallback for non-HTTP calls (tests, internal operations)
+	return &AuthContext{
 		UserID: "system",
 		Groups: []string{"system-admin"},
 	}
+}
+
+// buildMetadata builds metadata JSON for a new file
+func (s *FileService) buildMetadata(authCtx *AuthContext, custom map[string]interface{}) map[string]interface{} {
+	metadata := map[string]interface{}{
+		"owner":      authCtx.GetOwner(),
+		"creator":    authCtx.GetCreator(),
+		"system":     false,
+		"created_at": time.Now().Format(time.RFC3339),
+	}
+
+	// Add delegation info if present
+	if authCtx.IsDelegated() {
+		metadata["delegated"] = true
+		if authCtx.DelegationReason != "" {
+			metadata["delegation_reason"] = authCtx.DelegationReason
+		}
+	}
+
+	// Add custom fields if provided
+	if custom != nil {
+		metadata["custom"] = custom
+	}
+
+	return metadata
 }
 
 // getRequestID gets or generates a request ID
@@ -128,6 +167,11 @@ func (s *FileService) getRequestID(ctx context.Context) string {
 
 // CreateFile creates a new file with lifecycle event tracking
 func (s *FileService) CreateFile(ctx context.Context, directoryPath, name, contentType string, size int64, content io.Reader) (*models.File, error) {
+	// Check if path is system-protected
+	if IsSystemProtectedPath(directoryPath) {
+		return nil, ErrProtectedSystemDirectory
+	}
+
 	// Read content into buffer for checksum and storage
 	buf := new(bytes.Buffer)
 	if _, err := io.Copy(buf, content); err != nil {
@@ -369,7 +413,16 @@ func (s *FileService) CreateFile(ctx context.Context, directoryPath, name, conte
 			s3Key = &key
 		}
 
-		// Create file record
+		// Build metadata
+		authCtx := s.getAuthContext(ctx)
+		metadata := s.buildMetadata(authCtx, nil)
+		metadataJSON, err := json.Marshal(metadata)
+		if err != nil {
+			return fmt.Errorf("failed to marshal metadata: %w", err)
+		}
+		metadataStr := string(metadataJSON)
+
+		// Create file record with metadata
 		file = &models.File{
 			ID:             uuid.New().String(),
 			DirectoryID:    dir.ID,
@@ -382,6 +435,7 @@ func (s *FileService) CreateFile(ctx context.Context, directoryPath, name, conte
 			S3Key:          s3Key,
 			ChecksumSHA256: checksum,
 			Version:        1,
+			Metadata:       &metadataStr,
 			CreatedAt:      time.Now(),
 			UpdatedAt:      time.Now(),
 		}
@@ -394,7 +448,7 @@ func (s *FileService) CreateFile(ctx context.Context, directoryPath, name, conte
 			return fmt.Errorf("failed to create file record: %w", err)
 		}
 
-		// Create initial version
+		// Create initial version with metadata
 		version := &models.FileVersion{
 			ID:             uuid.New().String(),
 			FileID:         file.ID,
@@ -406,6 +460,7 @@ func (s *FileService) CreateFile(ctx context.Context, directoryPath, name, conte
 			TextContent:    textContent,
 			S3Key:          s3Key,
 			ChecksumSHA256: checksum,
+			Metadata:       &metadataStr,
 			CreatedAt:      time.Now(),
 		}
 
@@ -520,6 +575,14 @@ func (s *FileService) GetFile(ctx context.Context, filePath string, version int6
 
 // UpdateFile updates an existing file with lifecycle event tracking
 func (s *FileService) UpdateFile(ctx context.Context, filePath, contentType string, size int64, content io.Reader, expectedVersion int64) (*models.File, error) {
+	// Parse path first to check protection
+	dirPath, fileName := s.parsePath(filePath)
+
+	// Check if path is system-protected
+	if IsSystemProtectedPath(dirPath) {
+		return nil, ErrProtectedSystemDirectory
+	}
+
 	// Read content into buffer for checksum and storage
 	buf := new(bytes.Buffer)
 	if _, err := io.Copy(buf, content); err != nil {
@@ -534,8 +597,6 @@ func (s *FileService) UpdateFile(ctx context.Context, filePath, contentType stri
 	// Get user context
 	user := s.getUserContext(ctx)
 	requestID := s.getRequestID(ctx)
-
-	dirPath, fileName := s.parsePath(filePath)
 
 	// Create operation context
 	opCtx := &events.OperationContext{
@@ -745,6 +806,22 @@ func (s *FileService) UpdateFile(ctx context.Context, filePath, contentType stri
 			}
 		}
 
+		// Update metadata to track modification
+		authCtx := s.getAuthContext(ctx)
+		var existingMetadata map[string]interface{}
+		if file.Metadata != nil {
+			json.Unmarshal([]byte(*file.Metadata), &existingMetadata)
+		} else {
+			existingMetadata = make(map[string]interface{})
+		}
+
+		// Add update tracking
+		existingMetadata["updated_at"] = time.Now().Format(time.RFC3339)
+		existingMetadata["updated_by"] = authCtx.GetCreator()
+
+		metadataJSON, _ := json.Marshal(existingMetadata)
+		metadataStr := string(metadataJSON)
+
 		// Update file
 		file.ContentType = contentType
 		file.SizeBytes = size
@@ -754,13 +831,14 @@ func (s *FileService) UpdateFile(ctx context.Context, filePath, contentType stri
 		file.S3Key = s3Key
 		file.ChecksumSHA256 = checksum
 		file.Version++
+		file.Metadata = &metadataStr
 		file.UpdatedAt = time.Now()
 
 		if err := tx.Save(file).Error; err != nil {
 			return fmt.Errorf("failed to update file: %w", err)
 		}
 
-		// Create new version
+		// Create new version with metadata
 		version := &models.FileVersion{
 			ID:             uuid.New().String(),
 			FileID:         file.ID,
@@ -772,6 +850,7 @@ func (s *FileService) UpdateFile(ctx context.Context, filePath, contentType stri
 			TextContent:    textContent,
 			S3Key:          s3Key,
 			ChecksumSHA256: checksum,
+			Metadata:       &metadataStr,
 			CreatedAt:      time.Now(),
 		}
 
@@ -866,11 +945,17 @@ func (s *FileService) ListVersions(ctx context.Context, filePath string) ([]*mod
 
 // DeleteFile deletes a file with lifecycle event tracking
 func (s *FileService) DeleteFile(ctx context.Context, filePath string) error {
+	// Parse path first to check protection
+	dirPath, fileName := s.parsePath(filePath)
+
+	// Check if path is system-protected
+	if IsSystemProtectedPath(dirPath) {
+		return ErrProtectedSystemDirectory
+	}
+
 	// Get user context
 	user := s.getUserContext(ctx)
 	requestID := s.getRequestID(ctx)
-
-	dirPath, fileName := s.parsePath(filePath)
 
 	// Create operation context
 	opCtx := &events.OperationContext{

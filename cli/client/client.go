@@ -22,6 +22,10 @@ type Client struct {
 	baseURL    string
 	httpClient *http.Client
 	authToken  string
+
+	// Delegation headers for on-behalf-of operations
+	onBehalfOf       string
+	delegationReason string
 }
 
 // NewClient creates a new VFS client
@@ -37,6 +41,18 @@ func NewClient(baseURL string) *Client {
 // SetAuthToken sets the authentication token
 func (c *Client) SetAuthToken(token string) {
 	c.authToken = token
+}
+
+// SetOnBehalfOf sets the on-behalf-of delegation headers
+func (c *Client) SetOnBehalfOf(principalUserID, reason string) {
+	c.onBehalfOf = principalUserID
+	c.delegationReason = reason
+}
+
+// ClearOnBehalfOf clears the delegation headers
+func (c *Client) ClearOnBehalfOf() {
+	c.onBehalfOf = ""
+	c.delegationReason = ""
 }
 
 // request makes an HTTP request with common headers
@@ -65,6 +81,13 @@ func (c *Client) request(method, path string, body interface{}, requestID string
 	}
 	if requestID != "" {
 		req.Header.Set("X-Request-ID", requestID)
+	}
+	// Set delegation headers if configured
+	if c.onBehalfOf != "" {
+		req.Header.Set("X-VFS-On-Behalf-Of", c.onBehalfOf)
+		if c.delegationReason != "" {
+			req.Header.Set("X-VFS-Delegation-Reason", c.delegationReason)
+		}
 	}
 
 	resp, err := c.httpClient.Do(req)

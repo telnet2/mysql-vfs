@@ -1,0 +1,50 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Files Configuration Schema",
+  "description": "Defines allowed file patterns and validation rules for a directory",
+  "type": "object",
+  "required": ["patterns"],
+  "properties": {
+    "patterns": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["pattern"],
+        "properties": {
+          "pattern": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Glob pattern for allowed files (e.g., *.json, data-*.txt)"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description of this pattern"
+          },
+          "content_types": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z]+/[a-z0-9+.-]+$"
+            },
+            "minItems": 1,
+            "description": "Allowed MIME content types"
+          },
+          "max_size_bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 104857600,
+            "description": "Maximum file size in bytes (max 100MB)"
+          },
+          "schema_ref": {
+            "type": "string",
+            "pattern": "^/",
+            "description": "Path to JSON schema for validation (must start with /)"
+          }
+        },
+        "additionalProperties": false
+      },
+      "minItems": 1
+    }
+  },
+  "additionalProperties": false
+}

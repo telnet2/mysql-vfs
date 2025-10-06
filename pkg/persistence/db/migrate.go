@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/telnet2/mysql-vfs/pkg/etc"
 	"github.com/telnet2/mysql-vfs/pkg/models"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
@@ -68,6 +69,11 @@ func AutoMigrate(db *gorm.DB) error {
 	// Bootstrap default files
 	if err := bootstrapDefaultFiles(db); err != nil {
 		return fmt.Errorf("failed to bootstrap default files: %w", err)
+	}
+
+	// Bootstrap system files in /etc
+	if err := bootstrapSystemFiles(db); err != nil {
+		return fmt.Errorf("failed to bootstrap system files: %w", err)
 	}
 
 	return nil
@@ -244,10 +250,24 @@ func createDefaultRegoFile(db *gorm.DB, rootDirID string) error {
 	}
 
 	// Default policy: admin group has full access, user group has read-only
+	// Includes support for on-behalf-of (impersonation) delegation
 	defaultPolicy := `package vfs.authz
 
 # Simple default policy for flexible authorization
 # Customize this policy to match your security requirements
+
+# ========== IMPERSONATION AUTHORIZATION ==========
+
+# Define who can impersonate (act on behalf of others)
+can_impersonate {
+    input.user.groups[_] == "service-accounts"
+}
+
+can_impersonate {
+    input.user.groups[_] == "system-admin"
+}
+
+# ========== OPERATION AUTHORIZATION ==========
 
 # Admin group: full access to all operations
 allow {
@@ -259,10 +279,23 @@ allow {
     input.user.groups[_] == "system-admin"
 }
 
+# Service accounts: full access (for automation)
+allow {
+    input.user.groups[_] == "service-accounts"
+}
+
 # User group: read-only access
 allow {
     input.user.groups[_] == "user"
     input.action == "read"
+}
+
+# For delegated operations: check if actor can impersonate
+# Note: Middleware enforces this, policy provides defense-in-depth
+allow {
+    input.principal
+    input.principal != input.user.user_id
+    can_impersonate
 }
 `
 
@@ -340,4 +373,125 @@ func createDefaultGroupFile(db *gorm.DB, rootDirID string) error {
 
 	fmt.Println("✓ Created /.group with default groups (admin, user)")
 	return nil
+}
+
+// bootstrapSystemFiles creates /etc/schemas directory and seeds schema files (always overwrites)
+func bootstrapSystemFiles(db *gorm.DB) error {
+	// Find or create /etc directory
+	var etcDir models.Directory
+	etcPath := "/etc"
+	etcPathHash := fmt.Sprintf("%x", sha256.Sum256([]byte(etcPath)))
+
+	err := db.Where("path_hash = ?", etcPathHash).First(&etcDir).Error
+	if err != nil && err != gorm.ErrRecordNotFound {
+		return fmt.Errorf("failed to query /etc directory: %w", err)
+	}
+
+	if err == gorm.ErrRecordNotFound {
+		// Create /etc directory with system metadata
+		etcMetadata := `{"owner":"system-admin","creator":"system-admin","system":true,"readonly":true}`
+		etcDir = models.Directory{
+			ID:       "etc",
+			ParentID: stringPtr("root"),
+			Name:     "etc",
+			Path:     etcPath,
+			PathHash: etcPathHash,
+			Version:  1,
+			Metadata: &etcMetadata,
+		}
+
+		if err := db.Create(&etcDir).Error; err != nil {
+			return fmt.Errorf("failed to create /etc directory: %w", err)
+		}
+		fmt.Println("✓ Created /etc directory")
+	} else {
+		fmt.Println("✓ /etc directory exists")
+	}
+
+	// Find or create /etc/schemas directory
+	var schemasDir models.Directory
+	schemasPath := "/etc/schemas"
+	schemasPathHash := fmt.Sprintf("%x", sha256.Sum256([]byte(schemasPath)))
+
+	err = db.Where("path_hash = ?", schemasPathHash).First(&schemasDir).Error
+	if err != nil && err != gorm.ErrRecordNotFound {
+		return fmt.Errorf("failed to query /etc/schemas directory: %w", err)
+	}
+
+	if err == gorm.ErrRecordNotFound {
+		// Create /etc/schemas directory with system metadata
+		schemasMetadata := `{"owner":"system-admin","creator":"system-admin","system":true,"readonly":true}`
+		schemasDir = models.Directory{
+			ID:       "etc-schemas",
+			ParentID: stringPtr("etc"),
+			Name:     "schemas",
+			Path:     schemasPath,
+			PathHash: schemasPathHash,
+			Version:  1,
+			Metadata: &schemasMetadata,
+		}
+
+		if err := db.Create(&schemasDir).Error; err != nil {
+			return fmt.Errorf("failed to create /etc/schemas directory: %w", err)
+		}
+		fmt.Println("✓ Created /etc/schemas directory")
+	} else {
+		fmt.Println("✓ /etc/schemas directory exists")
+	}
+
+	// Delete all existing files in /etc/schemas (we always overwrite)
+	if err := db.Where("directory_id = ?", schemasDir.ID).Delete(&models.File{}).Error; err != nil {
+		return fmt.Errorf("failed to clean /etc/schemas directory: %w", err)
+	}
+
+	// Seed schema files from embedded FS
+	schemaFiles := []string{
+		"owner.schema.json",
+		"files.schema.json",
+		"events.schema.json",
+		"file.metadata.schema.json",
+		"directory.metadata.schema.json",
+	}
+
+	systemMetadata := `{"owner":"system-admin","creator":"system-admin","system":true}`
+
+	for _, filename := range schemaFiles {
+		// Read embedded content
+		content, err := etc.GetSchemaContent(filename)
+		if err != nil {
+			return fmt.Errorf("failed to read embedded schema %s: %w", filename, err)
+		}
+
+		// Calculate checksum
+		checksum := fmt.Sprintf("%x", sha256.Sum256(content))
+		contentStr := string(content)
+
+		// Create file
+		schemaFile := models.File{
+			ID:             uuid.New().String(),
+			DirectoryID:    schemasDir.ID,
+			Name:           filename,
+			ContentType:    "application/schema+json",
+			SizeBytes:      int64(len(content)),
+			StorageType:    "json",
+			JSONContent:    &contentStr,
+			ChecksumSHA256: checksum,
+			Version:        1,
+			Metadata:       &systemMetadata,
+		}
+
+		if err := db.Create(&schemaFile).Error; err != nil {
+			return fmt.Errorf("failed to create /etc/schemas/%s: %w", filename, err)
+		}
+
+		fmt.Printf("✓ Seeded /etc/schemas/%s\n", filename)
+	}
+
+	fmt.Println("✓ System files bootstrap completed")
+	return nil
+}
+
+// stringPtr returns a pointer to a string
+func stringPtr(s string) *string {
+	return &s
 }

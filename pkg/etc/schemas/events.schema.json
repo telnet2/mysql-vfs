@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Events Configuration Schema",
+  "description": "Defines lifecycle event handlers for file operations",
+  "type": "object",
+  "required": ["handlers"],
+  "properties": {
+    "handlers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "events", "type", "config"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*[a-z0-9]$",
+            "minLength": 2,
+            "maxLength": 64,
+            "description": "Unique handler name"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^(file|directory)\\.(create|update|delete)\\.(authorization|validation|execution|completion)\\.(started|succeeded|failed)$"
+            },
+            "minItems": 1,
+            "uniqueItems": true,
+            "description": "List of lifecycle events to trigger this handler"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["webhook", "log", "metrics"],
+            "description": "Handler type"
+          },
+          "config": {
+            "type": "object",
+            "description": "Handler-specific configuration"
+          }
+        },
+        "additionalProperties": false
+      },
+      "minItems": 1
+    }
+  },
+  "additionalProperties": false
+}

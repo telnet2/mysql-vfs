@@ -19,8 +19,10 @@ import (
 )
 
 var (
-	vfsServiceURL string
-	ctx           *commands.Context
+	vfsServiceURL    string
+	onBehalfOf       string
+	delegationReason string
+	ctx              *commands.Context
 )
 
 type interactiveState struct {
@@ -82,6 +84,8 @@ func initRootCmd() {
 
 	// Global flags
 	rootCmd.PersistentFlags().StringVar(&vfsServiceURL, "url", "", "VFS service URL (default: env VFS_SERVICE_URL or http://localhost:18080)")
+	rootCmd.PersistentFlags().StringVar(&onBehalfOf, "on-behalf-of", "", "Act on behalf of another user (requires impersonate permission)")
+	rootCmd.PersistentFlags().StringVar(&delegationReason, "reason", "", "Reason for delegation (audit trail)")
 
 	// Add all subcommands
 	rootCmd.AddCommand(helpCmd)
@@ -135,6 +139,11 @@ func initConfig() {
 			sess.SetAuthToken(token)
 		}
 
+		// Set delegation headers if provided
+		if onBehalfOf != "" {
+			vfsClient.SetOnBehalfOf(onBehalfOf, delegationReason)
+		}
+
 		// Create command context
 		ctx = &commands.Context{
 			Client:  vfsClient,
@@ -150,6 +159,10 @@ func initConfig() {
 			// Preserve auth token
 			if token := ctx.Session.GetAuthToken(); token != "" {
 				ctx.Client.SetAuthToken(token)
+			}
+			// Set delegation headers if provided
+			if onBehalfOf != "" {
+				ctx.Client.SetOnBehalfOf(onBehalfOf, delegationReason)
 			}
 		}
 	}

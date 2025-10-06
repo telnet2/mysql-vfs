@@ -28,6 +28,7 @@ type File struct {
 	S3Key        *string        `gorm:"type:varchar(1024)"`
 	ChecksumSHA256 string       `gorm:"type:char(64);not null;index"`
 	Version      int64          `gorm:"not null;default:1"`
+	Metadata     *string        `gorm:"type:json"` // JSON metadata: owner, creator, system flags
 	CreatedAt    time.Time      `gorm:"not null"`
 	UpdatedAt    time.Time      `gorm:"not null"`
 	DeletedAt    gorm.DeletedAt `gorm:"index"`

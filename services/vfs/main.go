@@ -132,6 +132,9 @@ func main() {
 
 	authMiddleware := middleware.NewAuthMiddleware(authExtractor, cfg.Auth.AllowAnonymous)
 
+	// Initialize delegation middleware (for on-behalf-of support)
+	delegationMiddleware := middleware.NewDelegationMiddleware()
+
 	// Initialize authorization middleware
 	authzMiddleware := middleware.NewAuthorizationMiddleware(middleware.AuthorizationConfig{
 		PolicyLoader: policyLoader,
@@ -150,8 +153,9 @@ func main() {
 	// API v1 routes
 	v1 := h.Group("/api/v1")
 	v1.Use(idempotencyService.Middleware())
-	v1.Use(authMiddleware.Handler())  // Authentication (JWT, OAuth, etc.)
-	v1.Use(authzMiddleware.Handler()) // Authorization (OPA policies)
+	v1.Use(authMiddleware.Handler())     // Authentication (JWT, OAuth, etc.)
+	v1.Use(delegationMiddleware.Handler()) // Delegation (on-behalf-of)
+	v1.Use(authzMiddleware.Handler())    // Authorization (OPA policies)
 
 	// Directory routes
 	v1.POST("/directories", vfsServer.createDirectory)

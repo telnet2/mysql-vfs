@@ -187,6 +187,11 @@ func IsSystemAdmin(userRole string) bool {
 	return userRole == "system-admin"
 }
 
+// IsSystemProtectedPath checks if a path is under the read-only /etc directory
+func IsSystemProtectedPath(path string) bool {
+	return path == "/etc" || strings.HasPrefix(path, "/etc/")
+}
+
 // SupportsInheritance checks if this special file type supports parent inheritance
 func SupportsInheritance(filename string) bool {
 	fileType := GetSpecialFileType(filename)

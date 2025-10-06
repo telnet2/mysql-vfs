@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Owner Configuration Schema",
+  "description": "Defines directory ownership for access control",
+  "type": "object",
+  "required": ["owners"],
+  "properties": {
+    "owners": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9-]*[a-z0-9]$",
+        "minLength": 2,
+        "maxLength": 64
+      },
+      "minItems": 1,
+      "uniqueItems": true,
+      "description": "List of group IDs that own this directory"
+    }
+  },
+  "additionalProperties": false
+}

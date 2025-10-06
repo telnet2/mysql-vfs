@@ -16,6 +16,7 @@ type FileVersion struct {
 	TextContent    *string     `gorm:"type:mediumtext"`
 	S3Key          *string     `gorm:"type:varchar(1024)"`
 	ChecksumSHA256 string      `gorm:"type:char(64);not null"`
+	Metadata       *string     `gorm:"type:json"` // JSON metadata: owner, creator, system flags
 	CreatedAt      time.Time   `gorm:"not null"`
 
 	// Relations (no DB-level foreign keys - referential integrity managed in application code)

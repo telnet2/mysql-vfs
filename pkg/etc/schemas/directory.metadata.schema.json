@@ -1,0 +1,36 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Directory Metadata Schema",
+  "description": "Defines metadata structure for directories",
+  "type": "object",
+  "required": ["owner", "creator"],
+  "properties": {
+    "owner": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*[a-z0-9]$",
+      "minLength": 2,
+      "maxLength": 64,
+      "description": "Owner user or group ID"
+    },
+    "creator": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*[a-z0-9]$",
+      "minLength": 2,
+      "maxLength": 64,
+      "description": "Original creator user ID"
+    },
+    "system": {
+      "type": "boolean",
+      "description": "System directory flag"
+    },
+    "readonly": {
+      "type": "boolean",
+      "description": "Immutable directory flag"
+    },
+    "custom": {
+      "type": "object",
+      "description": "User-defined metadata (free-form JSON)"
+    }
+  },
+  "additionalProperties": false
+}

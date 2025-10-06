@@ -53,4 +53,7 @@ var (
 
 	// ErrQuotaExceeded is returned when resource quota is exceeded
 	ErrQuotaExceeded = errors.New("quota exceeded")
+
+	// ErrProtectedSystemDirectory is returned when trying to modify /etc
+	ErrProtectedSystemDirectory = errors.New("cannot modify system-protected /etc directory")
 )

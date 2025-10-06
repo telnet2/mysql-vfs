@@ -115,6 +115,11 @@ func (s *DirectoryService) emitEvent(ctx context.Context, tx *gorm.DB, eventType
 
 // CreateDirectory creates a new directory using optimistic locking with retries
 func (s *DirectoryService) CreateDirectory(ctx context.Context, parentPath, name string) (*models.Directory, error) {
+	// Check if parent path is system-protected
+	if IsSystemProtectedPath(parentPath) {
+		return nil, ErrProtectedSystemDirectory
+	}
+
 	// Validate and normalize name
 	normalizedName, err := ValidateAndNormalizeName(name)
 	if err != nil {
@@ -124,6 +129,11 @@ func (s *DirectoryService) CreateDirectory(ctx context.Context, parentPath, name
 
 	// Calculate full path
 	fullPath := path.Join(parentPath, name)
+
+	// Check if full path is system-protected
+	if IsSystemProtectedPath(fullPath) {
+		return nil, ErrProtectedSystemDirectory
+	}
 
 	// Check depth limit (100 levels)
 	depth := strings.Count(fullPath, "/")
@@ -278,7 +288,16 @@ func (s *DirectoryService) tryCreateDirectory(ctx context.Context, parentPath, f
 			}
 		}
 
-		// Create directory
+		// Build metadata
+		authCtx := s.getAuthContext(ctx)
+		metadata := s.buildMetadata(authCtx, nil)
+		metadataJSON, err := json.Marshal(metadata)
+		if err != nil {
+			return fmt.Errorf("failed to marshal metadata: %w", err)
+		}
+		metadataStr := string(metadataJSON)
+
+		// Create directory with metadata
 		pathHash := calculatePathHash(fullPath)
 		dir = &models.Directory{
 			ID:        uuid.New().String(),
@@ -286,6 +305,7 @@ func (s *DirectoryService) tryCreateDirectory(ctx context.Context, parentPath, f
 			Path:      fullPath,
 			PathHash:  pathHash,
 			Version:   1,
+			Metadata:  &metadataStr,
 			CreatedAt: time.Now(),
 			UpdatedAt: time.Now(),
 		}
@@ -385,14 +405,19 @@ func (s *DirectoryService) ListDirectory(dirPath string, limit int, cursor strin
 
 // DeleteDirectory deletes a directory (optionally recursive) with lifecycle event tracking
 func (s *DirectoryService) DeleteDirectory(ctx context.Context, dirPath string, recursive bool) error {
-	// Get user context
-	user := s.getUserContext(ctx)
-	requestID := s.getRequestID(ctx)
-
 	// Prevent deleting root directory
 	if dirPath == "/" {
 		return fmt.Errorf("cannot delete root directory")
 	}
+
+	// Check if path is system-protected
+	if IsSystemProtectedPath(dirPath) {
+		return ErrProtectedSystemDirectory
+	}
+
+	// Get user context
+	user := s.getUserContext(ctx)
+	requestID := s.getRequestID(ctx)
 
 	// Create operation context
 	opCtx := &events.OperationContext{
@@ -658,12 +683,51 @@ func (s *DirectoryService) GetDirectory(dirPath string) (*models.Directory, erro
 
 // getUserContext extracts user context from request context
 func (s *DirectoryService) getUserContext(ctx context.Context) events.UserContext {
-	// TODO: Extract from actual auth context
-	// For now, return a default user
+	// Extract from middleware auth context
+	authCtx := s.getAuthContext(ctx)
 	return events.UserContext{
+		UserID: authCtx.UserID,
+		Groups: authCtx.Groups,
+	}
+}
+
+// getAuthContext extracts AuthContext from request context
+func (s *DirectoryService) getAuthContext(ctx context.Context) *AuthContext {
+	// Try to extract from context
+	if authCtx, ok := ctx.Value("authContext").(*AuthContext); ok && authCtx != nil {
+		return authCtx
+	}
+
+	// Fallback for non-HTTP calls (tests, internal operations)
+	return &AuthContext{
 		UserID: "system",
 		Groups: []string{"system-admin"},
 	}
+}
+
+// buildMetadata builds metadata JSON for a new directory
+func (s *DirectoryService) buildMetadata(authCtx *AuthContext, custom map[string]interface{}) map[string]interface{} {
+	metadata := map[string]interface{}{
+		"owner":      authCtx.GetOwner(),
+		"creator":    authCtx.GetCreator(),
+		"system":     false,
+		"created_at": time.Now().Format(time.RFC3339),
+	}
+
+	// Add delegation info if present
+	if authCtx.IsDelegated() {
+		metadata["delegated"] = true
+		if authCtx.DelegationReason != "" {
+			metadata["delegation_reason"] = authCtx.DelegationReason
+		}
+	}
+
+	// Add custom fields if provided
+	if custom != nil {
+		metadata["custom"] = custom
+	}
+
+	return metadata
 }
 
 // getRequestID gets or generates a request ID

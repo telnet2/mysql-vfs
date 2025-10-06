@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"io"
 	"strings"
 
@@ -373,18 +374,27 @@ func TestAdd(t *testing.T) {
 			_, _, _, err = dirService.ListDirectory("/projects", 100, "")
 			Expect(err).To(HaveOccurred())
 
-			// Verify root is clean (only root directory itself should remain)
+			// Verify root is clean (only root directory itself should remain besides system directories)
 			rootDirs, rootFiles, _, err := dirService.ListDirectory("/", 100, "")
 			Expect(err).NotTo(HaveOccurred())
-			// Root directory has no subdirectories (except potentially the root itself in the listing)
-			// Filter out the root directory itself if it appears
-			nonRootDirs := []models.Directory{}
+			// Root directory has no user subdirectories; ignore the root and any system directories
+			nonSystemDirs := []models.Directory{}
 			for _, dir := range rootDirs {
-				if dir.Path != "/" {
-					nonRootDirs = append(nonRootDirs, dir)
+				if dir.Path == "/" {
+					continue
 				}
+				var metadata struct {
+					System bool `json:"system"`
+				}
+				if dir.Metadata != nil && *dir.Metadata != "" {
+					_ = json.Unmarshal([]byte(*dir.Metadata), &metadata)
+				}
+				if metadata.System {
+					continue
+				}
+				nonSystemDirs = append(nonSystemDirs, dir)
 			}
-			Expect(nonRootDirs).To(HaveLen(0))
+			Expect(nonSystemDirs).To(HaveLen(0))
 			// Bootstrap files (.rego and .group) should exist in root
 			Expect(rootFiles).To(HaveLen(2))
 			fileNames := []string{rootFiles[0].Name, rootFiles[1].Name}
