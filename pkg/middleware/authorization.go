@@ -182,12 +182,28 @@ func (m *AuthorizationMiddleware) Handler() app.HandlerFunc {
 // defaultUserContextExtractor extracts user context from the request context
 // This works with the generic auth middleware or external auth headers
 func defaultUserContextExtractor(c *app.RequestContext) (*UserContext, error) {
-	// Get context from Hertz request context
-	ctx := c
+	// Try to get data stored by the auth middleware on the request context
+	var (
+		userID    string
+		hasUserID bool
+	)
+	if val, ok := c.Get(string(UserIDKey)); ok {
+		if cast, ok := val.(string); ok && cast != "" {
+			userID = cast
+			hasUserID = true
+		}
+	}
 
-	// Try to get from auth middleware context first
-	userID, hasUserID := ctx.Value(UserIDKey).(string)
-	groups, hasGroups := ctx.Value(UserGroupsKey).([]string)
+	var (
+		groups    []string
+		hasGroups bool
+	)
+	if val, ok := c.Get(string(UserGroupsKey)); ok {
+		if cast, ok := val.([]string); ok && len(cast) > 0 {
+			groups = cast
+			hasGroups = true
+		}
+	}
 
 	// If not found, try from headers (for external auth via reverse proxy)
 	if !hasUserID {

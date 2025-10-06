@@ -78,8 +78,11 @@ func initConfig() {
 	vfsClient := client.NewClient(vfsServiceURL)
 	sess := session.NewSession()
 
-	// Load auth token (priority: env var > saved file)
+	// Load auth token (priority: env vars > saved file)
 	token := os.Getenv("VFS_AUTH_TOKEN")
+	if token == "" {
+		token = os.Getenv("SYSTEM_ADMIN_TOKEN")
+	}
 	if token == "" {
 		// Fall back to saved token file
 		if savedToken, err := commands.LoadToken(); err == nil && savedToken != "" {
@@ -256,10 +259,10 @@ func executePipeline(input string) error {
 
 	// Create command map for pipeline execution
 	cmdMap := map[string]commands.Command{
-		"ls":            &commands.LsCommand{},
-		"cat":           &commands.CatCommand{},
-		"jq":            &commands.JqCommand{},
-		"pwd":           &commands.PwdCommand{},
+		"ls":  &commands.LsCommand{},
+		"cat": &commands.CatCommand{},
+		"jq":  &commands.JqCommand{},
+		"pwd": &commands.PwdCommand{},
 	}
 
 	// Single command - no piping needed

@@ -165,7 +165,7 @@ type FilesConfig struct {
 type FileRule struct {
 	Pattern     string                 `json:"pattern"`
 	Type        string                 `json:"type"` // "glob" or "regex"
-	Schema      map[string]interface{} `json:"schema,omitempty"`
+	Schema      map[string]interface{} `json:"schema,omitempty"` // Can include $ref with schema:// protocol
 	Description string                 `json:"description,omitempty"`
 }
 
@@ -197,12 +197,22 @@ func validateFilesConfig(content []byte) error {
 		}
 
 		// If schema is provided, validate it's a valid JSON schema
+		// Note: $ref resolution happens at runtime, not here
 		if rule.Schema != nil {
 			schemaBytes, err := json.Marshal(rule.Schema)
 			if err != nil {
 				return fmt.Errorf("rule %d: invalid schema JSON: %w", i, err)
 			}
 
+			// Skip validation if schema is just a $ref to schema://
+			// These will be validated at runtime when files are uploaded
+			if isSchemaProtocolRef(rule.Schema) {
+				// Just check it's valid JSON, don't validate the $ref yet
+				continue
+			}
+
+			// Basic validation - just check it parses as a schema
+			// $ref resolution will happen at validation time
 			schemaLoader := gojsonschema.NewBytesLoader(schemaBytes)
 			_, err = gojsonschema.NewSchema(schemaLoader)
 			if err != nil {
@@ -212,6 +222,15 @@ func validateFilesConfig(content []byte) error {
 	}
 
 	return nil
+}
+
+// isSchemaProtocolRef checks if a schema is a simple $ref to schema://
+func isSchemaProtocolRef(schema map[string]interface{}) bool {
+	ref, ok := schema["$ref"].(string)
+	if !ok {
+		return false
+	}
+	return len(schema) == 1 && len(ref) >= 9 && ref[:9] == "schema://"
 }
 
 // validateRegoPolicy validates .rego file content

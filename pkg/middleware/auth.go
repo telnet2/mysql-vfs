@@ -101,6 +101,17 @@ func (m *AuthMiddleware) Handler() app.HandlerFunc {
 		ctx = context.WithValue(ctx, UserGroupsKey, authContext.Groups)
 		ctx = context.WithValue(ctx, UserMetadataKey, authContext.Metadata)
 
+		// Also persist values on the Hertz RequestContext so downstream middleware can read them
+		if authContext.UserID != "" {
+			c.Set(string(UserIDKey), authContext.UserID)
+		}
+		if len(authContext.Groups) > 0 {
+			c.Set(string(UserGroupsKey), authContext.Groups)
+		}
+		if len(authContext.Metadata) > 0 {
+			c.Set(string(UserMetadataKey), authContext.Metadata)
+		}
+
 		c.Next(ctx)
 	}
 }

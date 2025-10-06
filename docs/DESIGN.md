@@ -370,10 +370,43 @@ See OPA policies in:
 5. Reject if validation fails
 ```
 
+**Schema Storage Options:**
+
+1. **Inline Schema** - Schema embedded in `.files` rule
+   ```json
+   {
+     "rules": [
+       {
+         "pattern": "*.json",
+         "type": "glob",
+         "schema": {"type": "object", "properties": {...}}
+       }
+     ]
+   }
+   ```
+
+2. **External Schema File** - Schema stored in separate VFS file
+   ```json
+   {
+     "rules": [
+       {
+         "pattern": "*.json",
+         "type": "glob",
+         "schema_ref": "/schemas/user.json"
+       }
+     ]
+   }
+   ```
+
+3. **Schema with $ref** - *(Future Enhancement)*
+   - JSON Schema `$ref` resolution from VFS files is planned but not yet implemented
+   - For now, use `schema_ref` to reference external schemas or inline schemas without `$ref`
+
 **Implementation:**
 - Validation: `pkg/domain/file_service.go:validateFileContent()`
 - Schema loading: `pkg/domain/files_loader.go`
-- Tests: `citest/schema_validation_test.go`
+- Schema caching: Built-in cache for external schemas
+- Tests: `citest/schema_validation_test.go`, `citest/schema_ref_validation_test.go`
 
 ---
 

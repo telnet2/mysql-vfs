@@ -65,6 +65,206 @@ SpecialFileTypeWorkflow: {
 },
 ```
 
+### 2.1.1 Workflow Validation Schema
+
+**JSON Schema for `.workflow` files:**
+
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Workflow Definition",
+  "type": "object",
+  "required": ["state_directories", "initial_state", "states"],
+  "properties": {
+    "state_directories": {
+      "type": "object",
+      "description": "Mapping of state names to directory paths (relative to workflow home)",
+      "minProperties": 1,
+      "patternProperties": {
+        "^[a-z0-9][a-z0-9_-]*$": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_/-]+$",
+          "minLength": 1,
+          "maxLength": 255
+        }
+      },
+      "additionalProperties": false
+    },
+    "initial_state": {
+      "type": "string",
+      "description": "State where files must be created",
+      "pattern": "^[a-z0-9][a-z0-9_-]*$"
+    },
+    "states": {
+      "type": "object",
+      "description": "State definitions",
+      "minProperties": 1,
+      "patternProperties": {
+        "^[a-z0-9][a-z0-9_-]*$": {
+          "type": "object",
+          "properties": {
+            "transitions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["to", "gates"],
+                "properties": {
+                  "to": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9][a-z0-9_-]*$"
+                  },
+                  "gates": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "object",
+                      "required": ["type"],
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": ["group", "metadata", "rego", "composite"]
+                        },
+                        "groups": {
+                          "type": "array",
+                          "items": {"type": "string"}
+                        },
+                        "conditions": {
+                          "type": "object"
+                        },
+                        "policy": {
+                          "type": "string"
+                        },
+                        "operator": {
+                          "type": "string",
+                          "enum": ["AND", "OR"]
+                        },
+                        "gates": {
+                          "type": "array",
+                          "items": {"$ref": "#/properties/states/patternProperties/%5E%5Ba-z0-9%5D%5Ba-z0-9_-%5D*%24/properties/transitions/items/properties/gates/items"}
+                        }
+                      }
+                    }
+                  },
+                  "on_success": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": ["type"],
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": ["webhook", "metadata_update", "cache_invalidate"]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "deletion_gate": {
+              "type": "object",
+              "required": ["type"],
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": ["group", "metadata", "rego", "composite"]
+                }
+              }
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
+```
+
+### 2.1.2 Validation Rules
+
+**`validateWorkflowConfig` function must check:**
+
+1. **YAML Syntax**
+   - Valid YAML structure
+   - Parse without errors
+
+2. **JSON Schema Compliance**
+   - Validate against schema above
+   - Check all required fields present
+   - Validate data types
+
+3. **State Name Constraints**
+   - Pattern: `^[a-z0-9][a-z0-9_-]*$`
+   - Must start with lowercase letter or digit
+   - Only lowercase alphanumeric, underscore, hyphen
+   - Max length: 64 characters
+
+4. **State Directory Constraints**
+   - Paths relative to workflow home
+   - Pattern: `^[a-zA-Z0-9_/-]+$`
+   - Max depth: 5 levels
+   - Max length: 255 characters
+   - No `.` or `..` components
+   - No leading or trailing slashes
+
+5. **Reference Integrity**
+   - `initial_state` must exist in `states` map
+   - All `state_directories` keys must exist in `states` map
+   - All transition `to` states must exist in `states` map
+   - No orphaned states (states not in `state_directories`)
+
+6. **Workflow Nesting**
+   - No `.workflow` file exists in parent directories
+   - No `.workflow` files exist in child directories
+
+7. **State Directory Existence** (filesystem validation)
+   - All paths in `state_directories` must exist as directories
+   - Directories must be empty or contain only valid files
+   - Cannot be special file directories (e.g., not `.rego`, `.events`)
+
+8. **Gate Type Validation**
+   - `group`: Must have `groups` array
+   - `metadata`: Must have `conditions` object
+   - `rego`: Must have `policy` string
+   - `composite`: Must have `operator` and `gates` array
+
+9. **Circular Reference Detection**
+   - No self-referencing states in composite gates
+   - State machine must be a valid DAG (warn if cycles detected)
+
+### 2.1.3 Validation Errors
+
+**Error codes returned:**
+
+```go
+const (
+    ErrInvalidYAML              = "WORKFLOW_INVALID_YAML"
+    ErrSchemaViolation          = "WORKFLOW_SCHEMA_VIOLATION"
+    ErrInvalidStateName         = "WORKFLOW_INVALID_STATE_NAME"
+    ErrInvalidStatePath         = "WORKFLOW_INVALID_STATE_PATH"
+    ErrInitialStateNotFound     = "WORKFLOW_INITIAL_STATE_NOT_FOUND"
+    ErrTransitionStateNotFound  = "WORKFLOW_TRANSITION_STATE_NOT_FOUND"
+    ErrStateDirectoryNotFound   = "WORKFLOW_STATE_DIR_NOT_FOUND"
+    ErrOrphanedState            = "WORKFLOW_ORPHANED_STATE"
+    ErrNestedWorkflow           = "WORKFLOW_NESTING_PROHIBITED"
+    ErrInvalidGateType          = "WORKFLOW_INVALID_GATE_TYPE"
+    ErrMissingGateConfig        = "WORKFLOW_MISSING_GATE_CONFIG"
+)
+```
+
+**Example error response:**
+
+```json
+{
+  "error": "WORKFLOW_INITIAL_STATE_NOT_FOUND",
+  "message": "initial_state 'draft' does not exist in states map",
+  "details": {
+    "initial_state": "draft",
+    "available_states": ["review", "published"]
+  }
+}
+```
+
 ### 2.2 Create Workflow Loader
 **New file:** `pkg/domain/workflow_loader.go`
 
