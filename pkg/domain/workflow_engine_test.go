@@ -207,6 +207,6 @@ states:
 	require.NoError(t, err)
 
 	auditRepo := &mockAuditRepository{}
-	engine := NewWorkflowEngine(loader, nil, fileRepo, dirRepo, auditRepo)
+	engine := NewWorkflowEngine(loader, nil, fileRepo, dirRepo, auditRepo, nil) // nil eventDispatcher for tests
 	return engine, auditRepo
 }

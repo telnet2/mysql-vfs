@@ -91,13 +91,13 @@ func (ec *EventCollector) Reset() {
 
 var _ = Describe("NATS Event Publisher Integration", Ordered, func() {
 	var (
-		testDB      *fixtures.TestDatabase
-		testS3      *fixtures.TestS3
-		testNATS    *fixtures.TestNATS
-		dirService  *domain.DirectoryService
-		fileService *domain.FileService
-		ctx         context.Context
-		collector   *EventCollector
+		testDB       *fixtures.TestDatabase
+		testS3       *fixtures.TestS3
+		testNATS     *fixtures.TestNATS
+		dirService   *domain.DirectoryService
+		fileService  *domain.FileService
+		ctx          context.Context
+		collector    *EventCollector
 		subscription *nats.Subscription
 	)
 

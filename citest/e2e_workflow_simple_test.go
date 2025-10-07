@@ -36,7 +36,7 @@ var _ = Describe("Simple Workflow Integration", Ordered, func() {
 		// Initialize workflow components
 		workflowLoader := domain.NewWorkflowLoader(fileRepo, dirRepo, 5*60) // 5 min cache
 		workflowGateEvaluator := domain.NewWorkflowGateEvaluator(fileRepo, 5*60)
-		workflowEngine := domain.NewWorkflowEngine(workflowLoader, workflowGateEvaluator, fileRepo, dirRepo, workflowAuditRepo)
+		workflowEngine := domain.NewWorkflowEngine(workflowLoader, workflowGateEvaluator, fileRepo, dirRepo, workflowAuditRepo, nil) // nil eventDispatcher for tests
 
 		dirService = domain.NewDirectoryService(db)
 		fileService = domain.NewFileService(db, testS3.Storage)
@@ -301,7 +301,7 @@ states:
 			for _, name := range fileNames {
 				sourcePath := "/projects/active/" + name
 				targetPath := "/projects/archived/" + name
-				
+
 				archivedFile, err := fileService.MoveFile(ctx, sourcePath, targetPath)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(archivedFile.Name).To(Equal(name))

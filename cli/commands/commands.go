@@ -1477,6 +1477,106 @@ func (c *JqCommand) Help() string {
 	return "jq <path> [expression] - Query JSON file with jq (default expression: .)"
 }
 
+// SearchCommand searches for files by content or metadata
+type SearchCommand struct{}
+
+func (c *SearchCommand) Execute(ctx *Context, args []string) error {
+	jsonPath := ""
+	jqExpr := ""
+	value := ""
+	metaKey := ""
+	metaValue := ""
+	metaJSONPath := ""
+	metaJQExpr := ""
+	fileType := ""
+	limit := 100
+
+	// Parse arguments
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--json-path":
+			if i+1 < len(args) {
+				jsonPath = args[i+1]
+				i++
+			}
+		case "--jq-expression":
+			if i+1 < len(args) {
+				jqExpr = args[i+1]
+				i++
+			}
+		case "--value":
+			if i+1 < len(args) {
+				value = args[i+1]
+				i++
+			}
+		case "--meta-key":
+			if i+1 < len(args) {
+				metaKey = args[i+1]
+				i++
+			}
+		case "--meta-value":
+			if i+1 < len(args) {
+				metaValue = args[i+1]
+				i++
+			}
+		case "--meta-json-path":
+			if i+1 < len(args) {
+				metaJSONPath = args[i+1]
+				i++
+			}
+		case "--meta-jq-expression":
+			if i+1 < len(args) {
+				metaJQExpr = args[i+1]
+				i++
+			}
+		case "--type":
+			if i+1 < len(args) {
+				fileType = args[i+1]
+				i++
+			}
+		case "--limit":
+			if i+1 < len(args) {
+				if parsed, err := fmt.Sscanf(args[i+1], "%d", &limit); err != nil || parsed != 1 {
+					return fmt.Errorf("invalid limit value: %s", args[i+1])
+				}
+				i++
+			}
+		default:
+			return fmt.Errorf("unknown argument: %s", args[i])
+		}
+	}
+
+	results, err := ctx.Client.SearchFiles(jsonPath, jqExpr, value, metaKey, metaValue, metaJSONPath, metaJQExpr, fileType, limit)
+	if err != nil {
+		return fmt.Errorf("search failed: %w", err)
+	}
+
+	if len(results) == 0 {
+		fmt.Fprintln(ctx.Stdout, "No files found matching the search criteria.")
+		return nil
+	}
+
+	fmt.Fprintf(ctx.Stdout, "Found %d file(s):\n\n", len(results))
+	for _, result := range results {
+		fmt.Fprintf(ctx.Stdout, "Path: %s\n", result.Path)
+		fmt.Fprintf(ctx.Stdout, "Size: %d bytes\n", result.SizeBytes)
+		fmt.Fprintf(ctx.Stdout, "Content-Type: %s\n", result.ContentType)
+		if len(result.Metadata) > 0 {
+			fmt.Fprintf(ctx.Stdout, "Metadata:\n")
+			for k, v := range result.Metadata {
+				fmt.Fprintf(ctx.Stdout, "  %s: %v\n", k, v)
+			}
+		}
+		fmt.Fprintln(ctx.Stdout, "")
+	}
+
+	return nil
+}
+
+func (c *SearchCommand) Help() string {
+	return "search [options] - Search for files by content or metadata\nOptions:\n  --json-path <path>        JSON path in file content (e.g., '$.name')\n  --jq-expression <expr>    JQ expression on file content (e.g., '.name')\n  --value <value>           Value to search for\n  --meta-key <key>          Simple metadata key (e.g., 'owner')\n  --meta-value <value>      Simple metadata value\n  --meta-json-path <path>    JSON path in metadata (e.g., '$.permissions.write')\n  --meta-jq-expression <expr> JQ expression on metadata (e.g., '.permissions.write')\n  --type <type>             Entry type (f=files, d=directories)\n  --limit <n>               Max results (default: 100)"
+}
+
 // SaveToken saves the auth token to a file (for external auth providers)
 func SaveToken(token string) error {
 	homeDir, err := os.UserHomeDir()
@@ -1575,6 +1675,7 @@ func (c *HelpCommand) Execute(ctx *Context, args []string) error {
 	fmt.Fprintln(ctx.Stdout, "  jq <path> [expression]             Query JSON file (default: ., supports coloring)")
 	fmt.Fprintln(ctx.Stdout, "  grep <pattern> <path>              Search for pattern in file contents")
 	fmt.Fprintln(ctx.Stdout, "  find <path> [options]              Find files and directories")
+	fmt.Fprintln(ctx.Stdout, "  search [options]                   Search for files by content or metadata")
 	fmt.Fprintln(ctx.Stdout, "  attr <cmd> <path> [key=value]      Get or set file attributes (content-type)")
 	fmt.Fprintln(ctx.Stdout, "  mv <src> <dst>                     Move/rename file(s) (supports globs)")
 	fmt.Fprintln(ctx.Stdout, "  cp <src> <dst>                     Copy file(s) (supports globs)")

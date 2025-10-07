@@ -474,8 +474,8 @@ func (m *mockFileRepository) FindByID(ctx context.Context, id string) (*models.F
 func (m *mockFileRepository) FindByDirectoryID(ctx context.Context, dirID string, limit int, cursor string) ([]*models.File, string, error) {
 	return nil, "", nil
 }
-func (m *mockFileRepository) SoftDelete(ctx context.Context, id string) error   { return nil }
-func (m *mockFileRepository) Delete(ctx context.Context, id string) error       { return nil }
+func (m *mockFileRepository) SoftDelete(ctx context.Context, id string) error { return nil }
+func (m *mockFileRepository) Delete(ctx context.Context, id string) error     { return nil }
 func (m *mockFileRepository) Exists(ctx context.Context, dirID, name string) (bool, error) {
 	key := dirID + "/" + name
 	_, ok := m.files[key]
@@ -540,9 +540,11 @@ func (m *mockDirectoryRepository) Create(ctx context.Context, dir *models.Direct
 	m.dirs[dir.Path] = dir
 	return nil
 }
-func (m *mockDirectoryRepository) Update(ctx context.Context, dir *models.Directory) error { return nil }
-func (m *mockDirectoryRepository) SoftDelete(ctx context.Context, id string) error         { return nil }
-func (m *mockDirectoryRepository) Delete(ctx context.Context, id string) error             { return nil }
+func (m *mockDirectoryRepository) Update(ctx context.Context, dir *models.Directory) error {
+	return nil
+}
+func (m *mockDirectoryRepository) SoftDelete(ctx context.Context, id string) error { return nil }
+func (m *mockDirectoryRepository) Delete(ctx context.Context, id string) error     { return nil }
 func (m *mockDirectoryRepository) FindByParentID(ctx context.Context, parentID string, limit int, cursor string) ([]*models.Directory, string, error) {
 	return nil, "", nil
 }

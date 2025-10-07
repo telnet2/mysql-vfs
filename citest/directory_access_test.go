@@ -14,16 +14,16 @@ import (
 
 var _ = Describe("Directory Access Control E2E", Ordered, func() {
 	var (
-		ctx          context.Context
-		testDB       *fixtures.TestDatabase
-		testStorage  *fixtures.TestS3
-		dirService   *domain.DirectoryService
-		fileService  *domain.FileService
-		filesLoader  *domain.FilesLoader
-		groupLoader  *domain.GroupLoader
-		ownerLoader  *domain.OwnerLoader
-		fileRepo     *mysql.GormFileRepository
-		dirRepo      *mysql.GormDirectoryRepository
+		ctx         context.Context
+		testDB      *fixtures.TestDatabase
+		testStorage *fixtures.TestS3
+		dirService  *domain.DirectoryService
+		fileService *domain.FileService
+		filesLoader *domain.FilesLoader
+		groupLoader *domain.GroupLoader
+		ownerLoader *domain.OwnerLoader
+		fileRepo    *mysql.GormFileRepository
+		dirRepo     *mysql.GormDirectoryRepository
 	)
 
 	BeforeAll(func() {
@@ -37,7 +37,7 @@ var _ = Describe("Directory Access Control E2E", Ordered, func() {
 		dirRepo = mysql.NewGormDirectoryRepository(testDB.GetDB())
 
 		// Create loaders
-		filesLoader = domain.NewFilesLoader(fileRepo, dirRepo, 5*60*1000000000)  // 5 minutes
+		filesLoader = domain.NewFilesLoader(fileRepo, dirRepo, 5*60*1000000000) // 5 minutes
 		groupLoader = domain.NewGroupLoader(fileRepo, dirRepo, 5*60*1000000000) // 5 minutes
 		ownerLoader = domain.NewOwnerLoader(fileRepo, dirRepo, groupLoader, 5*60*1000000000)
 

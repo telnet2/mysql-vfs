@@ -9,8 +9,8 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/telnet2/mysql-vfs/citest/fixtures"
-	"github.com/telnet2/mysql-vfs/pkg/models"
 	"github.com/telnet2/mysql-vfs/pkg/domain"
+	"github.com/telnet2/mysql-vfs/pkg/models"
 )
 
 var _ = Describe("VFS Directory Operations", Ordered, func() {

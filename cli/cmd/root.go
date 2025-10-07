@@ -104,6 +104,7 @@ func initRootCmd() {
 	rootCmd.AddCommand(cpCmd)
 	rootCmd.AddCommand(grepCmd)
 	rootCmd.AddCommand(findCmd)
+	rootCmd.AddCommand(searchCmd)
 	rootCmd.AddCommand(attrCmd)
 	rootCmd.AddCommand(aliasCmd)
 	rootCmd.AddCommand(jqCmd)

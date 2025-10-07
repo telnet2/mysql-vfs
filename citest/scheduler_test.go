@@ -33,16 +33,16 @@ var _ = Describe("Cron Scheduler System", Ordered, func() {
 			gormDB := testDB.GetDB()
 
 			job := &models.CronJob{
-				ID:              uuid.New().String(),
-				Name:            "cron-test-cleanup",
-				CronExpression:  "0 2 * * *", // Daily at 2 AM
-				HandlerType:     "cleanup_idempotency",
-				Payload:         "{}",
-				Timezone:        "UTC",
-				SkipMissedRuns:  true,
-				IsActive:        true,
-				CreatedAt:       time.Now(),
-				UpdatedAt:       time.Now(),
+				ID:             uuid.New().String(),
+				Name:           "cron-test-cleanup",
+				CronExpression: "0 2 * * *", // Daily at 2 AM
+				HandlerType:    "cleanup_idempotency",
+				Payload:        "{}",
+				Timezone:       "UTC",
+				SkipMissedRuns: true,
+				IsActive:       true,
+				CreatedAt:      time.Now(),
+				UpdatedAt:      time.Now(),
 			}
 
 			err := gormDB.Create(job).Error
@@ -91,12 +91,12 @@ var _ = Describe("Cron Scheduler System", Ordered, func() {
 			gormDB := testDB.GetDB()
 
 			expressions := []string{
-				"* * * * *",        // Every minute
-				"0 * * * *",        // Every hour
-				"0 0 * * *",        // Daily at midnight
-				"0 0 * * 0",        // Weekly on Sunday
-				"0 0 1 * *",        // Monthly on 1st
-				"*/5 * * * *",      // Every 5 minutes
+				"* * * * *",   // Every minute
+				"0 * * * *",   // Every hour
+				"0 0 * * *",   // Daily at midnight
+				"0 0 * * 0",   // Weekly on Sunday
+				"0 0 1 * *",   // Monthly on 1st
+				"*/5 * * * *", // Every 5 minutes
 			}
 
 			for _, expr := range expressions {

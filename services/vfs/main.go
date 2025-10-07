@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strconv"
 	"strings"
@@ -121,7 +122,6 @@ func main() {
 	workflowLoader := domain.NewWorkflowLoader(fileRepo, dirRepo, cfg.SchemaCacheTTL)
 	workflowGateEvaluator := domain.NewWorkflowGateEvaluator(fileRepo, cfg.PolicyCacheTTL)
 	workflowAuditRepo := mysql.NewGormWorkflowAuditRepository(database)
-	workflowEngine := domain.NewWorkflowEngine(workflowLoader, workflowGateEvaluator, fileRepo, dirRepo, workflowAuditRepo)
 
 	// Initialize event handler registry
 	handlerRegistry := handlers.NewRegistry()
@@ -138,6 +138,9 @@ func main() {
 			NATSConn:              natsConn, // Pass NATS connection (nil if not available)
 		},
 	)
+
+	// Initialize workflow engine with event dispatcher for real-time notifications
+	workflowEngine := domain.NewWorkflowEngine(workflowLoader, workflowGateEvaluator, fileRepo, dirRepo, workflowAuditRepo, eventTrigger)
 
 	// Initialize services
 	dirService := domain.NewDirectoryServiceWithLifecycle(database, eventTrigger)
@@ -213,6 +216,7 @@ func main() {
 	v1.DELETE("/files/*path", vfsServer.deleteFile)
 	v1.POST("/files/move", vfsServer.moveFile)
 	v1.GET("/files-version/*path", vfsServer.listVersions)
+	v1.GET("/search", vfsServer.searchFiles)
 
 	// Workflow routes
 	workflowHandler := vfshandlers.NewWorkflowHandler(workflowLoader, workflowEngine, fileService)
@@ -772,6 +776,254 @@ func (s *VFSServer) deleteFile(ctx context.Context, c *app.RequestContext) {
 	}
 
 	c.JSON(consts.StatusOK, response)
+}
+
+// searchFiles searches for files based on content or metadata
+func (s *VFSServer) searchFiles(ctx context.Context, c *app.RequestContext) {
+	var req struct {
+		JSONPath     string `json:"json_path,omitempty" query:"json_path"`
+		JQExpression string `json:"jq_expression,omitempty" query:"jq_expression"`
+		Value        string `json:"value,omitempty" query:"value"`
+		MetaKey      string `json:"meta_key,omitempty" query:"meta_key"`
+		MetaValue    string `json:"meta_value,omitempty" query:"meta_value"`
+		MetaJSONPath string `json:"meta_json_path,omitempty" query:"meta_json_path"`
+		MetaJQExpr   string `json:"meta_jq_expression,omitempty" query:"meta_jq_expression"`
+		Type         string `json:"type,omitempty" query:"type"` // "f" for files, "d" for directories
+		Limit        int    `json:"limit,omitempty" query:"limit"`
+	}
+
+	if err := c.BindAndValidate(&req); err != nil {
+		c.JSON(consts.StatusBadRequest, map[string]string{
+			"error": "invalid request parameters",
+		})
+		return
+	}
+
+	// Set default limit
+	if req.Limit <= 0 {
+		req.Limit = 100
+	}
+	if req.Limit > 1000 {
+		req.Limit = 1000 // Max limit
+	}
+
+	// Perform search
+	results, err := s.performSearch(ctx, req)
+	if err != nil {
+		c.JSON(consts.StatusInternalServerError, map[string]string{
+			"error": fmt.Sprintf("search failed: %v", err),
+		})
+		return
+	}
+
+	c.JSON(consts.StatusOK, map[string]interface{}{
+		"results": results,
+	})
+}
+
+// performSearch performs the actual database search
+func (s *VFSServer) performSearch(ctx context.Context, req struct {
+	JSONPath     string `json:"json_path,omitempty" query:"json_path"`
+	JQExpression string `json:"jq_expression,omitempty" query:"jq_expression"`
+	Value        string `json:"value,omitempty" query:"value"`
+	MetaKey      string `json:"meta_key,omitempty" query:"meta_key"`
+	MetaValue    string `json:"meta_value,omitempty" query:"meta_value"`
+	MetaJSONPath string `json:"meta_json_path,omitempty" query:"meta_json_path"`
+	MetaJQExpr   string `json:"meta_jq_expression,omitempty" query:"meta_jq_expression"`
+	Type         string `json:"type,omitempty" query:"type"`
+	Limit        int    `json:"limit,omitempty" query:"limit"`
+}) ([]map[string]interface{}, error) {
+	// Join with directories to get the full path
+	query := s.db.Model(&models.File{}).
+		Select("files.name, directories.path as directory_path, CONCAT(directories.path, '/', files.name) as path, files.size_bytes, files.content_type, files.metadata").
+		Joins("JOIN directories ON directories.id = files.directory_id").
+		Where("files.deleted_at IS NULL").
+		Where("directories.deleted_at IS NULL")
+
+	// JSON content query - support both JSONPath and JQ expressions
+	if req.JQExpression != "" && req.Value != "" {
+		// For JQ expressions, we need to process files individually
+		// First get all JSON files, then filter with JQ
+		query = query.Where("files.storage_type = ?", "json")
+	} else if req.JSONPath != "" && req.Value != "" {
+		// Use JSON_EXTRACT for MySQL JSONPath
+		query = query.Where("JSON_EXTRACT(files.json_content, ?) = ?", req.JSONPath, req.Value)
+	}
+
+	// Metadata query - support JSONPath, JQ expressions, and simple key-value
+	if req.MetaJQExpr != "" && req.Value != "" {
+		// For JQ expressions on metadata, process individually
+		// No additional WHERE clause needed here
+	} else if req.MetaJSONPath != "" && req.Value != "" {
+		// Use JSONPath for metadata search
+		query = query.Where("JSON_EXTRACT(files.metadata, ?) = ?", req.MetaJSONPath, req.Value)
+	} else if req.MetaKey != "" && req.MetaValue != "" {
+		// Simple key-value search for backward compatibility
+		query = query.Where("JSON_EXTRACT(files.metadata, ?) = ?", "$."+req.MetaKey, req.MetaValue)
+	}
+
+	// Type filter - currently only support files ("f"), directories ("d") not implemented yet
+	if req.Type == "d" {
+		// For now, return empty results for directory search
+		// TODO: Implement directory search if needed
+		return []map[string]interface{}{}, nil
+	}
+
+	// Limit results
+	query = query.Limit(req.Limit)
+
+	var results []struct {
+		Name          string  `json:"name"`
+		DirectoryPath string  `json:"directory_path"`
+		Path          string  `json:"path"`
+		Size          int64   `json:"size"`
+		ContentType   string  `json:"content_type"`
+		Metadata      *string `json:"-"` // Raw JSON string
+	}
+
+	if err := query.Find(&results).Error; err != nil {
+		return nil, err
+	}
+
+	// Process JQ expressions if needed
+	if req.JQExpression != "" || req.MetaJQExpr != "" {
+		results = s.filterWithJQ(ctx, results, req)
+	}
+
+	// Convert to response format with parsed metadata
+	response := make([]map[string]interface{}, len(results))
+	for i, result := range results {
+		// Parse metadata JSON
+		var metadata map[string]interface{}
+		if result.Metadata != nil {
+			if err := json.Unmarshal([]byte(*result.Metadata), &metadata); err != nil {
+				// If metadata is malformed, return empty object
+				metadata = make(map[string]interface{})
+			}
+		} else {
+			metadata = make(map[string]interface{})
+		}
+
+		response[i] = map[string]interface{}{
+			"name":           result.Name,
+			"directory_path": result.DirectoryPath,
+			"path":           result.Path,
+			"size_bytes":     result.Size,
+			"content_type":   result.ContentType,
+			"metadata":       metadata,
+		}
+	}
+
+	return response, nil
+}
+
+// filterWithJQ filters results using JQ expressions
+func (s *VFSServer) filterWithJQ(ctx context.Context, results []struct {
+	Name          string  `json:"name"`
+	DirectoryPath string  `json:"directory_path"`
+	Path          string  `json:"path"`
+	Size          int64   `json:"size"`
+	ContentType   string  `json:"content_type"`
+	Metadata      *string `json:"-"` // Raw JSON string
+}, req struct {
+	JSONPath     string `json:"json_path,omitempty" query:"json_path"`
+	JQExpression string `json:"jq_expression,omitempty" query:"jq_expression"`
+	Value        string `json:"value,omitempty" query:"value"`
+	MetaKey      string `json:"meta_key,omitempty" query:"meta_key"`
+	MetaValue    string `json:"meta_value,omitempty" query:"meta_value"`
+	MetaJSONPath string `json:"meta_json_path,omitempty" query:"meta_json_path"`
+	MetaJQExpr   string `json:"meta_jq_expression,omitempty" query:"meta_jq_expression"`
+	Type         string `json:"type,omitempty" query:"type"`
+	Limit        int    `json:"limit,omitempty" query:"limit"`
+}) []struct {
+	Name          string  `json:"name"`
+	DirectoryPath string  `json:"directory_path"`
+	Path          string  `json:"path"`
+	Size          int64   `json:"size"`
+	ContentType   string  `json:"content_type"`
+	Metadata      *string `json:"-"` // Raw JSON string
+} {
+	var filtered []struct {
+		Name          string  `json:"name"`
+		DirectoryPath string  `json:"directory_path"`
+		Path          string  `json:"path"`
+		Size          int64   `json:"size"`
+		ContentType   string  `json:"content_type"`
+		Metadata      *string `json:"-"` // Raw JSON string
+	}
+
+	for _, result := range results {
+		matches := true
+
+		// Check JQ expression on content
+		if req.JQExpression != "" && req.Value != "" {
+			if !s.evaluateJQOnContent(result.Path, req.JQExpression, req.Value) {
+				matches = false
+			}
+		}
+
+		// Check JQ expression on metadata
+		if req.MetaJQExpr != "" && req.Value != "" && matches {
+			if !s.evaluateJQOnMetadata(result.Metadata, req.MetaJQExpr, req.Value) {
+				matches = false
+			}
+		}
+
+		if matches {
+			filtered = append(filtered, result)
+			if len(filtered) >= req.Limit {
+				break
+			}
+		}
+	}
+
+	return filtered
+}
+
+// evaluateJQOnContent evaluates JQ expression on file content
+func (s *VFSServer) evaluateJQOnContent(filePath, jqExpr, expectedValue string) bool {
+	// Get file content
+	_, reader, err := s.fileService.GetFile(context.Background(), filePath, 0)
+	if err != nil {
+		return false
+	}
+	defer reader.Close()
+
+	content, err := io.ReadAll(reader)
+	if err != nil {
+		return false
+	}
+
+	// Run JQ command
+	cmd := exec.Command("jq", "-r", jqExpr)
+	cmd.Stdin = strings.NewReader(string(content))
+	output, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+
+	// Check if output matches expected value
+	result := strings.TrimSpace(string(output))
+	return result == expectedValue
+}
+
+// evaluateJQOnMetadata evaluates JQ expression on metadata
+func (s *VFSServer) evaluateJQOnMetadata(metadata *string, jqExpr, expectedValue string) bool {
+	if metadata == nil {
+		return false
+	}
+
+	// Run JQ command on metadata
+	cmd := exec.Command("jq", "-r", jqExpr)
+	cmd.Stdin = strings.NewReader(*metadata)
+	output, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+
+	// Check if output matches expected value
+	result := strings.TrimSpace(string(output))
+	return result == expectedValue
 }
 
 // handleValidationError handles validation errors with detailed field-specific messages

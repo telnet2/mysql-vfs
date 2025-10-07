@@ -644,5 +644,72 @@ func (c *Client) GetFileVersion(path string, version int64) ([]byte, string, int
 	return content, contentType, actualVersion, nil
 }
 
+// SearchResult represents a file found by search
+type SearchResult struct {
+	Name          string                 `json:"name"`
+	DirectoryPath string                 `json:"directory_path"`
+	Path          string                 `json:"path"`
+	SizeBytes     int64                  `json:"size_bytes"`
+	ContentType   string                 `json:"content_type"`
+	Metadata      map[string]interface{} `json:"metadata"`
+}
+
+// SearchFiles searches for files based on content or metadata
+func (c *Client) SearchFiles(jsonPath, jqExpr, value, metaKey, metaValue, metaJSONPath, metaJQExpr, fileType string, limit int) ([]SearchResult, error) {
+	params := url.Values{}
+	if jsonPath != "" {
+		params.Set("json_path", jsonPath)
+	}
+	if jqExpr != "" {
+		params.Set("jq_expression", jqExpr)
+	}
+	if value != "" {
+		params.Set("value", value)
+	}
+	if metaKey != "" {
+		params.Set("meta_key", metaKey)
+	}
+	if metaValue != "" {
+		params.Set("meta_value", metaValue)
+	}
+	if metaJSONPath != "" {
+		params.Set("meta_json_path", metaJSONPath)
+	}
+	if metaJQExpr != "" {
+		params.Set("meta_jq_expression", metaJQExpr)
+	}
+	if fileType != "" {
+		params.Set("type", fileType)
+	}
+	if limit > 0 {
+		params.Set("limit", fmt.Sprintf("%d", limit))
+	}
+
+	queryString := ""
+	if len(params) > 0 {
+		queryString = "?" + params.Encode()
+	}
+
+	resp, err := c.request("GET", "/api/v1/search"+queryString, nil, "")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("search failed: %s (status: %d)", string(body), resp.StatusCode)
+	}
+
+	var response struct {
+		Results []SearchResult `json:"results"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return nil, fmt.Errorf("failed to decode search response: %w", err)
+	}
+
+	return response.Results, nil
+}
+
 // Note: User/group management is handled via .user files and super user tokens.
 // There are no database-backed user tables or traditional login endpoints.

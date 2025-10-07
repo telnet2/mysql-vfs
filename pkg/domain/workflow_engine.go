@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/telnet2/mysql-vfs/pkg/events"
 	"github.com/telnet2/mysql-vfs/pkg/models"
 	"github.com/telnet2/mysql-vfs/pkg/persistence/db"
 )
@@ -44,21 +45,23 @@ type gateEvaluator interface {
 
 // WorkflowEngine coordinates workflow validation and gate evaluation
 type WorkflowEngine struct {
-	workflowLoader *WorkflowLoader
-	gateEvaluator  gateEvaluator
-	fileRepo       db.FileRepository
-	dirRepo        db.DirectoryRepository
-	auditRepo      db.WorkflowAuditRepository
+	workflowLoader  *WorkflowLoader
+	gateEvaluator   gateEvaluator
+	fileRepo        db.FileRepository
+	dirRepo         db.DirectoryRepository
+	auditRepo       db.WorkflowAuditRepository
+	eventDispatcher events.EventTrigger
 }
 
 // NewWorkflowEngine creates a workflow engine instance
-func NewWorkflowEngine(loader *WorkflowLoader, evaluator *WorkflowGateEvaluator, fileRepo db.FileRepository, dirRepo db.DirectoryRepository, auditRepo db.WorkflowAuditRepository) *WorkflowEngine {
+func NewWorkflowEngine(loader *WorkflowLoader, evaluator *WorkflowGateEvaluator, fileRepo db.FileRepository, dirRepo db.DirectoryRepository, auditRepo db.WorkflowAuditRepository, eventDispatcher events.EventTrigger) *WorkflowEngine {
 	return &WorkflowEngine{
-		workflowLoader: loader,
-		gateEvaluator:  evaluator,
-		fileRepo:       fileRepo,
-		dirRepo:        dirRepo,
-		auditRepo:      auditRepo,
+		workflowLoader:  loader,
+		gateEvaluator:   evaluator,
+		fileRepo:        fileRepo,
+		dirRepo:         dirRepo,
+		auditRepo:       auditRepo,
+		eventDispatcher: eventDispatcher,
 	}
 }
 
@@ -351,7 +354,37 @@ func (e *WorkflowEngine) recordAudit(ctx context.Context, workflow *WorkflowDefi
 		CreatedAt:      time.Now(),
 	}
 
-	return e.auditRepo.Create(ctx, audit)
+	// Create audit record
+	if err := e.auditRepo.Create(ctx, audit); err != nil {
+		return err
+	}
+
+	// Emit real-time events for observability and automation
+	if e.eventDispatcher != nil {
+		errMsg := ""
+		if errorMessage != nil {
+			errMsg = *errorMessage
+		}
+
+		payload := events.WorkflowEventPayload{
+			FilePath:     audit.FilePath,
+			WorkflowPath: audit.WorkflowPath,
+			FromState:    audit.FromState,
+			ToState:      audit.ToState,
+			Operation:    audit.Operation,
+			Actor:        events.WorkflowActorContext{ID: actor.ID, Groups: actor.Groups},
+			ErrorMessage: errMsg,
+			Timestamp:    audit.CreatedAt,
+		}
+
+		if success {
+			e.eventDispatcher.Emit(ctx, events.EventWorkflowTransitionSucceeded, payload)
+		} else {
+			e.eventDispatcher.Emit(ctx, events.EventWorkflowTransitionFailed, payload)
+		}
+	}
+
+	return nil
 }
 
 func fallbackState(state, defaultState string) string {

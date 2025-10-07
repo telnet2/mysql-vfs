@@ -46,10 +46,10 @@ var _ = Describe("Auth Login Endpoint E2E", Ordered, func() {
 		if err != nil {
 			// Create root directory manually
 			rootDir := &models.Directory{
-				ID:        "root",
-				Name:      "",
-				Path:      "/",
-				ParentID:  nil,
+				ID:       "root",
+				Name:     "",
+				Path:     "/",
+				ParentID: nil,
 			}
 			err = testDB.GetDB().Create(rootDir).Error
 			Expect(err).NotTo(HaveOccurred())

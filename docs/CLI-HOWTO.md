@@ -255,6 +255,16 @@ shell:/app$ $      # Switch back to VFS mode
 # Search file contents
 /> grep "error" /logs/app.log   # Search for "error" in file
 /> grep "user_id" /data/        # Search recursively in directory
+
+# Advanced JSON search with JSONPath (fast SQL queries)
+/> search --json-path '$.name' --value 'John'                    # Find JSON files with name=John
+/> search --json-path '$.users[0].email' --value 'user@test.com' # Nested object search
+/> search --meta-json-path '$.owner' --value 'admin'             # Search by metadata
+
+# Powerful JQ expression search (advanced processing)
+/> search --jq-expression '.users[] | select(.age > 21).name' --value 'Alice'  # Complex filtering
+/> search --jq-expression '.items | map(.price) | add' --value '100'           # Mathematical operations
+/> search --meta-jq-expression '.tags | contains(["important"])' --value 'true' # Array operations
 ```
 
 #### JSON Operations
@@ -264,6 +274,11 @@ shell:/app$ $      # Switch back to VFS mode
 /> jq /data/config.json '.'
 /> jq /users.json '.users[] | select(.active)'
 /> jq /config.json '.database.host'
+
+# Search across multiple JSON files
+/> search --json-path '$.status' --value 'active'              # Find active records
+/> search --jq-expression '.price | select(. > 100)' --value '150'  # Find expensive items
+/> search --meta-json-path '$.schema' --value 'user-v1'        # Find by schema version
 ```
 
 #### Version Control
@@ -387,8 +402,30 @@ shell:/app$ $
 # Search for specific content
 /> grep "error" /logs/
 
+# Advanced JSON search across files
+/> search --json-path '$.status' --value 'completed'    # Find completed tasks
+/> search --meta-json-path '$.owner' --value 'john'     # Find John's files
+
 # Copy found files to backup
 /> cp /data/*.json /backup/
+```
+
+#### JSON Data Analysis Workflow
+
+```bash
+# Import JSON datasets
+/> mkdir datasets
+/> import ~/data/users.json /datasets/users.json
+/> import ~/data/orders.json /datasets/orders.json
+
+# Analyze data with search
+/> search --json-path '$.role' --value 'admin'           # Find admin users
+/> search --jq-expression '.orders | length' --value '5' # Find users with 5+ orders
+/> search --meta-json-path '$.version' --value 'v2.0'    # Find v2.0 datasets
+
+# Query specific fields
+/> jq /datasets/users.json '.[] | select(.active == true).name'
+/> search --jq-expression '.[] | select(.active == true).name' --value 'John'
 ```
 
 ## Command Reference
@@ -413,6 +450,7 @@ rm <path>                         # Remove files (supports globs)
 # Search operations
 grep <pattern> <path>             # Search for pattern in files
 find <path> [options]             # Find files and directories
+search [options]                  # Advanced JSON search with JSONPath/JQ
 
 # JSON operations
 jq <path> [expression]            # Query JSON files
@@ -442,6 +480,50 @@ find <path> -size <n>              # Files of exact size n bytes
 find <path> -size +<n>             # Files larger than n bytes
 find <path> -size -<n>             # Files smaller than n bytes
 ```
+
+### Search Command Options
+
+The `search` command provides powerful JSON querying with two approaches:
+
+#### JSONPath Queries (Fast SQL-based)
+```bash
+# Content search
+search --json-path '$.name' --value 'John'                    # Simple field
+search --json-path '$.user.email' --value 'user@test.com'     # Nested objects
+search --json-path '$.items[0].price' --value '29.99'         # Array elements
+
+# Metadata search
+search --meta-json-path '$.owner' --value 'admin'             # Simple metadata
+search --meta-json-path '$.permissions.write' --value 'true'  # Nested metadata
+```
+
+#### JQ Expression Queries (Powerful processing)
+```bash
+# Content filtering and transformation
+search --jq-expression '.users[] | select(.age > 21).name' --value 'Alice'    # Filter by age
+search --jq-expression '.items | map(.price) | add' --value '100'             # Sum prices
+search --jq-expression '.data | keys | length' --value '5'                    # Count keys
+
+# Metadata operations
+search --meta-jq-expression '.tags | contains(["important"])' --value 'true'  # Tag filtering
+search --meta-jq-expression '.permissions | has("admin")' --value 'true'      # Permission check
+```
+
+#### Search Options
+```bash
+--json-path <path>           # JSONPath for file content (fast)
+--jq-expression <expr>       # JQ expression for file content (powerful)
+--meta-json-path <path>      # JSONPath for metadata (fast)
+--meta-jq-expression <expr>  # JQ expression for metadata (powerful)
+--value <value>              # Expected result value
+--type f|d                   # Search files (f) or directories (d)
+--limit <n>                  # Maximum results (default: 100)
+```
+
+#### Performance Notes
+- **JSONPath**: ⚡ Fast SQL queries, best for simple field access
+- **JQ Expressions**: 🐌 Slower but powerful, processes files individually
+- Use JSONPath for frequent searches, JQ for complex one-off queries
 
 ### Piping Support
 
@@ -699,8 +781,8 @@ The VFS CLI provides a comprehensive interface for managing files in the Virtual
 
 **Key Commands:**
 - File operations: `ls`, `cat`, `cp`, `mv`, `rm`, `import`
-- Search: `grep`, `find`
-- JSON processing: `jq`
+- Search: `grep`, `find`, `search` (advanced JSON search)
+- JSON processing: `jq`, `search` (JSONPath/JQ queries)
 - Directory management: `cd`, `pwd`, `mkdir`, `rmdir`
 
 ## Next Steps
