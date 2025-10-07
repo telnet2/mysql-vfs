@@ -57,93 +57,10 @@ CGO_ENABLED=0 go build -o "${BIN_DIR}/vfs-cli" ./cli
 echo ""
 echo -e "${GREEN}Copying configuration files...${NC}"
 
-# Copy example config files
-if [ -f "config.example.yaml" ]; then
-  echo "  → Copying config.example.yaml"
-  cp config.example.yaml "${CONF_DIR}/"
-fi
-
-if [ -f "config.local.yaml" ]; then
-  echo "  → Copying config.local.yaml"
-  cp config.local.yaml "${CONF_DIR}/"
-fi
-
-# Copy webhook configs if they exist
-if [ -d "deployments/webhook-configs" ]; then
-  echo "  → Copying webhook configurations"
-  cp -r deployments/webhook-configs "${CONF_DIR}/"
-fi
-
 # Create a sample production config
-echo "  → Creating config.production.yaml template"
-cat > "${CONF_DIR}/config.production.yaml" << 'EOF'
-# MySQL VFS Production Configuration
-# Copy this file and customize for your environment
+echo "  → Copying conf/*"
+cp -r conf ${CONF_DIR}
 
-database:
-  dsn: "${DB_DSN}"  # Set via environment variable
-  table_prefix: "vfs_"
-
-storage:
-  s3:
-    endpoint: "${S3_ENDPOINT}"
-    bucket: "${S3_BUCKET}"
-    region: "${AWS_REGION:-us-east-1}"
-
-messaging:
-  nats:
-    url: "${NATS_URL}"
-
-server:
-  port: 8080
-
-logging:
-  level: "info"
-
-auth:
-  provider: "jwt"
-  allow_anonymous: false
-  jwt:
-    secret: "${JWT_SECRET}"
-    issuer: "mysql-vfs-production"
-    ttl: "24h"
-  system_admin:
-    token: "${SYSTEM_ADMIN_TOKEN}"
-    id: "system-admin"
-
-cache:
-  user_ttl: "5m"
-  schema_ttl: "5m"
-  policy_ttl: "5m"
-  quota_ttl: "5m"
-
-idempotency:
-  ttl: "24h"
-
-services:
-  event_worker:
-    worker_count: 10
-    poll_interval: "1s"
-    batch_size: 10
-
-  scheduler:
-    scheduler_id: "${HOSTNAME:-scheduler-1}"
-    poll_interval: "10s"
-    lease_duration: "5m"
-    heartbeat_interval: "30s"
-
-  webhook_orchestrator:
-    daemon_url: "http://localhost:9000"
-    worker_count: 5
-    poll_interval: "1s"
-    batch_size: 10
-
-  event_publisher:
-    port: 8083
-    event_buffer_size: 1000
-    max_connections: 100
-    auth_enabled: true
-EOF
 
 # Copy bootstrap script
 echo "  → Copying bootstrap.sh"
