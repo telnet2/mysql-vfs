@@ -59,6 +59,8 @@ services:
     build:
       context: .
       dockerfile: services/vfs/Dockerfile
+      secrets:
+        - git-credentials
     container_name: cc-vfs-service
     depends_on:
       mysql:
@@ -67,18 +69,14 @@ services:
         condition: service_started
       nats:
         condition: service_healthy
+    volumes:
+      - ./config.local.yaml:/app/config.yaml:ro
     environment:
-      DB_DSN: root:root@tcp(mysql:3306)/vfs?charset=utf8mb4&parseTime=True&loc=Local
-      S3_ENDPOINT: http://localstack:4566
-      S3_BUCKET: cc-vfs-storage
+      # AWS credentials for LocalStack (required by AWS SDK)
       AWS_ACCESS_KEY_ID: test
       AWS_SECRET_ACCESS_KEY: test
-      AWS_REGION: us-east-1
       AWS_S3_FORCE_PATH_STYLE: "true"
-      PORT: 8080
-      LOG_LEVEL: debug
-      SYSTEM_ADMIN_TOKEN: local-system-admin
-      NATS_URL: nats://nats:4222
+    command: ["./vfs-service", "--conf", "/app/config.yaml"]
     ports:
       - "18080:8080"
     healthcheck:
@@ -107,16 +105,17 @@ services:
     build:
       context: .
       dockerfile: services/webhook-orchestrator/Dockerfile
+      secrets:
+        - git-credentials
     container_name: cc-vfs-webhook-orchestrator
     depends_on:
       vfs-service:
         condition: service_healthy
       webhook-daemon:
         condition: service_started
-    environment:
-      DB_DSN: root:root@tcp(mysql:3306)/vfs?charset=utf8mb4&parseTime=True&loc=Local
-      WEBHOOK_DAEMON_URL: http://webhook-daemon:9000
-      LOG_LEVEL: debug
+    volumes:
+      - ./config.local.yaml:/app/config.yaml:ro
+    command: ["./webhook-orchestrator", "--conf", "/app/config.yaml"]
     networks:
       - cc-vfs-network
     restart: unless-stopped
@@ -125,15 +124,15 @@ services:
     build:
       context: .
       dockerfile: services/event-worker/Dockerfile
+      secrets:
+        - git-credentials
     container_name: cc-vfs-event-worker
     depends_on:
       vfs-service:
         condition: service_healthy
-    environment:
-      DB_DSN: root:root@tcp(mysql:3306)/vfs?charset=utf8mb4&parseTime=True&loc=Local
-      WORKER_CONCURRENCY: 10
-      POLL_INTERVAL: 1s
-      LOG_LEVEL: debug
+    volumes:
+      - ./config.local.yaml:/app/config.yaml:ro
+    command: ["./event-worker", "--conf", "/app/config.yaml"]
     networks:
       - cc-vfs-network
     restart: unless-stopped
@@ -144,15 +143,15 @@ services:
     build:
       context: .
       dockerfile: services/scheduler/Dockerfile
+      secrets:
+        - git-credentials
     container_name: cc-vfs-scheduler
     depends_on:
       vfs-service:
         condition: service_healthy
-    environment:
-      DB_DSN: root:root@tcp(mysql:3306)/vfs?charset=utf8mb4&parseTime=True&loc=Local
-      SCHEDULER_ID: ${HOSTNAME:-scheduler-1}
-      POLL_INTERVAL: 10s
-      LOG_LEVEL: debug
+    volumes:
+      - ./config.local.yaml:/app/config.yaml:ro
+    command: ["./scheduler", "--conf", "/app/config.yaml"]
     networks:
       - cc-vfs-network
     restart: unless-stopped
@@ -163,17 +162,15 @@ services:
     build:
       context: .
       dockerfile: services/event-publisher/Dockerfile
+      secrets:
+        - git-credentials
     container_name: cc-vfs-event-publisher
     depends_on:
       nats:
         condition: service_healthy
-    environment:
-      NATS_URL: nats://nats:4222
-      EVENT_BUFFER_SIZE: 1000
-      SSE_MAX_CONNECTIONS: 100
-      PORT: 8083
-      JWT_SECRET: ${JWT_SECRET:-your-secret-key-change-in-production}
-      AUTH_ENABLED: ${AUTH_ENABLED:-false}  # Set to true in production
+    volumes:
+      - ./config.local.yaml:/app/config.yaml:ro
+    command: ["./event-publisher", "--conf", "/app/config.yaml"]
     ports:
       - "18083:8083"
     healthcheck:
@@ -190,12 +187,14 @@ services:
     build:
       context: .
       dockerfile: cli/Dockerfile
+      secrets:
+        - git-credentials
     depends_on:
       vfs-service:
         condition: service_healthy
     environment:
       VFS_SERVICE_URL: http://vfs-service:8080
-      LOG_LEVEL: info
+      SYSTEM_ADMIN_TOKEN: local-system-admin
     stdin_open: true
     tty: true
     networks:
@@ -210,3 +209,7 @@ volumes:
 networks:
   cc-vfs-network:
     driver: bridge
+
+secrets:
+  git-credentials:
+    file: ${HOME}/.git-credentials

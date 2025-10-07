@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -17,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/telnet2/mysql-vfs/pkg/config"
 	"github.com/telnet2/mysql-vfs/pkg/models"
 	persistencedb "github.com/telnet2/mysql-vfs/pkg/persistence/db"
 	"gorm.io/gorm"
@@ -42,8 +44,30 @@ type WebhookOrchestrator struct {
 }
 
 func main() {
-	// Load configuration
-	dsn := getEnv("DB_DSN", "root:root@tcp(localhost:3306)/vfs?charset=utf8mb4&parseTime=True&loc=Local")
+	// Parse command-line flags
+	configFile := flag.String("conf", "", "Path to configuration file (optional, uses env vars if not specified)")
+	flag.Parse()
+
+	// Load configuration (supports both config file and env vars)
+	var cfg *config.Config
+	var err error
+	if *configFile != "" {
+		log.Printf("Loading configuration from file: %s", *configFile)
+		cfg, err = config.LoadConfig(*configFile)
+		if err != nil {
+			log.Fatalf("Failed to load config file: %v", err)
+		}
+	} else {
+		log.Println("Loading configuration from environment variables")
+		cfg, err = config.LoadConfigWithEnv()
+		if err != nil {
+			log.Fatalf("Failed to load configuration: %v", err)
+		}
+	}
+
+	// Extract webhook-orchestrator-specific configuration
+	dsn := cfg.DatabaseDSN
+	tablePrefix := cfg.TablePrefix
 	workerCount := getEnvInt("WORKER_COUNT", DefaultWorkerCount)
 	pollInterval := getEnvDuration("POLL_INTERVAL", DefaultPollInterval)
 	batchSize := getEnvInt("BATCH_SIZE", DefaultBatchSize)
@@ -53,8 +77,9 @@ func main() {
 	log.Printf("Worker count: %d, Poll interval: %v, Batch size: %d", workerCount, pollInterval, batchSize)
 
 	database, err := persistencedb.Connect(persistencedb.Config{
-		DSN:      dsn,
-		LogLevel: logger.Info,
+		DSN:         dsn,
+		TablePrefix: tablePrefix,
+		LogLevel:    logger.Info,
 	})
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)

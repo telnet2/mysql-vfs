@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"log"
 	"net/http"
 	"net/url"
@@ -16,6 +17,8 @@ import (
 	"github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/telnet2/mysql-vfs/pkg/config"
+	"github.com/telnet2/mysql-vfs/pkg/discovery"
 	"github.com/telnet2/mysql-vfs/pkg/sse"
 )
 
@@ -32,12 +35,36 @@ type EventPublisher struct {
 }
 
 func main() {
-	// Load configuration from environment
+	// Parse command-line flags
+	configFile := flag.String("conf", "", "Path to configuration file (optional, uses env vars if not specified)")
+	flag.Parse()
+
+	// Load configuration (supports both config file and env vars)
+	var cfg *config.Config
+	var err error
+	if *configFile != "" {
+		log.Printf("Loading configuration from file: %s", *configFile)
+		cfg, err = config.LoadConfig(*configFile)
+		if err != nil {
+			log.Fatalf("Failed to load config file: %v", err)
+		}
+	} else {
+		log.Println("Loading configuration from environment variables")
+		cfg, err = config.LoadConfigWithEnv()
+		if err != nil {
+			log.Fatalf("Failed to load configuration: %v", err)
+		}
+	}
+
+	// Extract event-publisher-specific configuration
 	natsURL := getEnv("NATS_URL", "nats://localhost:4222")
 	eventBufferSize := getEnvInt("EVENT_BUFFER_SIZE", DefaultEventBufferSize)
 	maxConnections := getEnvInt("SSE_MAX_CONNECTIONS", DefaultMaxConnections)
 	serverPort := getEnv("PORT", "8083")
-	jwtSecret := os.Getenv("JWT_SECRET")
+	jwtSecret := cfg.Auth.JWTSecret
+	if jwtSecret == "" {
+		jwtSecret = os.Getenv("JWT_SECRET")
+	}
 	authEnabled := getEnvBool("AUTH_ENABLED", true)
 
 	log.Printf("Event Publisher starting...")
@@ -46,25 +73,17 @@ func main() {
 	log.Printf("Max SSE connections: %d", maxConnections)
 	log.Printf("Authentication: %v", authEnabled)
 
-	// Connect to NATS
-	log.Printf("Connecting to NATS at %s...", natsURL)
-	nc, err := nats.Connect(natsURL,
-		nats.MaxReconnects(-1),
-		nats.ReconnectWait(2*time.Second),
-		nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
-			if err != nil {
-				log.Printf("NATS disconnected: %v", err)
-			}
-		}),
-		nats.ReconnectHandler(func(nc *nats.Conn) {
-			log.Printf("NATS reconnected to %s", nc.ConnectedUrl())
-		}),
-	)
+	// Connect to NATS with Consul support
+	// Supports both regular URLs and consul+ URLs:
+	//   NATS_URL=nats://localhost:4222
+	//   NATS_URL=consul+nats://nats-service
+	//   NATS_URL=consul+nats://nats-cluster?consul.cluster=prod
+	log.Printf("Connecting to NATS (URL: %s)...", natsURL)
+	nc, err := discovery.NewNATSConnection(natsURL)
 	if err != nil {
 		log.Fatalf("Failed to connect to NATS: %v", err)
 	}
 	defer nc.Close()
-	log.Printf("Connected to NATS successfully")
 
 	// Initialize metrics
 	metrics := NewMetrics()

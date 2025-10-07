@@ -34,4 +34,13 @@ _testmain.go
 /output
 *.local.yml
 dumped_hertz_remote_config.json
-vfs-cli		  
+vfs-cli
+
+# Config files (keep examples only)
+config.yaml
+config.yml
+config.*.yaml
+config.*.yml
+!config.example.yaml
+!config.development.yaml
+!config.production.yaml		  

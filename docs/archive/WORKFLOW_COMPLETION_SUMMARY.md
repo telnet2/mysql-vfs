@@ -190,16 +190,16 @@ Successfully implemented a **comprehensive workflow system** for mysql-vfs with 
 - `services/vfs/main.go` - Registered workflow routes
 
 **Endpoints:**
-1. **GET /api/v1/workflows/{filepath}/info**
+1. **GET /api/v1/workflows/info/{filepath}**
    - Returns workflow metadata, current state, all states
    - Response indicates if no workflow exists
 
-2. **GET /api/v1/workflows/{filepath}/transitions**
+2. **GET /api/v1/workflows/transitions/{filepath}**
    - Returns user-specific valid transitions
    - Includes target paths and gate requirements
    - Lists all available states
 
-3. **POST /api/v1/workflows/{filepath}/next**
+3. **POST /api/v1/workflows/next/{filepath}**
    - Transitions file to new state
    - Supports structure preservation
    - Full workflow validation
@@ -442,11 +442,11 @@ curl -X POST http://localhost:8080/api/v1/files \
   -F "file=@proposal.pdf"
 
 # 4. Get available transitions
-curl http://localhost:8080/api/v1/workflows/documents/draft/proposal.pdf/transitions \
+curl http://localhost:8080/api/v1/workflows/transitions/documents/draft/proposal.pdf \
   -H "Authorization: Bearer $TOKEN"
 
 # 5. Move to review
-curl -X POST http://localhost:8080/api/v1/workflows/documents/draft/proposal.pdf/next \
+curl -X POST http://localhost:8080/api/v1/workflows/next/documents/draft/proposal.pdf \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"target_state": "review"}'

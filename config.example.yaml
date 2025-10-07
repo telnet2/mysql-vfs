@@ -1,0 +1,366 @@
+# ============================================================================
+# MySQL VFS Configuration File
+# ============================================================================
+# This is the main configuration file for MySQL VFS and all its services.
+# Copy this file to config.yaml and customize for your environment.
+#
+# Configuration Priority (highest to lowest):
+#   1. Command-line flags
+#   2. Environment variables (for backward compatibility and secrets)
+#   3. Config file values
+#   4. Default values
+#
+# For production: Use environment variables for secrets (marked with ${VAR})
+# Environment variable interpolation: ${VAR_NAME} will be replaced with env var value
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# Database Configuration
+# REQUIRED: MySQL database connection settings
+# Used in: pkg/config/config.go, pkg/persistence/db/migrate.go
+# All services: vfs, event-worker, scheduler, webhook-orchestrator
+# ----------------------------------------------------------------------------
+database:
+  # REQUIRED: MySQL connection string (DSN format)
+  # Env var: DB_DSN
+  # Used in: pkg/persistence/db/migrate.go:Connect()
+  # Format: user:password@tcp(host:port)/database?charset=utf8mb4&parseTime=True&loc=Local
+  dsn: "root:root@tcp(localhost:3306)/vfs?charset=utf8mb4&parseTime=True&loc=Local"
+  
+  # OPTIONAL: Table name prefix for multi-tenancy
+  # Env var: TABLE_PREFIX
+  # Used in: pkg/persistence/db/migrate.go (customNamingStrategy)
+  # Default: "vfs_"
+  table_prefix: "vfs_"
+
+# ----------------------------------------------------------------------------
+# Storage Configuration
+# REQUIRED: Object storage settings (S3-compatible)
+# Used in: pkg/persistence/storage/s3.go, services/vfs/main.go
+# ----------------------------------------------------------------------------
+storage:
+  s3:
+    # REQUIRED: S3 endpoint URL
+    # Env var: S3_ENDPOINT
+    # Used in: pkg/persistence/storage/s3.go:NewStorageFromEnv()
+    # Examples: 
+    #   - LocalStack: "http://localhost:4566"
+    #   - MinIO: "http://minio:9000"
+    #   - AWS: "https://s3.amazonaws.com"
+    endpoint: "http://localhost:4566"
+    
+    # REQUIRED: S3 bucket name
+    # Env var: S3_BUCKET
+    # Used in: pkg/persistence/storage/s3.go:NewStorageFromEnv()
+    bucket: "cc-vfs-storage"
+    
+    # REQUIRED: AWS region
+    # Env var: AWS_REGION
+    # Used in: pkg/persistence/storage/s3.go:NewStorageFromEnv()
+    region: "us-east-1"
+
+# ----------------------------------------------------------------------------
+# Messaging Configuration (NATS)
+# OPTIONAL: Event streaming and pub/sub messaging
+# Used in: services/vfs/main.go, services/event-publisher/main.go
+# ----------------------------------------------------------------------------
+messaging:
+  nats:
+    # OPTIONAL: NATS server URL (empty disables NATS features)
+    # Env var: NATS_URL
+    # Used in: services/vfs/main.go:93, services/event-publisher/main.go:37
+    # Default: "" (disabled)
+    # Example: "nats://localhost:4222"
+    url: "nats://localhost:4222"
+
+# ----------------------------------------------------------------------------
+# Server Configuration
+# REQUIRED: HTTP server settings
+# Used in: services/vfs/main.go, services/event-publisher/main.go
+# ----------------------------------------------------------------------------
+server:
+  # REQUIRED: HTTP server port for VFS service
+  # Env var: PORT
+  # Used in: pkg/config/config.go:LoadFromEnv(), services/vfs/main.go
+  # Default: 8080
+  port: 8080
+
+# ----------------------------------------------------------------------------
+# Logging Configuration
+# Used in: All services
+# ----------------------------------------------------------------------------
+logging:
+  # REQUIRED: Log level (debug, info, warn, error)
+  # Env var: LOG_LEVEL
+  # Used in: All services/*/main.go
+  # Default: "info"
+  level: "info"
+
+# ----------------------------------------------------------------------------
+# Authentication & Authorization
+# REQUIRED: Authentication provider and settings
+# Used in: pkg/config/config.go, pkg/middleware/auth.go
+# File reference: docs/SECURITY.md
+# ----------------------------------------------------------------------------
+auth:
+  # REQUIRED: Authentication provider
+  # Env var: AUTH_PROVIDER
+  # Used in: pkg/config/config.go:LoadFromEnv()
+  # Options: jwt, oauth, mtls, proxy, headers (dev only), file
+  # Default: "headers"
+  # File reference: docs/SECURITY.md (Authentication Methods)
+  provider: "headers"
+  
+  # OPTIONAL: Allow anonymous access (bypass authentication)
+  # Env var: AUTH_ALLOW_ANONYMOUS
+  # Used in: pkg/middleware/auth.go
+  # Default: false
+  allow_anonymous: false
+  
+  # JWT Authentication Configuration
+  # File reference: docs/SECURITY.md (JWT Authentication)
+  jwt:
+    # REQUIRED (if provider=jwt): JWT signing secret
+    # Env var: AUTH_JWT_SECRET or JWT_SECRET
+    # Used in: pkg/middleware/auth.go, services/event-publisher/main.go:41
+    # SECURITY: Use env var interpolation: ${JWT_SECRET}
+    secret: "${JWT_SECRET}"
+    
+    # OPTIONAL: JWT issuer claim
+    # Env var: AUTH_JWT_ISSUER
+    # Used in: pkg/middleware/auth.go
+    # Default: "mysql-vfs"
+    issuer: "mysql-vfs"
+    
+    # OPTIONAL: JWT token TTL
+    # Env var: AUTH_JWT_TTL_SECONDS
+    # Used in: pkg/config/config.go:LoadFromEnv()
+    # Default: "24h"
+    ttl: "24h"
+  
+  # OAuth 2.0 Configuration
+  # File reference: docs/SECURITY.md (OAuth Authentication)
+  oauth:
+    # REQUIRED (if provider=oauth): OAuth introspection endpoint
+    # Env var: AUTH_OAUTH_INTROSPECTION_URL
+    # Used in: pkg/middleware/auth.go
+    introspection_url: ""
+    
+    # REQUIRED (if provider=oauth): OAuth client ID
+    # Env var: AUTH_OAUTH_CLIENT_ID
+    # Used in: pkg/middleware/auth.go
+    client_id: ""
+    
+    # REQUIRED (if provider=oauth): OAuth client secret
+    # Env var: AUTH_OAUTH_CLIENT_SECRET
+    # Used in: pkg/middleware/auth.go
+    # SECURITY: Use env var interpolation: ${AUTH_OAUTH_CLIENT_SECRET}
+    client_secret: "${AUTH_OAUTH_CLIENT_SECRET}"
+  
+  # mTLS Configuration
+  # File reference: docs/SECURITY.md (mTLS Authentication)
+  mtls:
+    # REQUIRED (if provider=mtls): CA certificate file path
+    # Env var: AUTH_MTLS_CA_FILE
+    # Used in: pkg/middleware/auth.go
+    ca_file: ""
+    
+    # REQUIRED (if provider=mtls): Server certificate file path
+    # Env var: AUTH_MTLS_CERT_FILE
+    # Used in: pkg/middleware/auth.go
+    cert_file: ""
+    
+    # REQUIRED (if provider=mtls): Server private key file path
+    # Env var: AUTH_MTLS_KEY_FILE
+    # Used in: pkg/middleware/auth.go
+    key_file: ""
+  
+  # Reverse Proxy Authentication
+  # File reference: docs/SECURITY.md (Proxy Authentication)
+  proxy:
+    # REQUIRED (if provider=proxy): Shared secret for HMAC validation
+    # Env var: AUTH_PROXY_SHARED_SECRET
+    # Used in: pkg/middleware/auth.go
+    # SECURITY: Use env var interpolation: ${AUTH_PROXY_SHARED_SECRET}
+    shared_secret: "${AUTH_PROXY_SHARED_SECRET}"
+  
+  # File-Based Authentication (.user files)
+  # File reference: docs/SECURITY.md (File-Based Auth), pkg/domain/user_loader.go
+  file:
+    # REQUIRED (if provider=file): Root directory for .user files
+    # Env var: FILE_AUTH_DIRECTORY
+    # Used in: pkg/domain/user_loader.go
+    # Default: "/"
+    directory: "/"
+  
+  # System Admin (Emergency/Bootstrap Access)
+  # File reference: docs/SECURITY.md (System Admin Token)
+  system_admin:
+    # OPTIONAL: System admin token (bypasses ALL authorization)
+    # Env var: SYSTEM_ADMIN_TOKEN
+    # Used in: pkg/middleware/auth.go, cli/cmd/root.go:134
+    # SECURITY: Use env var interpolation: ${SYSTEM_ADMIN_TOKEN}
+    # WARNING: This token bypasses all policies and quotas
+    token: "${SYSTEM_ADMIN_TOKEN}"
+    
+    # OPTIONAL: System admin user ID
+    # Env var: SYSTEM_ADMIN_ID
+    # Used in: pkg/middleware/auth.go
+    # Default: "system-admin"
+    id: "system-admin"
+
+# ----------------------------------------------------------------------------
+# Cache Configuration
+# OPTIONAL: TTL settings for various caches
+# Used in: pkg/config/config.go, pkg/domain/*.go
+# File reference: pkg/domain/user_loader.go, pkg/domain/schema_validator.go, 
+#                 pkg/domain/policy_loader.go, pkg/domain/quota_manager.go
+# ----------------------------------------------------------------------------
+cache:
+  # OPTIONAL: User authentication cache TTL
+  # Env var: USER_CACHE_TTL_SECONDS
+  # Used in: pkg/domain/user_loader.go
+  # Default: "5m"
+  user_ttl: "5m"
+  
+  # OPTIONAL: Schema validation cache TTL
+  # Env var: SCHEMA_CACHE_TTL_SECONDS
+  # Used in: pkg/domain/schema_validator.go
+  # Default: "5m"
+  schema_ttl: "5m"
+  
+  # OPTIONAL: Policy cache TTL
+  # Env var: POLICY_CACHE_TTL_SECONDS
+  # Used in: pkg/domain/policy_loader.go
+  # Default: "5m"
+  policy_ttl: "5m"
+  
+  # OPTIONAL: Quota cache TTL
+  # Env var: QUOTA_CACHE_TTL_SECONDS
+  # Used in: pkg/domain/quota_manager.go
+  # Default: "5m"
+  quota_ttl: "5m"
+
+# ----------------------------------------------------------------------------
+# Idempotency Configuration
+# OPTIONAL: Idempotency key expiration settings
+# Used in: pkg/config/config.go, pkg/middleware/idempotency.go
+# File reference: pkg/middleware/idempotency.go
+# ----------------------------------------------------------------------------
+idempotency:
+  # OPTIONAL: TTL for idempotency keys
+  # Env var: IDEMPOTENCY_TTL_SECONDS
+  # Used in: pkg/middleware/idempotency.go
+  # Default: "24h"
+  ttl: "24h"
+
+# ----------------------------------------------------------------------------
+# Microservices Configuration
+# OPTIONAL: Individual service settings (only applies when running services)
+# File reference: docs/MICROSERVICES.md
+# ----------------------------------------------------------------------------
+services:
+  # Event Worker Service Configuration
+  # Used in: services/event-worker/main.go
+  # File reference: docs/MICROSERVICES.md (Event Worker)
+  event_worker:
+    # OPTIONAL: Number of concurrent worker goroutines
+    # Env var: WORKER_COUNT
+    # Used in: services/event-worker/main.go:38
+    # Default: 5
+    worker_count: 10
+    
+    # OPTIONAL: Polling interval for pending events
+    # Env var: POLL_INTERVAL
+    # Used in: services/event-worker/main.go:39
+    # Default: "1s"
+    poll_interval: "1s"
+    
+    # OPTIONAL: Number of events to fetch per batch
+    # Env var: BATCH_SIZE
+    # Used in: services/event-worker/main.go:40
+    # Default: 10
+    batch_size: 10
+  
+  # Scheduler Service Configuration
+  # Used in: services/scheduler/main.go
+  # File reference: docs/MICROSERVICES.md (Scheduler)
+  scheduler:
+    # OPTIONAL: Unique identifier for this scheduler instance
+    # Env var: SCHEDULER_ID
+    # Used in: services/scheduler/main.go:39
+    # Default: "scheduler-<timestamp>"
+    scheduler_id: "scheduler-1"
+    
+    # OPTIONAL: Polling interval for scheduled jobs
+    # Env var: POLL_INTERVAL
+    # Used in: services/scheduler/main.go:40
+    # Default: "10s"
+    poll_interval: "10s"
+    
+    # OPTIONAL: Lease duration for distributed locking
+    # Env var: LEASE_DURATION
+    # Used in: services/scheduler/main.go:41
+    # Default: "5m"
+    lease_duration: "5m"
+    
+    # OPTIONAL: Heartbeat interval for lease renewal
+    # Env var: HEARTBEAT_INTERVAL
+    # Used in: services/scheduler/main.go:42
+    # Default: "30s"
+    heartbeat_interval: "30s"
+  
+  # Webhook Orchestrator Service Configuration
+  # Used in: services/webhook-orchestrator/main.go
+  # File reference: docs/MICROSERVICES.md (Webhook Orchestrator)
+  webhook_orchestrator:
+    # REQUIRED (if enabled): Webhook daemon URL
+    # Env var: WEBHOOK_DAEMON_URL
+    # Used in: services/webhook-orchestrator/main.go
+    daemon_url: "http://webhook-daemon:9000"
+    
+    # OPTIONAL: Number of concurrent workers
+    # Env var: WORKER_COUNT
+    # Used in: services/webhook-orchestrator/main.go:48
+    # Default: 5
+    worker_count: 5
+    
+    # OPTIONAL: Polling interval for webhook jobs
+    # Env var: POLL_INTERVAL
+    # Used in: services/webhook-orchestrator/main.go:49
+    # Default: "1s"
+    poll_interval: "1s"
+    
+    # OPTIONAL: Batch size for webhook jobs
+    # Env var: BATCH_SIZE
+    # Used in: services/webhook-orchestrator/main.go:50
+    # Default: 10
+    batch_size: 10
+  
+  # Event Publisher Service Configuration (SSE)
+  # Used in: services/event-publisher/main.go
+  # File reference: docs/EVENT_PUBSUB.md
+  event_publisher:
+    # OPTIONAL: HTTP server port for event publisher
+    # Env var: PORT
+    # Used in: services/event-publisher/main.go:40
+    # Default: 8083
+    port: 8083
+    
+    # OPTIONAL: In-memory event buffer size
+    # Env var: EVENT_BUFFER_SIZE
+    # Used in: services/event-publisher/main.go:38
+    # Default: 1000
+    event_buffer_size: 1000
+    
+    # OPTIONAL: Maximum concurrent SSE connections
+    # Env var: SSE_MAX_CONNECTIONS
+    # Used in: services/event-publisher/main.go:39
+    # Default: 100
+    max_connections: 100
+    
+    # OPTIONAL: Enable authentication for SSE endpoints
+    # Env var: AUTH_ENABLED
+    # Used in: services/event-publisher/main.go:42
+    # Default: true
+    auth_enabled: false

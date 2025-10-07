@@ -333,9 +333,9 @@ if workflowCtx.Active {
 
 **Checklist:**
 - [ ] Create `services/vfs/handlers/workflow.go`
-- [ ] `GET /api/v1/workflows/:path/info`
-- [ ] `GET /api/v1/workflows/:path/transitions`
-- [ ] `POST /api/v1/workflows/:path/next`
+- [ ] `GET /api/v1/workflows/info/:path`
+- [ ] `GET /api/v1/workflows/transitions/:path`
+- [ ] `POST /api/v1/workflows/next/:path`
 
 **Status:** ❌ NOT IMPLEMENTED
 

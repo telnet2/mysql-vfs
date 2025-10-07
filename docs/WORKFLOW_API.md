@@ -5,9 +5,9 @@ This document describes the REST API endpoints for querying and managing workflo
 ## Overview
 
 The Workflow API provides three endpoints:
-1. **GET /api/v1/workflows/{filepath}/info** - Get workflow information for a file
-2. **GET /api/v1/workflows/{filepath}/transitions** - Get valid transitions for a file
-3. **POST /api/v1/workflows/{filepath}/next** - Transition a file to a new state
+1. **GET /api/v1/workflows/info/{filepath}** - Get workflow information for a file
+2. **GET /api/v1/workflows/transitions/{filepath}** - Get valid transitions for a file
+3. **POST /api/v1/workflows/next/{filepath}** - Transition a file to a new state
 
 All endpoints require authentication and are subject to authorization policies.
 
@@ -27,7 +27,7 @@ X-User-Groups: <comma-separated-groups>
 
 Returns workflow information for a specific file path.
 
-**Endpoint:** `GET /api/v1/workflows/{filepath}/info`
+**Endpoint:** `GET /api/v1/workflows/info/{filepath}`
 
 **Parameters:**
 - `filepath` (path parameter): The file path to query (e.g., `/documents/draft/proposal.txt`)
@@ -80,7 +80,7 @@ curl -X GET \
   -H "Authorization: Bearer $TOKEN" \
   -H "X-User-ID: alice" \
   -H "X-User-Groups: editors" \
-  http://localhost:8080/api/v1/workflows/documents/draft/proposal.txt/info
+  http://localhost:8080/api/v1/workflows/info/documents/draft/proposal.txt
 ```
 
 ---
@@ -89,7 +89,7 @@ curl -X GET \
 
 Returns the list of valid state transitions available to the current user for a specific file.
 
-**Endpoint:** `GET /api/v1/workflows/{filepath}/transitions`
+**Endpoint:** `GET /api/v1/workflows/transitions/{filepath}`
 
 **Parameters:**
 - `filepath` (path parameter): The file path to query
@@ -133,7 +133,7 @@ curl -X GET \
   -H "Authorization: Bearer $TOKEN" \
   -H "X-User-ID: alice" \
   -H "X-User-Groups: editors" \
-  http://localhost:8080/api/v1/workflows/documents/draft/proposal.txt/transitions
+  http://localhost:8080/api/v1/workflows/transitions/documents/draft/proposal.txt
 ```
 
 ---
@@ -142,7 +142,7 @@ curl -X GET \
 
 Transitions a file to a new workflow state by moving it to the appropriate directory.
 
-**Endpoint:** `POST /api/v1/workflows/{filepath}/next`
+**Endpoint:** `POST /api/v1/workflows/next/{filepath}`
 
 **Parameters:**
 - `filepath` (path parameter): The file path to transition
@@ -189,7 +189,7 @@ curl -X POST \
   -H "X-User-Groups: editors" \
   -H "Content-Type: application/json" \
   -d '{"target_state": "review", "preserve_structure": true}' \
-  http://localhost:8080/api/v1/workflows/documents/draft/legal/2024/proposal.txt/next
+  http://localhost:8080/api/v1/workflows/next/documents/draft/legal/2024/proposal.txt
 ```
 
 This moves `/documents/draft/legal/2024/proposal.txt` to `/documents/review/legal/2024/proposal.txt`.
@@ -203,7 +203,7 @@ curl -X POST \
   -H "X-User-Groups: editors" \
   -H "Content-Type: application/json" \
   -d '{"target_state": "review", "preserve_structure": false}' \
-  http://localhost:8080/api/v1/workflows/documents/draft/legal/2024/proposal.txt/next
+  http://localhost:8080/api/v1/workflows/next/documents/draft/legal/2024/proposal.txt
 ```
 
 This moves `/documents/draft/legal/2024/proposal.txt` to `/documents/review/proposal.txt` (no subdirectories).
@@ -217,7 +217,7 @@ This moves `/documents/draft/legal/2024/proposal.txt` to `/documents/review/prop
 ```bash
 # Get workflow info
 response=$(curl -s -H "Authorization: Bearer $TOKEN" \
-  http://localhost:8080/api/v1/workflows/path/to/file.txt/info)
+  http://localhost:8080/api/v1/workflows/info/path/to/file.txt)
 
 # Check if active
 active=$(echo $response | jq -r '.active')
@@ -231,7 +231,7 @@ fi
 ```bash
 # Get valid transitions
 curl -H "Authorization: Bearer $TOKEN" \
-  http://localhost:8080/api/v1/workflows/documents/draft/file.txt/transitions | jq '.valid_transitions'
+  http://localhost:8080/api/v1/workflows/transitions/documents/draft/file.txt | jq '.valid_transitions'
 ```
 
 ### 3. Move a File Through Workflow States
@@ -242,14 +242,14 @@ curl -X POST \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"target_state": "review"}' \
-  http://localhost:8080/api/v1/workflows/documents/draft/file.txt/next
+  http://localhost:8080/api/v1/workflows/next/documents/draft/file.txt
 
 # Then from review to published
 curl -X POST \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"target_state": "published"}' \
-  http://localhost:8080/api/v1/workflows/documents/review/file.txt/next
+  http://localhost:8080/api/v1/workflows/next/documents/review/file.txt
 ```
 
 ### 4. Build a UI Workflow Widget
@@ -257,7 +257,7 @@ curl -X POST \
 ```javascript
 async function loadWorkflowWidget(filePath) {
   // Get workflow info
-  const infoResponse = await fetch(`/api/v1/workflows${filePath}/info`, {
+  const infoResponse = await fetch(`/api/v1/workflows/info${filePath}`, {
     headers: { 'Authorization': `Bearer ${token}` }
   });
   const info = await infoResponse.json();
@@ -267,7 +267,7 @@ async function loadWorkflowWidget(filePath) {
   }
   
   // Get available transitions
-  const transResponse = await fetch(`/api/v1/workflows${filePath}/transitions`, {
+  const transResponse = await fetch(`/api/v1/workflows/transitions${filePath}`, {
     headers: { 'Authorization': `Bearer ${token}` }
   });
   const transitions = await transResponse.json();
@@ -284,7 +284,7 @@ async function loadWorkflowWidget(filePath) {
 }
 
 async function transitionFile(filePath, targetState) {
-  const response = await fetch(`/api/v1/workflows${filePath}/next`, {
+  const response = await fetch(`/api/v1/workflows/next${filePath}`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${token}`,

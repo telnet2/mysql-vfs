@@ -420,13 +420,13 @@ states:
 **API Endpoints:**
 ```bash
 # Get workflow information
-GET /api/v1/workflows/{filepath}/info
+GET /api/v1/workflows/info/{filepath}
 
 # Get valid transitions
-GET /api/v1/workflows/{filepath}/transitions
+GET /api/v1/workflows/transitions/{filepath}
 
 # Transition to new state
-POST /api/v1/workflows/{filepath}/next
+POST /api/v1/workflows/next/{filepath}
 {
   "target_state": "review",
   "preserve_structure": true

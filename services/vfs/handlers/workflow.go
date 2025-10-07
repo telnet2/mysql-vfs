@@ -79,7 +79,7 @@ type TransitionResponse struct {
 	Message   string `json:"message"`
 }
 
-// GetWorkflowInfo handles GET /api/v1/workflows/*filepath/info
+// GetWorkflowInfo handles GET /api/v1/workflows/info/*filepath
 func (h *WorkflowHandler) GetWorkflowInfo(ctx context.Context, c *app.RequestContext) {
 	// Extract file path from URL parameter
 	filePath := c.Param("filepath")
@@ -156,7 +156,7 @@ func (h *WorkflowHandler) GetWorkflowInfo(ctx context.Context, c *app.RequestCon
 	c.JSON(http.StatusOK, response)
 }
 
-// GetValidTransitions handles GET /api/v1/workflows/*filepath/transitions
+// GetValidTransitions handles GET /api/v1/workflows/transitions/*filepath
 func (h *WorkflowHandler) GetValidTransitions(ctx context.Context, c *app.RequestContext) {
 	// Extract file path from URL parameter
 	filePath := c.Param("filepath")
@@ -276,7 +276,7 @@ func (h *WorkflowHandler) GetValidTransitions(ctx context.Context, c *app.Reques
 	c.JSON(http.StatusOK, response)
 }
 
-// TransitionToState handles POST /api/v1/workflows/*filepath/next
+// TransitionToState handles POST /api/v1/workflows/next/*filepath
 func (h *WorkflowHandler) TransitionToState(ctx context.Context, c *app.RequestContext) {
 	// Extract file path from URL parameter
 	filePath := c.Param("filepath")

@@ -12,12 +12,28 @@ import (
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
+	"gorm.io/gorm/schema"
 )
+
+// customNamingStrategy implements GORM's NamingStrategy with table prefix support
+type customNamingStrategy struct {
+	schema.NamingStrategy
+	TablePrefix string
+}
+
+// TableName adds prefix to table names
+func (ns *customNamingStrategy) TableName(table string) string {
+	// First call the embedded strategy to get the proper table name (pluralized, etc.)
+	baseName := ns.NamingStrategy.TableName(table)
+	// Then add our prefix
+	return ns.TablePrefix + baseName
+}
 
 // Config holds database configuration
 type Config struct {
-	DSN      string
-	LogLevel logger.LogLevel
+	DSN         string
+	TablePrefix string
+	LogLevel    logger.LogLevel
 }
 
 // Connect establishes a connection to the database
@@ -26,6 +42,12 @@ func Connect(cfg Config) (*gorm.DB, error) {
 		Logger: logger.Default.LogMode(cfg.LogLevel),
 		// Disable foreign key constraints - we manage referential integrity in application code
 		DisableForeignKeyConstraintWhenMigrating: true,
+		NamingStrategy: &customNamingStrategy{
+			NamingStrategy: schema.NamingStrategy{
+				SingularTable: false, // use plural table names
+			},
+			TablePrefix: cfg.TablePrefix,
+		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
@@ -34,9 +56,23 @@ func Connect(cfg Config) (*gorm.DB, error) {
 	return db, nil
 }
 
+// getTableName returns the table name for a model using GORM's naming strategy
+func getTableName(db *gorm.DB, model interface{}) string {
+	// Get the model's type name
+	stmt := &gorm.Statement{DB: db}
+	if err := stmt.Parse(model); err != nil {
+		return ""
+	}
+	// Use the naming strategy to get the table name
+	if db.NamingStrategy != nil {
+		return db.NamingStrategy.TableName(stmt.Schema.ModelType.Name())
+	}
+	return stmt.Schema.Table
+}
+
 // AutoMigrate runs automatic migrations for all models
 func AutoMigrate(db *gorm.DB) error {
-	// Define all models in dependency order
+	// Define all models in dependency order with explicit table names
 	modelsToMigrate := []interface{}{
 		&models.Directory{},
 		&models.File{},
@@ -53,9 +89,12 @@ func AutoMigrate(db *gorm.DB) error {
 		&models.DeadLetterQueue{},
 	}
 
-	// Run auto migration
-	if err := db.AutoMigrate(modelsToMigrate...); err != nil {
-		return fmt.Errorf("failed to run migrations: %w", err)
+	// Run auto migration with explicit table names
+	for _, model := range modelsToMigrate {
+		tableName := getTableName(db, model)
+		if err := db.Table(tableName).AutoMigrate(model); err != nil {
+			return fmt.Errorf("failed to migrate %T to table %s: %w", model, tableName, err)
+		}
 	}
 
 	// Add additional constraints and indexes
@@ -93,12 +132,17 @@ func addCustomConstraints(db *gorm.DB) error {
 		return nil
 	}
 
+	// Get table names with prefix
+	filesTable := getTableName(db, &models.File{})
+	directoriesTable := getTableName(db, &models.Directory{})
+
 	// Add CHECK constraint for files.size_bytes <= 100MB
-	if err := db.Exec(`
-		ALTER TABLE files
+	query := fmt.Sprintf(`
+		ALTER TABLE %s
 		ADD CONSTRAINT chk_file_size
 		CHECK (size_bytes <= 104857600)
-	`).Error; err != nil {
+	`, filesTable)
+	if err := db.Exec(query).Error; err != nil {
 		// Ignore if constraint already exists
 		if !isConstraintExistsError(err) {
 			return fmt.Errorf("failed to add file size constraint: %w", err)
@@ -106,37 +150,40 @@ func addCustomConstraints(db *gorm.DB) error {
 	}
 
 	// Add CHECK constraint for files storage type consistency
-	if err := db.Exec(`
-		ALTER TABLE files
+	query = fmt.Sprintf(`
+		ALTER TABLE %s
 		ADD CONSTRAINT chk_storage_type
 		CHECK (
 			(storage_type = 'json' AND json_content IS NOT NULL) OR
 			(storage_type = 'text' AND text_content IS NOT NULL) OR
 			(storage_type = 's3' AND s3_key IS NOT NULL)
 		)
-	`).Error; err != nil {
+	`, filesTable)
+	if err := db.Exec(query).Error; err != nil {
 		if !isConstraintExistsError(err) {
 			return fmt.Errorf("failed to add storage type constraint: %w", err)
 		}
 	}
 
 	// Add CHECK constraint for text content size (100MB limit, same as JSON)
-	if err := db.Exec(`
-		ALTER TABLE files
+	query = fmt.Sprintf(`
+		ALTER TABLE %s
 		ADD CONSTRAINT chk_text_size
 		CHECK (storage_type != 'text' OR size_bytes <= 104857600)
-	`).Error; err != nil {
+	`, filesTable)
+	if err := db.Exec(query).Error; err != nil {
 		if !isConstraintExistsError(err) {
 			return fmt.Errorf("failed to add text size constraint: %w", err)
 		}
 	}
 
 	// Add unique index for directories (parent_id, name) where deleted_at IS NULL
-	if err := db.Exec(`
+	query = fmt.Sprintf(`
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_dir_parent_name_active
-		ON directories(parent_id, name)
+		ON %s(parent_id, name)
 		WHERE deleted_at IS NULL
-	`).Error; err != nil {
+	`, directoriesTable)
+	if err := db.Exec(query).Error; err != nil {
 		// For MySQL, use a different approach since it doesn't support WHERE in unique indexes
 		// We'll rely on GORM's soft delete handling instead
 	}
@@ -149,6 +196,8 @@ func addCustomConstraints(db *gorm.DB) error {
 }
 
 func addWorkflowAuditIndexes(db *gorm.DB) error {
+	workflowAuditTable := getTableName(db, &models.WorkflowAudit{})
+
 	indexes := []struct {
 		Name  string
 		Field string
@@ -160,7 +209,7 @@ func addWorkflowAuditIndexes(db *gorm.DB) error {
 	}
 
 	for _, idx := range indexes {
-		query := fmt.Sprintf("CREATE INDEX %s ON workflow_audit(%s)", idx.Name, idx.Field)
+		query := fmt.Sprintf("CREATE INDEX %s ON %s(%s)", idx.Name, workflowAuditTable, idx.Field)
 		if err := db.Exec(query).Error; err != nil {
 			if !isConstraintExistsError(err) {
 				return fmt.Errorf("failed to create workflow_audit index %s: %w", idx.Name, err)
@@ -196,19 +245,25 @@ func runManualMigrations(db *gorm.DB) error {
 		return nil
 	}
 
+	// Get table names with prefix
+	filesTable := getTableName(db, &models.File{})
+	fileVersionsTable := getTableName(db, &models.FileVersion{})
+
 	// Migrate text_content from TEXT to MEDIUMTEXT to support files up to 16MB
 	// This migration is idempotent (safe to run multiple times)
-	if err := db.Exec(`
-		ALTER TABLE files
+	query := fmt.Sprintf(`
+		ALTER TABLE %s
 		MODIFY COLUMN text_content MEDIUMTEXT
-	`).Error; err != nil {
+	`, filesTable)
+	if err := db.Exec(query).Error; err != nil {
 		return fmt.Errorf("failed to migrate files.text_content to MEDIUMTEXT: %w", err)
 	}
 
-	if err := db.Exec(`
-		ALTER TABLE file_versions
+	query = fmt.Sprintf(`
+		ALTER TABLE %s
 		MODIFY COLUMN text_content MEDIUMTEXT
-	`).Error; err != nil {
+	`, fileVersionsTable)
+	if err := db.Exec(query).Error; err != nil {
 		return fmt.Errorf("failed to migrate file_versions.text_content to MEDIUMTEXT: %w", err)
 	}
 

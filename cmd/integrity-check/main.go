@@ -30,6 +30,12 @@ func main() {
 		}
 	}
 
+	// Get table prefix from environment
+	tablePrefix := os.Getenv("TABLE_PREFIX")
+	if tablePrefix == "" {
+		tablePrefix = "vfs_"
+	}
+
 	// Connect to database
 	logLevel := logger.Warn
 	if *verbose {
@@ -37,8 +43,9 @@ func main() {
 	}
 
 	database, err := persistencedb.Connect(persistencedb.Config{
-		DSN:      *dsn,
-		LogLevel: logLevel,
+		DSN:         *dsn,
+		TablePrefix: tablePrefix,
+		LogLevel:    logLevel,
 	})
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)

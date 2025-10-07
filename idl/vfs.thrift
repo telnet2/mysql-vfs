@@ -315,9 +315,9 @@ service VFSService {
     ListFileRelationsResponse listFileRelations(1: ListFileRelationsRequest req) (api.get="/api/v1/file-relations/:path")
     
     // Workflow operations
-    GetWorkflowInfoResponse getWorkflowInfo(1: GetWorkflowInfoRequest req) (api.get="/api/v1/workflows/:filepath/info")
-    GetValidTransitionsResponse getValidTransitions(1: GetValidTransitionsRequest req) (api.get="/api/v1/workflows/:filepath/transitions")
-    TransitionToStateResponse transitionToState(1: TransitionToStateRequest req) (api.post="/api/v1/workflows/:filepath/next")
+    GetWorkflowInfoResponse getWorkflowInfo(1: GetWorkflowInfoRequest req) (api.get="/api/v1/workflows/info/:filepath")
+    GetValidTransitionsResponse getValidTransitions(1: GetValidTransitionsRequest req) (api.get="/api/v1/workflows/transitions/:filepath")
+    TransitionToStateResponse transitionToState(1: TransitionToStateRequest req) (api.post="/api/v1/workflows/next/:filepath")
     
     // Search operations
     SearchFilesResponse searchFiles(1: SearchFilesRequest req) (api.get="/api/v1/search")

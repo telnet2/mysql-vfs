@@ -9,68 +9,70 @@ import (
 // Config holds application configuration
 type Config struct {
 	// Database
-	DatabaseDSN string
-	LogLevel    string
+	DatabaseDSN string `mapstructure:"database.dsn"`
+	TablePrefix string `mapstructure:"database.table_prefix"`
+	LogLevel    string `mapstructure:"logging.level"`
 
 	// Server
-	ServerPort string
+	ServerPort string `mapstructure:"server.port"`
 
 	// Idempotency
-	IdempotencyTTL time.Duration
+	IdempotencyTTL time.Duration `mapstructure:"idempotency.ttl"`
 
 	// Storage
-	S3Bucket   string
-	S3Region   string
-	S3Endpoint string
+	S3Bucket   string `mapstructure:"storage.s3.bucket"`
+	S3Region   string `mapstructure:"storage.s3.region"`
+	S3Endpoint string `mapstructure:"storage.s3.endpoint"`
 
 	// Authentication
-	Auth AuthConfig
+	Auth AuthConfig `mapstructure:"auth"`
 
 	// Special Files Cache
-	SchemaCacheTTL time.Duration
-	PolicyCacheTTL time.Duration
-	QuotaCacheTTL  time.Duration
+	SchemaCacheTTL time.Duration `mapstructure:"cache.schema_ttl"`
+	PolicyCacheTTL time.Duration `mapstructure:"cache.policy_ttl"`
+	QuotaCacheTTL  time.Duration `mapstructure:"cache.quota_ttl"`
 }
 
 // AuthConfig holds authentication configuration
 type AuthConfig struct {
 	// Provider type: jwt, oauth, mtls, proxy, headers (dev only), custom
-	Provider string
+	Provider string `mapstructure:"provider"`
 
 	// JWT Configuration
-	JWTSecret string
-	JWTIssuer string
-	JWTTTL    time.Duration
+	JWTSecret string        `mapstructure:"jwt.secret"`
+	JWTIssuer string        `mapstructure:"jwt.issuer"`
+	JWTTTL    time.Duration `mapstructure:"jwt.ttl"`
 
 	// OAuth Configuration
-	OAuthIntrospectionURL string
-	OAuthClientID         string
-	OAuthClientSecret     string
+	OAuthIntrospectionURL string `mapstructure:"oauth.introspection_url"`
+	OAuthClientID         string `mapstructure:"oauth.client_id"`
+	OAuthClientSecret     string `mapstructure:"oauth.client_secret"`
 
 	// Proxy Configuration (reverse proxy with HMAC)
-	ProxySharedSecret string
+	ProxySharedSecret string `mapstructure:"proxy.shared_secret"`
 
 	// mTLS Configuration
-	MTLSCAFile   string
-	MTLSCertFile string
-	MTLSKeyFile  string
+	MTLSCAFile   string `mapstructure:"mtls.ca_file"`
+	MTLSCertFile string `mapstructure:"mtls.cert_file"`
+	MTLSKeyFile  string `mapstructure:"mtls.key_file"`
 
 	// Optional: allow anonymous access (no auth required)
-	AllowAnonymous bool
+	AllowAnonymous bool `mapstructure:"allow_anonymous"`
 
 	// System Admin (environment-based, bypasses all authorization)
-	SystemAdminToken string // Token that grants system admin access
-	SystemAdminID    string // User ID for system admin (default: "system-admin")
+	SystemAdminToken string `mapstructure:"system_admin.token"` // Token that grants system admin access
+	SystemAdminID    string `mapstructure:"system_admin.id"`    // User ID for system admin (default: "system-admin")
 
 	// File-based auth (.user files)
-	FileAuthDirectory string // Directory containing .user file (default: "/")
-	UserCacheTTL      time.Duration
+	FileAuthDirectory string        `mapstructure:"file.directory"` // Directory containing .user file (default: "/")
+	UserCacheTTL      time.Duration `mapstructure:"cache.user_ttl"`
 }
 
 // LoadFromEnv loads configuration from environment variables
 func LoadFromEnv() *Config {
 	return &Config{
 		DatabaseDSN:    getEnv("DB_DSN", "root:root@tcp(localhost:3306)/vfs?charset=utf8mb4&parseTime=True&loc=Local"),
+		TablePrefix:    getEnv("TABLE_PREFIX", "vfs_"),
 		LogLevel:       getEnv("LOG_LEVEL", "info"),
 		ServerPort:     getEnv("PORT", "8080"),
 		IdempotencyTTL: getEnvDuration("IDEMPOTENCY_TTL_SECONDS", 24*time.Hour),

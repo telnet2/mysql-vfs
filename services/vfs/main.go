@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -19,6 +20,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"github.com/nats-io/nats.go"
 	"github.com/telnet2/mysql-vfs/pkg/config"
+	"github.com/telnet2/mysql-vfs/pkg/discovery"
 	"github.com/telnet2/mysql-vfs/pkg/domain"
 	"github.com/telnet2/mysql-vfs/pkg/events/handlers"
 	"github.com/telnet2/mysql-vfs/pkg/idempotency"
@@ -43,8 +45,26 @@ type VFSServer struct {
 }
 
 func main() {
-	// Load configuration from environment
-	cfg := config.LoadFromEnv()
+	// Parse command-line flags
+	configFile := flag.String("conf", "", "Path to configuration file (optional, uses env vars if not specified)")
+	flag.Parse()
+
+	// Load configuration (supports both config file and env vars)
+	var cfg *config.Config
+	var err error
+	if *configFile != "" {
+		log.Printf("Loading configuration from file: %s", *configFile)
+		cfg, err = config.LoadConfig(*configFile)
+		if err != nil {
+			log.Fatalf("Failed to load config file: %v", err)
+		}
+	} else {
+		log.Println("Loading configuration from environment variables and auto-discovery")
+		cfg, err = config.LoadConfigWithEnv()
+		if err != nil {
+			log.Fatalf("Failed to load configuration: %v", err)
+		}
+	}
 
 	// Parse log level
 	gormLogLevel := logger.Info
@@ -59,8 +79,9 @@ func main() {
 	// Connect to database
 	log.Println("Connecting to database...")
 	database, err := persistencedb.Connect(persistencedb.Config{
-		DSN:      cfg.DatabaseDSN,
-		LogLevel: gormLogLevel,
+		DSN:         cfg.DatabaseDSN,
+		TablePrefix: cfg.TablePrefix,
+		LogLevel:    gormLogLevel,
 	})
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
@@ -76,37 +97,22 @@ func main() {
 	// Initialize storage
 	log.Println("Initializing storage...")
 	ctx := context.Background()
-	storageService, err := storage.NewStorageFromEnv(ctx)
+	storageService, err := storage.NewStorageWithParams(ctx, cfg.S3Endpoint, cfg.S3Bucket, cfg.S3Region)
 	if err != nil {
 		log.Fatalf("Failed to initialize storage: %v", err)
 	}
 	log.Println("Storage initialized successfully")
 
 	// Initialize NATS connection (optional)
+	// Supports both regular URLs and consul+ URLs:
+	//   NATS_URL=nats://localhost:4222
+	//   NATS_URL=consul+nats://nats-service
+	//   NATS_URL=consul+nats://nats-cluster?consul.cluster=prod
 	var natsConn *nats.Conn
 	natsURL := os.Getenv("NATS_URL")
-	if natsURL != "" {
-		log.Printf("Connecting to NATS at %s...", natsURL)
-		natsConn, err = nats.Connect(natsURL,
-			nats.MaxReconnects(-1),            // Unlimited reconnects
-			nats.ReconnectWait(2*time.Second), // Wait 2s between reconnects
-			nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
-				if err != nil {
-					log.Printf("NATS disconnected: %v", err)
-				}
-			}),
-			nats.ReconnectHandler(func(nc *nats.Conn) {
-				log.Printf("NATS reconnected to %s", nc.ConnectedUrl())
-			}),
-		)
-		if err != nil {
-			log.Printf("Warning: Failed to connect to NATS (events will not be published): %v", err)
-			natsConn = nil // Continue without NATS
-		} else {
-			log.Println("NATS connection established successfully")
-		}
-	} else {
-		log.Println("NATS_URL not set, event publishing to NATS disabled")
+	natsConn, err = discovery.NewOptionalNATSConnection(natsURL)
+	if err != nil {
+		log.Printf("Warning: NATS connection error (continuing without NATS): %v", err)
 	}
 
 	// Initialize repositories
@@ -220,9 +226,9 @@ func main() {
 
 	// Workflow routes
 	workflowHandler := vfshandlers.NewWorkflowHandler(workflowLoader, workflowEngine, fileService)
-	v1.GET("/workflows/*filepath/info", workflowHandler.GetWorkflowInfo)
-	v1.GET("/workflows/*filepath/transitions", workflowHandler.GetValidTransitions)
-	v1.POST("/workflows/*filepath/next", workflowHandler.TransitionToState)
+	v1.GET("/workflows/info/*filepath", workflowHandler.GetWorkflowInfo)
+	v1.GET("/workflows/transitions/*filepath", workflowHandler.GetValidTransitions)
+	v1.POST("/workflows/next/*filepath", workflowHandler.TransitionToState)
 
 	log.Printf("VFS Service starting on port %s", cfg.ServerPort)
 	log.Printf("Authentication: %s", cfg.Auth.Provider)

@@ -459,17 +459,17 @@
 ### 7.1 Create Workflow Handlers
 **New File:** `services/vfs/handlers/workflow.go`
 
-- [ ] Implement `GET /api/v1/workflows/:path/info`
+- [ ] Implement `GET /api/v1/workflows/info/:path`
   - [ ] Load workflow for path
   - [ ] Extract current state
   - [ ] Return workflow metadata
 
-- [ ] Implement `GET /api/v1/workflows/:path/transitions`
+- [ ] Implement `GET /api/v1/workflows/transitions/:path`
   - [ ] Get valid transitions for current user
   - [ ] Return list with gate requirements
   - [ ] Indicate which transitions user can perform
 
-- [ ] Implement `POST /api/v1/workflows/:path/next`
+- [ ] Implement `POST /api/v1/workflows/next/:path`
   - [ ] Accept `target_state` in request body
   - [ ] Construct destination path
   - [ ] Call `FileService.MoveFile()`

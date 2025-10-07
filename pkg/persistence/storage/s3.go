@@ -60,6 +60,19 @@ func NewStorageFromEnv(ctx context.Context) (Storage, error) {
 		return nil, fmt.Errorf("S3_ENDPOINT and S3_BUCKET must be set")
 	}
 
+	return NewStorageWithParams(ctx, endpoint, bucket, region)
+}
+
+// NewStorageWithParams creates storage from explicit parameters
+func NewStorageWithParams(ctx context.Context, endpoint, bucket, region string) (Storage, error) {
+	if endpoint == "" || bucket == "" {
+		return nil, fmt.Errorf("endpoint and bucket must be set")
+	}
+
+	if region == "" {
+		region = "us-east-1"
+	}
+
 	// For LocalStack or custom endpoints
 	var bucketURL string
 	if endpoint == "http://localstack:4566" || endpoint == "http://localhost:4566" {

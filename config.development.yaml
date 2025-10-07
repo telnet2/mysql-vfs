@@ -1,0 +1,66 @@
+# ============================================================================
+# MySQL VFS Development Environment Configuration
+# ============================================================================
+# This file contains development-specific overrides.
+# Copy this to config.yaml for local development.
+# ============================================================================
+
+database:
+  dsn: "root:root@tcp(localhost:3306)/vfs?charset=utf8mb4&parseTime=True&loc=Local"
+  table_prefix: "vfs_"
+
+storage:
+  s3:
+    endpoint: "http://localhost:4566"
+    bucket: "cc-vfs-dev"
+    region: "us-east-1"
+
+messaging:
+  nats:
+    url: "nats://localhost:4222"
+
+server:
+  port: 8080
+
+logging:
+  level: "debug"
+
+auth:
+  provider: "headers"
+  allow_anonymous: true
+  system_admin:
+    token: "dev-admin-token-change-me"
+    id: "dev-admin"
+
+cache:
+  user_ttl: "1m"
+  schema_ttl: "1m"
+  policy_ttl: "1m"
+  quota_ttl: "1m"
+
+idempotency:
+  ttl: "1h"
+
+services:
+  event_worker:
+    worker_count: 5
+    poll_interval: "1s"
+    batch_size: 10
+  
+  scheduler:
+    scheduler_id: "dev-scheduler-1"
+    poll_interval: "10s"
+    lease_duration: "5m"
+    heartbeat_interval: "30s"
+  
+  webhook_orchestrator:
+    daemon_url: "http://localhost:9000"
+    worker_count: 3
+    poll_interval: "1s"
+    batch_size: 10
+  
+  event_publisher:
+    port: 8083
+    event_buffer_size: 500
+    max_connections: 50
+    auth_enabled: false

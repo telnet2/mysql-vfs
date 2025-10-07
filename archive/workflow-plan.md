@@ -704,14 +704,14 @@ allow {
 
 **Endpoints:**
 ```
-GET    /api/v1/workflows/:path/info         - Get workflow info for file path
-GET    /api/v1/workflows/:path/transitions  - Get valid next states for current user
-POST   /api/v1/workflows/:path/next         - Move file to target state (preserves structure)
+GET    /api/v1/workflows/info/:path         - Get workflow info for file path
+GET    /api/v1/workflows/transitions/:path  - Get valid next states for current user
+POST   /api/v1/workflows/next/:path         - Move file to target state (preserves structure)
 ```
 
 **Endpoint details:**
 
-**GET /api/v1/workflows/:path/info**
+**GET /api/v1/workflows/info/:path**
 ```json
 {
   "workflow_active": true,
@@ -722,7 +722,7 @@ POST   /api/v1/workflows/:path/next         - Move file to target state (preserv
 }
 ```
 
-**GET /api/v1/workflows/:path/transitions**
+**GET /api/v1/workflows/transitions/:path**
 ```json
 {
   "current_state": "draft",
@@ -742,7 +742,7 @@ POST   /api/v1/workflows/:path/next         - Move file to target state (preserv
 }
 ```
 
-**POST /api/v1/workflows/:path/next**
+**POST /api/v1/workflows/next/:path**
 ```json
 Request:
 {

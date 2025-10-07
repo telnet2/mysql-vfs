@@ -78,8 +78,9 @@ func NewTestDatabase() *TestDatabase {
 	maxRetries := 5
 	for i := 0; i < maxRetries; i++ {
 		testGormDB, err := persistencedb.Connect(persistencedb.Config{
-			DSN:      dsn,
-			LogLevel: logger.Silent,
+			DSN:         dsn,
+			TablePrefix: "vfs_",
+			LogLevel:    logger.Silent,
 		})
 		if err == nil {
 			sqlDB, _ := testGormDB.DB()
@@ -103,8 +104,9 @@ func NewTestDatabase() *TestDatabase {
 // Migrate runs database migrations
 func (td *TestDatabase) Migrate() {
 	gormDB, err := persistencedb.Connect(persistencedb.Config{
-		DSN:      td.DSN,
-		LogLevel: logger.Silent,
+		DSN:         td.DSN,
+		TablePrefix: "vfs_",
+		LogLevel:    logger.Silent,
 	})
 	Expect(err).NotTo(HaveOccurred())
 
@@ -120,8 +122,9 @@ func (td *TestDatabase) Migrate() {
 // GetDB returns a GORM database connection
 func (td *TestDatabase) GetDB() *gorm.DB {
 	gormDB, err := persistencedb.Connect(persistencedb.Config{
-		DSN:      td.DSN,
-		LogLevel: logger.Silent,
+		DSN:         td.DSN,
+		TablePrefix: "vfs_",
+		LogLevel:    logger.Silent,
 	})
 	Expect(err).NotTo(HaveOccurred())
 	return gormDB

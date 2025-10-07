@@ -166,21 +166,21 @@ ginkgo -v --silence-skips --focus="Multiple Files Workflow"
 
 ### Get Workflow Info
 ```bash
-GET /api/v1/workflows/{filepath}/info
+GET /api/v1/workflows/info/{filepath}
 ```
 
 Returns workflow metadata, current state, all states
 
 ### Get Valid Transitions
 ```bash
-GET /api/v1/workflows/{filepath}/transitions
+GET /api/v1/workflows/transitions/{filepath}
 ```
 
 Returns user-specific valid transitions
 
 ### Transition to State
 ```bash
-POST /api/v1/workflows/{filepath}/next
+POST /api/v1/workflows/next/{filepath}
 {
   "target_state": "review",
   "preserve_structure": true
@@ -236,14 +236,14 @@ curl -X POST http://localhost:8080/api/v1/files \
   -F "file=@proposal.pdf"
 
 # Check available transitions
-curl http://localhost:8080/api/v1/workflows/documents/draft/proposal.pdf/transitions
+curl http://localhost:8080/api/v1/workflows/transitions/documents/draft/proposal.pdf
 
 # Move to review
-curl -X POST http://localhost:8080/api/v1/workflows/documents/draft/proposal.pdf/next \
+curl -X POST http://localhost:8080/api/v1/workflows/next/documents/draft/proposal.pdf \
   -d '{"target_state": "review"}'
 
 # Move to published
-curl -X POST http://localhost:8080/api/v1/workflows/documents/review/proposal.pdf/next \
+curl -X POST http://localhost:8080/api/v1/workflows/next/documents/review/proposal.pdf \
   -d '{"target_state": "published"}'
 ```
 
