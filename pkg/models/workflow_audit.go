@@ -18,6 +18,4 @@ type WorkflowAudit struct {
 	CreatedAt      time.Time `gorm:"not null;index:idx_created_at"`
 }
 
-func (WorkflowAudit) TableName() string {
-	return "workflow_audit"
-}
+// TableName is removed - GORM will use the naming strategy (which includes table prefix)

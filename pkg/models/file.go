@@ -40,9 +40,7 @@ type File struct {
 	DerivativeRelations []FileRelation `gorm:"-"`
 }
 
-func (File) TableName() string {
-	return "files"
-}
+// TableName is removed - GORM will use the naming strategy (which includes table prefix)
 
 // BeforeCreate hook to validate constraints
 func (f *File) BeforeCreate(tx *gorm.DB) error {

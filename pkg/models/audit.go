@@ -19,9 +19,7 @@ type AuditLog struct {
 	CreatedAt    time.Time `gorm:"not null;index:idx_created_user"`
 }
 
-func (AuditLog) TableName() string {
-	return "audit_logs"
-}
+// TableName is removed - GORM will use the naming strategy (which includes table prefix)
 
 // DeadLetterQueue stores events and jobs that failed repeatedly
 type DeadLetterQueue struct {
@@ -34,6 +32,4 @@ type DeadLetterQueue struct {
 	MovedAt       time.Time `gorm:"not null;index"`
 }
 
-func (DeadLetterQueue) TableName() string {
-	return "dead_letter_queue"
-}
+// TableName is removed - GORM will use the naming strategy (which includes table prefix)

@@ -18,6 +18,4 @@ type FileRelation struct {
 	DerivativeFile *File `gorm:"-"`
 }
 
-func (FileRelation) TableName() string {
-	return "file_relations"
-}
+// TableName is removed - GORM will use the naming strategy (which includes table prefix)

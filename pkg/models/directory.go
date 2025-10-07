@@ -25,6 +25,4 @@ type Directory struct {
 	Files    []File      `gorm:"-"`
 }
 
-func (Directory) TableName() string {
-	return "directories"
-}
+// TableName is removed - GORM will use the naming strategy (which includes table prefix)

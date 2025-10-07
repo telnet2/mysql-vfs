@@ -24,6 +24,9 @@ type Config struct {
 	S3Region   string `mapstructure:"storage.s3.region"`
 	S3Endpoint string `mapstructure:"storage.s3.endpoint"`
 
+	// Messaging
+	NatsURL string `mapstructure:"messaging.nats.url"`
+
 	// Authentication
 	Auth AuthConfig `mapstructure:"auth"`
 
@@ -79,6 +82,9 @@ func LoadFromEnv() *Config {
 		S3Bucket:       getEnv("S3_BUCKET", "cc-vfs-files"),
 		S3Region:       getEnv("S3_REGION", "us-east-1"),
 		S3Endpoint:     getEnv("S3_ENDPOINT", "http://localhost:4566"),
+
+		// Messaging
+		NatsURL: getEnv("NATS_URL", ""),
 
 		// Authentication
 		Auth: AuthConfig{

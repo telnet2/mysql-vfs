@@ -13,6 +13,4 @@ type IdempotencyRecord struct {
 	CreatedAt    time.Time `gorm:"not null"`
 }
 
-func (IdempotencyRecord) TableName() string {
-	return "idempotency_records"
-}
+// TableName is removed - GORM will use the naming strategy (which includes table prefix)

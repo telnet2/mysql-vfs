@@ -1,0 +1,71 @@
+# ============================================================================
+# MySQL VFS Local Docker Environment Configuration
+# ============================================================================
+# This configuration is for local Docker Compose deployment
+# ============================================================================
+
+database:
+  # MySQL connection for Docker network (use service name 'mysql')
+  dsn: "root:root@tcp(mysql:3306)/vfs?charset=utf8mb4&parseTime=True&loc=Local"
+  table_prefix: "vfs_"
+
+storage:
+  s3:
+    # LocalStack S3-compatible endpoint
+    endpoint: "http://localstack:4566"
+    bucket: "cc-vfs-storage"
+    region: "us-east-1"
+
+messaging:
+  nats:
+    # NATS service URL (leave empty or comment out to disable NATS features)
+    url: "nats://nats:4222"
+    # To disable NATS, use:
+    # url: ""
+
+server:
+  port: 8080
+
+logging:
+  level: "debug"
+
+auth:
+  provider: "headers"
+  allow_anonymous: true
+  system_admin:
+    token: "local-system-admin"
+    id: "system-admin"
+
+cache:
+  user_ttl: "5m"
+  schema_ttl: "5m"
+  policy_ttl: "5m"
+  quota_ttl: "5m"
+
+idempotency:
+  ttl: "24h"
+
+# Service-specific configurations
+services:
+  event_worker:
+    worker_count: 10
+    poll_interval: "1s"
+    batch_size: 10
+  
+  scheduler:
+    scheduler_id: "scheduler-1"
+    poll_interval: "10s"
+    lease_duration: "5m"
+    heartbeat_interval: "30s"
+  
+  webhook_orchestrator:
+    daemon_url: "http://webhook-daemon:9000"
+    worker_count: 5
+    poll_interval: "1s"
+    batch_size: 10
+  
+  event_publisher:
+    port: 8083
+    event_buffer_size: 1000
+    max_connections: 100
+    auth_enabled: false

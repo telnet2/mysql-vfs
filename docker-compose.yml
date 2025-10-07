@@ -70,7 +70,7 @@ services:
       nats:
         condition: service_healthy
     volumes:
-      - ./config.local.yaml:/app/config.yaml:ro
+      - ./conf/config.local.yaml:/app/config.yaml:ro
     environment:
       # AWS credentials for LocalStack (required by AWS SDK)
       AWS_ACCESS_KEY_ID: test
@@ -93,7 +93,7 @@ services:
     image: almir/webhook:latest
     container_name: cc-vfs-webhook-daemon
     volumes:
-      - ./deployments/webhook-configs:/etc/webhook:ro
+      - ./conf/webhook-configs:/etc/webhook:ro
     command: ["-verbose", "-hooks", "/etc/webhook/hooks.json", "-hotreload"]
     ports:
       - "19000:9000"
@@ -114,7 +114,7 @@ services:
       webhook-daemon:
         condition: service_started
     volumes:
-      - ./config.local.yaml:/app/config.yaml:ro
+      - ./conf/config.local.yaml:/app/config.yaml:ro
     command: ["./webhook-orchestrator", "--conf", "/app/config.yaml"]
     networks:
       - cc-vfs-network
@@ -131,7 +131,7 @@ services:
       vfs-service:
         condition: service_healthy
     volumes:
-      - ./config.local.yaml:/app/config.yaml:ro
+      - ./conf/config.local.yaml:/app/config.yaml:ro
     command: ["./event-worker", "--conf", "/app/config.yaml"]
     networks:
       - cc-vfs-network
@@ -150,7 +150,7 @@ services:
       vfs-service:
         condition: service_healthy
     volumes:
-      - ./config.local.yaml:/app/config.yaml:ro
+      - ./conf/config.local.yaml:/app/config.yaml:ro
     command: ["./scheduler", "--conf", "/app/config.yaml"]
     networks:
       - cc-vfs-network
@@ -169,7 +169,7 @@ services:
       nats:
         condition: service_healthy
     volumes:
-      - ./config.local.yaml:/app/config.yaml:ro
+      - ./conf/config.local.yaml:/app/config.yaml:ro
     command: ["./event-publisher", "--conf", "/app/config.yaml"]
     ports:
       - "18083:8083"

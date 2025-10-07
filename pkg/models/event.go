@@ -36,9 +36,7 @@ type Event struct {
 	WebhookJobs []WebhookJob `gorm:"-"`
 }
 
-func (Event) TableName() string {
-	return "events"
-}
+// TableName is removed - GORM will use the naming strategy (which includes table prefix)
 
 // BeforeCreate sets the visible_at timestamp (5 seconds delay)
 func (e *Event) BeforeCreate(tx *gorm.DB) error {

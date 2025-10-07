@@ -35,9 +35,7 @@ type WebhookConfig struct {
 	WebhookJobs  []WebhookJob `gorm:"-"`
 }
 
-func (WebhookConfig) TableName() string {
-	return "webhook_configs"
-}
+// TableName is removed - GORM will use the naming strategy (which includes table prefix)
 
 // WebhookJobStatus represents the delivery status of a webhook
 type WebhookJobStatus string
@@ -67,6 +65,4 @@ type WebhookJob struct {
 	WebhookConfig *WebhookConfig `gorm:"-"`
 }
 
-func (WebhookJob) TableName() string {
-	return "webhook_jobs"
-}
+// TableName is removed - GORM will use the naming strategy (which includes table prefix)

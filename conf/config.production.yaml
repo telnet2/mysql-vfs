@@ -1,0 +1,77 @@
+# ============================================================================
+# MySQL VFS Production Environment Configuration Template
+# ============================================================================
+# This file contains production-specific settings.
+# IMPORTANT: Use environment variables for all secrets!
+# ============================================================================
+
+database:
+  # Use environment variable for sensitive connection string
+  dsn: "${DB_DSN}"
+  table_prefix: "vfs_"
+
+storage:
+  s3:
+    # Production S3 endpoint (use AWS S3 or production-grade S3-compatible storage)
+    endpoint: "https://s3.amazonaws.com"
+    bucket: "${S3_BUCKET}"
+    region: "${AWS_REGION}"
+
+messaging:
+  nats:
+    # Production NATS cluster
+    url: "${NATS_URL}"
+
+server:
+  port: 8080
+
+logging:
+  level: "info"
+
+auth:
+  # Use JWT or OAuth in production, never "headers"
+  provider: "jwt"
+  allow_anonymous: false
+  
+  jwt:
+    secret: "${JWT_SECRET}"
+    issuer: "mysql-vfs-production"
+    ttl: "24h"
+  
+  system_admin:
+    # Keep system admin token secure, use strong random value
+    token: "${SYSTEM_ADMIN_TOKEN}"
+    id: "system-admin"
+
+cache:
+  user_ttl: "5m"
+  schema_ttl: "5m"
+  policy_ttl: "5m"
+  quota_ttl: "5m"
+
+idempotency:
+  ttl: "24h"
+
+services:
+  event_worker:
+    worker_count: 20
+    poll_interval: "1s"
+    batch_size: 50
+  
+  scheduler:
+    scheduler_id: "${HOSTNAME:-scheduler-1}"
+    poll_interval: "10s"
+    lease_duration: "5m"
+    heartbeat_interval: "30s"
+  
+  webhook_orchestrator:
+    daemon_url: "${WEBHOOK_DAEMON_URL}"
+    worker_count: 10
+    poll_interval: "1s"
+    batch_size: 20
+  
+  event_publisher:
+    port: 8083
+    event_buffer_size: 5000
+    max_connections: 500
+    auth_enabled: true

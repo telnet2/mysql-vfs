@@ -23,6 +23,4 @@ type FileVersion struct {
 	File *File `gorm:"-"`
 }
 
-func (FileVersion) TableName() string {
-	return "file_versions"
-}
+// TableName is removed - GORM will use the naming strategy (which includes table prefix)

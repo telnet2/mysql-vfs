@@ -57,7 +57,15 @@ func main() {
 	}
 
 	// Extract event-publisher-specific configuration
-	natsURL := getEnv("NATS_URL", "nats://localhost:4222")
+	natsURL := cfg.NatsURL
+	if natsURL == "" {
+		// Fallback to environment variable for backward compatibility
+		natsURL = getEnv("NATS_URL", "")
+	}
+	if natsURL == "" {
+		log.Fatalf("NATS URL is required for event-publisher. Set messaging.nats.url in config file or NATS_URL environment variable")
+	}
+
 	eventBufferSize := getEnvInt("EVENT_BUFFER_SIZE", DefaultEventBufferSize)
 	maxConnections := getEnvInt("SSE_MAX_CONNECTIONS", DefaultMaxConnections)
 	serverPort := getEnv("PORT", "8083")
@@ -75,9 +83,9 @@ func main() {
 
 	// Connect to NATS with Consul support
 	// Supports both regular URLs and consul+ URLs:
-	//   NATS_URL=nats://localhost:4222
-	//   NATS_URL=consul+nats://nats-service
-	//   NATS_URL=consul+nats://nats-cluster?consul.cluster=prod
+	//   messaging.nats.url: nats://localhost:4222
+	//   messaging.nats.url: consul+nats://nats-service
+	//   messaging.nats.url: consul+nats://nats-cluster?consul.cluster=prod
 	log.Printf("Connecting to NATS (URL: %s)...", natsURL)
 	nc, err := discovery.NewNATSConnection(natsURL)
 	if err != nil {

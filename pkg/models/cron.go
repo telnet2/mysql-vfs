@@ -24,9 +24,7 @@ type CronJob struct {
 	Executions []CronExecution `gorm:"-"`
 }
 
-func (CronJob) TableName() string {
-	return "cron_jobs"
-}
+// TableName is removed - GORM will use the naming strategy (which includes table prefix)
 
 // CronExecutionStatus represents the execution status
 type CronExecutionStatus string
@@ -58,6 +56,4 @@ type CronExecution struct {
 	CronJob *CronJob `gorm:"-"`
 }
 
-func (CronExecution) TableName() string {
-	return "cron_executions"
-}
+// TableName is removed - GORM will use the naming strategy (which includes table prefix)

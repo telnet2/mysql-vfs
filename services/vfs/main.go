@@ -105,11 +105,15 @@ func main() {
 
 	// Initialize NATS connection (optional)
 	// Supports both regular URLs and consul+ URLs:
-	//   NATS_URL=nats://localhost:4222
-	//   NATS_URL=consul+nats://nats-service
-	//   NATS_URL=consul+nats://nats-cluster?consul.cluster=prod
+	//   messaging.nats.url: nats://localhost:4222
+	//   messaging.nats.url: consul+nats://nats-service
+	//   messaging.nats.url: consul+nats://nats-cluster?consul.cluster=prod
 	var natsConn *nats.Conn
-	natsURL := os.Getenv("NATS_URL")
+	natsURL := cfg.NatsURL
+	if natsURL == "" {
+		// Fallback to environment variable for backward compatibility
+		natsURL = os.Getenv("NATS_URL")
+	}
 	natsConn, err = discovery.NewOptionalNATSConnection(natsURL)
 	if err != nil {
 		log.Printf("Warning: NATS connection error (continuing without NATS): %v", err)
