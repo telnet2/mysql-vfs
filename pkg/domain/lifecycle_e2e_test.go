@@ -22,21 +22,21 @@ import (
 
 // TestWebhookServer is a test HTTP server that can veto operations
 type TestWebhookServer struct {
-	server        *httptest.Server
-	mu            sync.RWMutex
-	vetoRules     map[string]bool // eventType -> shouldVeto
+	server         *httptest.Server
+	mu             sync.RWMutex
+	vetoRules      map[string]bool // eventType -> shouldVeto
 	receivedEvents []events.Event
-	vetoMessage   string
-	vetoCode      string
-	responseDelay time.Duration
+	vetoMessage    string
+	vetoCode       string
+	responseDelay  time.Duration
 }
 
 func NewTestWebhookServer() *TestWebhookServer {
 	ws := &TestWebhookServer{
-		vetoRules:     make(map[string]bool),
+		vetoRules:      make(map[string]bool),
 		receivedEvents: []events.Event{},
-		vetoMessage:   "Operation vetoed by test webhook",
-		vetoCode:      "TEST_VETO",
+		vetoMessage:    "Operation vetoed by test webhook",
+		vetoCode:       "TEST_VETO",
 	}
 
 	mux := http.NewServeMux()

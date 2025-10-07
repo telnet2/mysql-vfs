@@ -199,11 +199,11 @@ func (l *FilesLoader) validateBuiltInRules(ctx context.Context, dirID, fileName 
 		if err != nil {
 			return fmt.Errorf("failed to check directory path: %w", err)
 		}
-		
+
 		if dir.Path != "/" {
 			return fmt.Errorf("%s files can only be created at root directory (/)", fileName)
 		}
 	}
-	
+
 	return nil
 }

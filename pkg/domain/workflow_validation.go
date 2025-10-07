@@ -5,10 +5,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"sync"
 
 	"github.com/open-policy-agent/opa/ast"
-	"github.com/santhosh-tekuri/jsonschema/v5"
 	"gopkg.in/yaml.v3"
 )
 
@@ -23,99 +21,11 @@ const (
 	workflowStateMaxDepth      = 5
 )
 
-const workflowSchemaJSON = `{
-  "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "Workflow Definition",
-  "type": "object",
-  "required": ["state_directories", "initial_state", "states"],
-  "properties": {
-    "state_directories": {
-      "type": "object",
-      "description": "Mapping of state names to directory paths (relative to workflow home)",
-      "minProperties": 1,
-      "patternProperties": {
-        "^[a-z0-9][a-z0-9_-]*$": {
-          "type": "string",
-          "pattern": "^[a-zA-Z0-9_/-]+$",
-          "minLength": 1,
-          "maxLength": 255
-        }
-      },
-      "additionalProperties": false
-    },
-    "initial_state": {
-      "type": "string",
-      "description": "State where files must be created",
-      "pattern": "^[a-z0-9][a-z0-9_-]*$"
-    },
-    "states": {
-      "type": "object",
-      "description": "State definitions with allowed transitions",
-      "minProperties": 1,
-      "patternProperties": {
-        "^[a-z0-9][a-z0-9_-]*$": {
-          "type": "object",
-          "properties": {
-            "transitions": {
-              "type": "array",
-              "description": "Valid target states for transitions",
-              "items": {
-                "type": "object",
-                "required": ["to"],
-                "properties": {
-                  "to": {
-                    "type": "string",
-                    "pattern": "^[a-z0-9][a-z0-9_-]*$",
-                    "description": "Target state name"
-                  },
-                  "description": {
-                    "type": "string",
-                    "description": "Human-readable description of this transition"
-                  }
-                }
-              }
-            }
-          }
-        }
-      },
-      "additionalProperties": false
-    },
-    "gate_policy": {
-      "type": "string",
-      "description": "Inline Rego policy for gate evaluation (package vfs.workflow.gates)"
-    },
-    "gate_policy_ref": {
-      "type": "string",
-      "description": "Path to external .rego file (relative to workflow home, e.g., '.workflow.rego')",
-      "pattern": "^\\.workflow\\.rego$"
-    }
-  },
-  "oneOf": [
-    {"required": ["gate_policy"]},
-    {"required": ["gate_policy_ref"]},
-    {"not": {"anyOf": [{"required": ["gate_policy"]}, {"required": ["gate_policy_ref"]}]}}
-  ]
-}`
+// Workflow schema is now loaded from pkg/etc/schemas/workflow.schema.json
 
 var (
-	workflowSchemaOnce sync.Once
-	workflowSchema     *jsonschema.Schema
-	workflowSchemaErr  error
+	workflowSchemaValidator = NewSchemaValidator("workflow.schema.json")
 )
-
-func loadWorkflowSchema() (*jsonschema.Schema, error) {
-	workflowSchemaOnce.Do(func() {
-		compiler := jsonschema.NewCompiler()
-		compiler.Draft = jsonschema.Draft2020
-		workflowSchemaErr = compiler.AddResource("workflow.schema.json", strings.NewReader(workflowSchemaJSON))
-		if workflowSchemaErr != nil {
-			return
-		}
-		workflowSchema, workflowSchemaErr = compiler.Compile("workflow.schema.json")
-	})
-
-	return workflowSchema, workflowSchemaErr
-}
 
 type workflowTransitionConfig struct {
 	To          string `yaml:"to"`
@@ -150,12 +60,8 @@ func decodeWorkflowConfig(content []byte) (*workflowConfig, error) {
 		return nil, newWorkflowValidationError(ErrInvalidYAML, fmt.Sprintf("invalid YAML: %v", err), nil)
 	}
 
-	schema, err := loadWorkflowSchema()
-	if err != nil {
-		return nil, fmt.Errorf("failed to load workflow schema: %w", err)
-	}
-
-	if err := schema.Validate(yamlObj); err != nil {
+	// Validate against schema
+	if err := workflowSchemaValidator.ValidateMap(yamlObj); err != nil {
 		return nil, newWorkflowValidationError(ErrSchemaViolation, err.Error(), map[string]interface{}{"schema_error": err.Error()})
 	}
 

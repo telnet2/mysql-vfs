@@ -2,7 +2,6 @@ package domain
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -25,6 +24,10 @@ type eventsCacheEntry struct {
 	config    *events.EventsFile
 	expiresAt time.Time
 }
+
+var (
+	eventsSchemaValidator = NewSchemaValidator("events.schema.json")
+)
 
 // NewEventsLoader creates a new events loader
 func NewEventsLoader(fileRepo db.FileRepository, dirRepo db.DirectoryRepository, ttl time.Duration) *EventsLoader {
@@ -78,9 +81,10 @@ func (l *EventsLoader) loadWithInheritance(ctx context.Context, dirID string) (*
 			return nil, fmt.Errorf(".events has no content")
 		}
 
+		// Validate against schema and unmarshal
 		var config events.EventsFile
-		if err := json.Unmarshal(content, &config); err != nil {
-			return nil, fmt.Errorf("invalid .events: %w", err)
+		if err := eventsSchemaValidator.ValidateAndUnmarshal(content, &config); err != nil {
+			return nil, fmt.Errorf(".events validation failed: %w", err)
 		}
 		currentConfig = &config
 	}

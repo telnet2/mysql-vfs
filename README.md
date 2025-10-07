@@ -546,6 +546,13 @@ Special files control VFS behavior at the directory level:
 
 ## Documentation
 
+### Feature Guides (⭐ Comprehensive)
+
+- [**Workflows**](docs/WORKFLOWS.md) - Complete workflow system guide
+- [**Special Files Framework**](docs/SPECIAL_FILES_FRAMEWORK.md) - Framework architecture & validation
+- [Workflow API](docs/WORKFLOW_API.md) - Workflow REST API reference
+- [Workflow Authorization](docs/WORKFLOW_AUTHORIZATION.md) - Workflow & authorization integration
+
 ### User Guides
 
 - [Overview](docs/1_OVERVIEW.md) - System overview and concepts

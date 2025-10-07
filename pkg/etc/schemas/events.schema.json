@@ -28,11 +28,11 @@
             "uniqueItems": true,
             "description": "List of lifecycle events to trigger this handler"
           },
-          "type": {
-            "type": "string",
-            "enum": ["webhook", "log", "metrics"],
-            "description": "Handler type"
-          },
+           "type": {
+             "type": "string",
+             "enum": ["webhook", "log", "metrics", "move_file"],
+             "description": "Handler type"
+           },
           "config": {
             "type": "object",
             "description": "Handler-specific configuration"

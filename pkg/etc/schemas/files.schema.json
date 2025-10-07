@@ -3,47 +3,41 @@
   "title": "Files Configuration Schema",
   "description": "Defines allowed file patterns and validation rules for a directory",
   "type": "object",
-  "required": ["patterns"],
+  "required": ["rules"],
   "properties": {
-    "patterns": {
+    "rules": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["pattern"],
+        "required": ["pattern", "type"],
         "properties": {
           "pattern": {
             "type": "string",
             "minLength": 1,
-            "description": "Glob pattern for allowed files (e.g., *.json, data-*.txt)"
+            "description": "Pattern for matching files (glob or regex)"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["glob", "regex"],
+            "description": "Type of pattern matching"
+          },
+          "schema": {
+            "type": "object",
+            "description": "JSON schema for file content validation (can include $ref)"
           },
           "description": {
             "type": "string",
-            "description": "Human-readable description of this pattern"
-          },
-          "content_types": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "pattern": "^[a-z]+/[a-z0-9+.-]+$"
-            },
-            "minItems": 1,
-            "description": "Allowed MIME content types"
-          },
-          "max_size_bytes": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 104857600,
-            "description": "Maximum file size in bytes (max 100MB)"
-          },
-          "schema_ref": {
-            "type": "string",
-            "pattern": "^/",
-            "description": "Path to JSON schema for validation (must start with /)"
+            "description": "Human-readable description of this rule"
           }
         },
         "additionalProperties": false
       },
       "minItems": 1
+    },
+    "default_action": {
+      "type": "string",
+      "enum": ["allow", "deny"],
+      "description": "Default action when no rule matches"
     }
   },
   "additionalProperties": false

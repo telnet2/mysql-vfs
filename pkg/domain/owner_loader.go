@@ -2,7 +2,6 @@ package domain
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -23,6 +22,10 @@ type ownerCacheEntry struct {
 	config    *OwnerConfig
 	expiresAt time.Time
 }
+
+var (
+	ownerSchemaValidator = NewSchemaValidator("owner.schema.json")
+)
 
 // NewOwnerLoader creates a new owner loader
 func NewOwnerLoader(fileRepo db.FileRepository, dirRepo db.DirectoryRepository, groupLoader *GroupLoader, ttl time.Duration) *OwnerLoader {
@@ -59,9 +62,10 @@ func (l *OwnerLoader) Load(ctx context.Context, dirID string) (*OwnerConfig, err
 			return nil, fmt.Errorf(".owner has no content")
 		}
 
+		// Validate against schema and unmarshal
 		var config OwnerConfig
-		if err := json.Unmarshal(content, &config); err != nil {
-			return nil, fmt.Errorf("invalid .owner: %w", err)
+		if err := ownerSchemaValidator.ValidateAndUnmarshal(content, &config); err != nil {
+			return nil, fmt.Errorf(".owner validation failed: %w", err)
 		}
 
 		// Cache it

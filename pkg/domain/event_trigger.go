@@ -34,9 +34,9 @@ type LifecycleEventTrigger struct {
 
 // EventTriggerConfig configures the event trigger
 type EventTriggerConfig struct {
-	MaxConcurrentHandlers int           // Maximum number of async handlers running concurrently
+	MaxConcurrentHandlers int // Maximum number of async handlers running concurrently
 	AsyncHandlerTimeout   time.Duration
-	NATSConn              *nats.Conn    // Optional NATS connection for event publishing
+	NATSConn              *nats.Conn // Optional NATS connection for event publishing
 }
 
 // NewLifecycleEventTrigger creates a new lifecycle event trigger

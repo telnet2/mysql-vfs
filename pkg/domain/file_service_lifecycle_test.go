@@ -17,10 +17,10 @@ import (
 
 // MockEventTrigger captures emitted events for testing
 type MockEventTrigger struct {
-	EmittedEvents     []EmittedEvent
-	ShouldVeto        bool
-	VetoEventType     string
-	VetoMessage       string
+	EmittedEvents []EmittedEvent
+	ShouldVeto    bool
+	VetoEventType string
+	VetoMessage   string
 }
 
 type EmittedEvent struct {

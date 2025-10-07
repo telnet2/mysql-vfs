@@ -77,7 +77,7 @@ func TestWorkflowLoader_NilLoaderSafety(t *testing.T) {
 
 	// Invalidate should not panic
 	loader.Invalidate("/test/.workflow")
-	
+
 	// InvalidateAll should not panic
 	loader.InvalidateAll()
 }
@@ -136,7 +136,7 @@ func TestWorkflowEngine_GetValidTransitions_SystemAdmin(t *testing.T) {
 	actor := WorkflowActor{ID: "admin", Groups: []string{"system-admin"}}
 	transitions, err := engine.GetValidTransitions(ctx, "/docs/draft/file.txt", actor)
 	require.NoError(t, err)
-	
+
 	// System admin should see all transitions from draft (which is only "review" in test setup)
 	assert.Contains(t, transitions, "review")
 	assert.Len(t, transitions, 1) // Only one transition defined in test setup

@@ -1,0 +1,53 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "User Configuration Schema",
+  "description": "Defines user credentials and group memberships",
+  "type": "object",
+  "required": ["users"],
+  "properties": {
+    "users": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["user_id", "groups"],
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255,
+            "pattern": "^[a-zA-Z0-9_-]+$",
+            "description": "Unique user identifier"
+          },
+          "password_hash": {
+            "type": "string",
+            "description": "Bcrypt password hash"
+          },
+          "token": {
+            "type": "string",
+            "minLength": 16,
+            "description": "Optional static authentication token"
+          },
+          "groups": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[a-zA-Z0-9_-]+$"
+            },
+            "minItems": 1,
+            "uniqueItems": true,
+            "description": "User's group memberships"
+          }
+        },
+        "oneOf": [
+          {"required": ["password_hash"]},
+          {"required": ["token"]},
+          {"required": ["password_hash", "token"]}
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 1
+    }
+  },
+  "additionalProperties": false
+}

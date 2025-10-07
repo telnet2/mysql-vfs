@@ -1,15 +1,14 @@
 package domain
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
 
-	"bytes"
-
+	"github.com/open-policy-agent/opa/ast"
 	"github.com/santhosh-tekuri/jsonschema/v5"
-	"github.com/telnet2/mysql-vfs/pkg/events"
 )
 
 // SpecialFileType represents a type of special file
@@ -33,6 +32,23 @@ type SpecialFileDefinition struct {
 	AdminOnly         bool
 	ValidateFunc      func(content []byte) error
 	InheritFromParent bool
+
+	// Lifecycle hooks (optional)
+	OnCreate LifecycleHook // Called after successful creation
+	OnUpdate LifecycleHook // Called after successful update
+	OnDelete LifecycleHook // Called after successful deletion
+}
+
+// LifecycleHook is called during special file lifecycle events
+type LifecycleHook func(ctx LifecycleContext) error
+
+// LifecycleContext provides context for lifecycle hooks
+type LifecycleContext struct {
+	DirectoryPath string
+	FileName      string
+	Content       []byte // Empty for OnDelete
+	OldContent    []byte // Only set for OnUpdate
+	Loaders       *SpecialFileLoaders
 }
 
 var (
@@ -224,33 +240,21 @@ type FileRule struct {
 	Description string                 `json:"description,omitempty"`
 }
 
+// Schema validators for special files (lazy-loaded with caching)
+var (
+	filesSchemaValidator = NewSchemaValidator("files.schema.json")
+)
+
 // validateFilesConfig validates .files file content
 func validateFilesConfig(content []byte) error {
+	// Validate against schema and unmarshal
 	var filesConfig FilesConfig
-
-	if err := json.Unmarshal(content, &filesConfig); err != nil {
-		return fmt.Errorf("invalid JSON: %w", err)
+	if err := filesSchemaValidator.ValidateAndUnmarshal(content, &filesConfig); err != nil {
+		return fmt.Errorf(".files validation failed: %w", err)
 	}
 
-	if len(filesConfig.Rules) == 0 {
-		return fmt.Errorf("at least one rule must be defined")
-	}
-
-	// Validate default action
-	if filesConfig.DefaultAction != "" && filesConfig.DefaultAction != "allow" && filesConfig.DefaultAction != "deny" {
-		return fmt.Errorf("default_action must be 'allow' or 'deny', got: %s", filesConfig.DefaultAction)
-	}
-
-	// Validate each rule
+	// Additional validation for embedded schemas in rules
 	for i, rule := range filesConfig.Rules {
-		if rule.Pattern == "" {
-			return fmt.Errorf("rule %d: pattern is required", i)
-		}
-
-		if rule.Type != "glob" && rule.Type != "regex" {
-			return fmt.Errorf("rule %d: type must be 'glob' or 'regex', got: %s", i, rule.Type)
-		}
-
 		// If schema is provided, validate it's a valid JSON schema
 		// Note: $ref resolution happens at runtime, not here
 		if rule.Schema != nil {
@@ -315,37 +319,50 @@ func hasSchemaProtocolRef(obj interface{}) bool {
 	return false
 }
 
-// validateRegoPolicy validates .rego file content
+// validateRegoPolicy validates .rego file content using OPA AST parser
 func validateRegoPolicy(content []byte) error {
-	// Basic validation: check it's not empty and looks like Rego
 	if len(content) == 0 {
 		return fmt.Errorf("policy cannot be empty")
 	}
 
-	contentStr := string(content)
+	// Parse Rego module using OPA AST parser
+	module, err := ast.ParseModule("policy.rego", string(content))
+	if err != nil {
+		return fmt.Errorf("rego syntax error: %w", err)
+	}
 
-	// Check for basic Rego syntax
-	if !strings.Contains(contentStr, "package") {
+	// Verify package declaration exists
+	if module.Package == nil {
 		return fmt.Errorf("policy must contain a package declaration")
 	}
 
-	// TODO: Use OPA's AST parser for more thorough validation
-	// For now, basic checks are sufficient
+	// Compile to check for semantic errors (undefined references, type errors, etc.)
+	compiler := ast.NewCompiler()
+	compiler.Compile(map[string]*ast.Module{
+		"policy.rego": module,
+	})
+
+	if compiler.Failed() {
+		// Format compilation errors
+		var errMsgs []string
+		for _, compileErr := range compiler.Errors {
+			errMsgs = append(errMsgs, compileErr.Error())
+		}
+		return fmt.Errorf("rego compilation failed:\n%s", strings.Join(errMsgs, "\n"))
+	}
 
 	return nil
 }
 
 // validateEventsConfig validates .events file content
 func validateEventsConfig(content []byte) error {
-	// We need to import the events package types, but to avoid circular dependency
-	// we'll do basic JSON validation here
+	// Basic structural validation - most detailed validation is handled by JSON schema
+	// We keep minimal Go validation for immediate feedback during file operations
 	var eventsFile struct {
 		Handlers []struct {
-			Name    string      `json:"name"`
-			Events  []string    `json:"events"`
-			Type    string      `json:"type"`
-			Enabled *bool       `json:"enabled,omitempty"`
-			Config  interface{} `json:"config"`
+			Name   string   `json:"name"`
+			Events []string `json:"events"`
+			Type   string   `json:"type"`
 		} `json:"handlers"`
 	}
 
@@ -357,54 +374,40 @@ func validateEventsConfig(content []byte) error {
 		return fmt.Errorf("at least one handler must be defined")
 	}
 
-	// Validate handler types
+	// Validate handler types (keep for immediate feedback)
 	validHandlerTypes := map[string]bool{
-		"webhook": true,
-		"log":     true,
-		"metrics": true,
+		"webhook":   true,
+		"log":       true,
+		"metrics":   true,
+		"move_file": true,
 	}
 
-	// Create pattern matcher for validating event patterns
-	matcher := events.NewWildcardPatternMatcher()
-
+	// Check for duplicate handler names (cannot be done in JSON schema)
 	handlerNames := make(map[string]bool)
 	for i, handler := range eventsFile.Handlers {
-		// Validate name
+		// Basic validation for immediate feedback
 		if handler.Name == "" {
 			return fmt.Errorf("handler %d: name is required", i)
 		}
 
-		// Check for duplicate names
 		if handlerNames[handler.Name] {
 			return fmt.Errorf("handler %d: duplicate handler name: %s", i, handler.Name)
 		}
 		handlerNames[handler.Name] = true
 
-		// Validate handler type
 		if !validHandlerTypes[handler.Type] {
-			return fmt.Errorf("handler %d: invalid handler type: %s (must be webhook, log, or metrics)", i, handler.Type)
+			return fmt.Errorf("handler %d: invalid handler type: %s (must be webhook, log, metrics, or move_file)", i, handler.Type)
 		}
 
-		// Validate events
 		if len(handler.Events) == 0 {
 			return fmt.Errorf("handler %d: at least one event must be specified", i)
 		}
 
-		// Validate each event pattern using the wildcard pattern matcher
-		for j, eventPattern := range handler.Events {
-			if eventPattern == "" {
+		// Check for empty event patterns
+		for j, event := range handler.Events {
+			if event == "" {
 				return fmt.Errorf("handler %d: event pattern %d cannot be empty", i, j)
 			}
-
-			// Validate pattern syntax by attempting to compile it
-			if _, err := matcher.CompilePattern(eventPattern); err != nil {
-				return fmt.Errorf("handler %d: invalid event pattern '%s': %w", i, eventPattern, err)
-			}
-		}
-
-		// Validate config exists
-		if handler.Config == nil {
-			return fmt.Errorf("handler %d: config is required", i)
 		}
 	}
 
@@ -423,16 +426,16 @@ type UserCredential struct {
 	Groups       []string `json:"groups"`          // User's group memberships
 }
 
+var (
+	userSchemaValidator = NewSchemaValidator("user.schema.json")
+)
+
 // validateUserConfig validates .user file content
 func validateUserConfig(content []byte) error {
+	// Validate against schema and unmarshal
 	var userConfig UserConfig
-
-	if err := json.Unmarshal(content, &userConfig); err != nil {
-		return fmt.Errorf("invalid user JSON: %w", err)
-	}
-
-	if len(userConfig.Users) == 0 {
-		return fmt.Errorf("at least one user must be defined")
+	if err := userSchemaValidator.ValidateAndUnmarshal(content, &userConfig); err != nil {
+		return fmt.Errorf(".user validation failed: %w", err)
 	}
 
 	userIDs := make(map[string]bool)
@@ -468,16 +471,16 @@ type GroupDefinition struct {
 	Members []string `json:"members"` // User IDs
 }
 
+var (
+	groupSchemaValidator = NewSchemaValidator("group.schema.json")
+)
+
 // validateGroupConfig validates .group file content
 func validateGroupConfig(content []byte) error {
+	// Validate against schema and unmarshal
 	var groupConfig GroupConfig
-
-	if err := json.Unmarshal(content, &groupConfig); err != nil {
-		return fmt.Errorf("invalid group JSON: %w", err)
-	}
-
-	if len(groupConfig.Groups) == 0 {
-		return fmt.Errorf("at least one group must be defined")
+	if err := groupSchemaValidator.ValidateAndUnmarshal(content, &groupConfig); err != nil {
+		return fmt.Errorf(".group validation failed: %w", err)
 	}
 
 	groupIDs := make(map[string]bool)

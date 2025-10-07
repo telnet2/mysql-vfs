@@ -358,6 +358,18 @@ func TestValidateEventsConfig(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "valid move_file handler",
+			content: `{
+				"handlers": [{
+					"name": "workflow-mover",
+					"type": "move_file",
+					"events": ["file.create.completion.succeeded"],
+					"config": {"target_state": "processing"}
+				}]
+			}`,
+			wantErr: false,
+		},
+		{
 			name: "empty event pattern",
 			content: `{
 				"handlers": [{
