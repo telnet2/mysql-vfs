@@ -352,6 +352,103 @@ data: {"_event_type":"file.create.completion.succeeded","event":{...},"resource"
 
 ---
 
+## Event Reference
+
+### Complete Event List
+
+**File Operation Events:**
+
+| Event Type | Stage | Veto Capable | Description |
+|------------|-------|--------------|-------------|
+| `file.create.authorization.started` | Authorization | ✓ | Authorization check begins |
+| `file.create.authorization.succeeded` | Authorization | ✓ | User authorized to create |
+| `file.create.validation.schema.checking` | Validation | ✓ | Schema validation in progress |
+| `file.create.validation.schema.succeeded` | Validation | ✓ | Schema validation passed |
+| `file.create.validation.schema.failed` | Validation | ✗ | Schema validation failed |
+| `file.create.validation.succeeded` | Validation | ✓ | All validations passed |
+| `file.create.completion.succeeded` | Completion | ✗ | File created successfully |
+| `file.create.completion.failed` | Completion | ✗ | File creation failed |
+| `file.update.authorization.started` | Authorization | ✓ | Authorization check begins |
+| `file.update.authorization.succeeded` | Authorization | ✓ | User authorized to update |
+| `file.update.validation.schema.checking` | Validation | ✓ | Schema validation in progress |
+| `file.update.validation.schema.succeeded` | Validation | ✓ | Schema validation passed |
+| `file.update.validation.succeeded` | Validation | ✓ | All validations passed |
+| `file.update.completion.succeeded` | Completion | ✗ | File updated successfully |
+| `file.update.completion.failed` | Completion | ✗ | File update failed |
+| `file.delete.authorization.started` | Authorization | ✓ | Authorization check begins |
+| `file.delete.authorization.succeeded` | Authorization | ✓ | User authorized to delete |
+| `file.delete.validation.succeeded` | Validation | ✓ | All validations passed |
+| `file.delete.completion.succeeded` | Completion | ✗ | File deleted successfully |
+| `file.delete.completion.failed` | Completion | ✗ | File deletion failed |
+| `file.move.authorization.started` | Authorization | ✓ | Authorization check begins |
+| `file.move.authorization.succeeded` | Authorization | ✓ | User authorized to move |
+| `file.move.validation.succeeded` | Validation | ✓ | All validations passed |
+| `file.move.completion.succeeded` | Completion | ✗ | File moved successfully |
+| `file.move.completion.failed` | Completion | ✗ | File move failed |
+
+**Directory Operation Events:**
+
+| Event Type | Stage | Description |
+|------------|-------|-------------|
+| `directory.create.authorization.started` | Authorization | Authorization check begins |
+| `directory.create.authorization.succeeded` | Authorization | User authorized to create |
+| `directory.create.validation.succeeded` | Validation | All validations passed |
+| `directory.create.completion.succeeded` | Completion | Directory created successfully |
+| `directory.create.completion.failed` | Completion | Directory creation failed |
+| `directory.delete.authorization.started` | Authorization | Authorization check begins |
+| `directory.delete.authorization.succeeded` | Authorization | User authorized to delete |
+| `directory.delete.validation.succeeded` | Validation | All validations passed |
+| `directory.delete.completion.succeeded` | Completion | Directory deleted successfully |
+| `directory.delete.completion.failed` | Completion | Directory deletion failed |
+
+**Workflow Events:**
+
+| Event Type | Description |
+|------------|-------------|
+| `workflow.transition.started` | File move between workflow states initiated |
+| `workflow.transition.succeeded` | State transition completed successfully |
+| `workflow.transition.failed` | State transition blocked by gate policy |
+| `workflow.deletion.blocked` | Attempt to delete file in workflow-managed directory |
+| `workflow.escape.blocked` | Attempt to move file outside workflow directory tree |
+| `workflow.create.blocked` | Attempt to create file directly in state directory |
+| `workflow.state_dir.protected` | Attempt to directly modify state directory structure |
+
+### Event Filtering Examples
+
+**Filter by operation:**
+```bash
+# All file create events
+curl -N "http://localhost:18083/api/v1/publish-events?filter=file.create.>"
+
+# All file operations (create, update, delete, move)
+curl -N "http://localhost:18083/api/v1/publish-events?filter=file.>"
+
+# Only completion events
+curl -N "http://localhost:18083/api/v1/publish-events?filter=*.*.completion.*"
+
+# All workflow events
+curl -N "http://localhost:18083/api/v1/publish-events?filter=workflow.>"
+```
+
+**Filter by outcome:**
+```bash
+# All succeeded events
+curl -N "http://localhost:18083/api/v1/publish-events?filter=*.*.*.succeeded"
+
+# All failed events
+curl -N "http://localhost:18083/api/v1/publish-events?filter=*.*.*.failed"
+```
+
+**Combined filters:**
+```javascript
+// Subscribe to create and update completions
+const eventSource = new EventSource(
+  '/api/v1/publish-events?filter=file.create.completion.>|file.update.completion.>'
+);
+```
+
+---
+
 ## Configuration
 
 ### Environment Variables

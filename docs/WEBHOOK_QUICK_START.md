@@ -107,16 +107,36 @@ vfs-cli import /tmp/test.txt /test/
 
 ## Event Types
 
-| Command | Event Type |
-|---------|-----------|
-| Default | `file.create.completion.succeeded` |
-| For updates | `file.update.completion.succeeded` |
-| For deletions | `file.delete.completion.succeeded` |
+### Common Event Types
 
-Specify event type:
+| Event Type | When It Fires |
+|-----------|---------------|
+| `file.create.completion.succeeded` | File created (default) |
+| `file.update.completion.succeeded` | File updated |
+| `file.delete.completion.succeeded` | File deleted |
+| `file.move.completion.succeeded` | File moved |
+| `workflow.transition.succeeded` | Workflow state changed |
+| `workflow.transition.failed` | Workflow transition blocked |
+
+### Using Wildcards
+
+Match multiple events with wildcard patterns:
+
+| Pattern | Matches |
+|---------|---------|
+| `file.create.*` | All file create events (one level) |
+| `file.create.>` | All file create events (all levels) |
+| `*.completion.succeeded` | All successful completions |
+| `workflow.>` | All workflow events |
+
+### Specify Event Type
 
 ```bash
+# Specific event
 vfs-cli create-trigger /dir https://url.com file.update.completion.succeeded
+
+# Wildcard pattern
+vfs-cli create-trigger /dir https://url.com "file.create.>"
 ```
 
 ## Troubleshooting

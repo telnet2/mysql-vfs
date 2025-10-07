@@ -72,23 +72,102 @@ When a file is created, your webhook receives this JSON payload:
 
 ## Event Types
 
-### File Events
+### File Events (Completion)
+
+These are the most commonly used events for webhooks:
 
 | Event Type | When It Triggers | Use Case |
 |------------|------------------|----------|
 | `file.create.completion.succeeded` | After file is created successfully | Notifications, processing pipelines |
 | `file.update.completion.succeeded` | After file is updated | Change detection, sync |
 | `file.delete.completion.succeeded` | After file is deleted | Cleanup, archiving |
+| `file.move.completion.succeeded` | After file is moved | Track relocations, update indexes |
 
 ### Lifecycle Events (Advanced)
 
-| Event Type | Stage | Can Veto? |
-|------------|-------|-----------|
-| `file.create.authorization.started` | Authorization | ✓ Yes |
-| `file.create.authorization.succeeded` | Authorization | ✓ Yes |
-| `file.create.validation.succeeded` | Validation | ✓ Yes |
-| `file.create.execution.started` | Execution | ✗ No |
-| `file.create.completion.succeeded` | Completion | ✗ No |
+All file operations go through multiple stages. Each stage emits events that can be used for advanced use cases:
+
+**File Create Events:**
+
+| Event Type | Stage | Can Veto? | Description |
+|------------|-------|-----------|-------------|
+| `file.create.authorization.started` | Authorization | ✓ Yes | Authorization check begins |
+| `file.create.authorization.succeeded` | Authorization | ✓ Yes | User authorized to create file |
+| `file.create.validation.schema.checking` | Validation | ✓ Yes | Schema validation in progress |
+| `file.create.validation.schema.succeeded` | Validation | ✓ Yes | Schema validation passed |
+| `file.create.validation.schema.failed` | Validation | ✗ No | Schema validation failed |
+| `file.create.validation.succeeded` | Validation | ✓ Yes | All validations passed |
+| `file.create.completion.succeeded` | Completion | ✗ No | File created successfully |
+| `file.create.completion.failed` | Completion | ✗ No | File creation failed |
+
+**File Update Events:**
+
+| Event Type | Can Veto? | Description |
+|------------|-----------|-------------|
+| `file.update.authorization.started` | ✓ Yes | Authorization check begins |
+| `file.update.authorization.succeeded` | ✓ Yes | User authorized to update file |
+| `file.update.validation.schema.checking` | ✓ Yes | Schema validation in progress |
+| `file.update.validation.schema.succeeded` | ✓ Yes | Schema validation passed |
+| `file.update.validation.succeeded` | ✓ Yes | All validations passed |
+| `file.update.completion.succeeded` | ✗ No | File updated successfully |
+| `file.update.completion.failed` | ✗ No | File update failed |
+
+**File Delete Events:**
+
+| Event Type | Can Veto? | Description |
+|------------|-----------|-------------|
+| `file.delete.authorization.started` | ✓ Yes | Authorization check begins |
+| `file.delete.authorization.succeeded` | ✓ Yes | User authorized to delete file |
+| `file.delete.validation.succeeded` | ✓ Yes | All validations passed |
+| `file.delete.completion.succeeded` | ✗ No | File deleted successfully |
+| `file.delete.completion.failed` | ✗ No | File deletion failed |
+
+**File Move Events:**
+
+| Event Type | Can Veto? | Description |
+|------------|-----------|-------------|
+| `file.move.authorization.started` | ✓ Yes | Authorization check begins |
+| `file.move.authorization.succeeded` | ✓ Yes | User authorized to move file |
+| `file.move.validation.succeeded` | ✓ Yes | All validations passed |
+| `file.move.completion.succeeded` | ✗ No | File moved successfully |
+| `file.move.completion.failed` | ✗ No | File move failed |
+
+### Directory Events
+
+| Event Type | Description |
+|------------|-------------|
+| `directory.create.authorization.started` | Authorization check begins |
+| `directory.create.authorization.succeeded` | User authorized to create directory |
+| `directory.create.validation.succeeded` | All validations passed |
+| `directory.create.completion.succeeded` | Directory created successfully |
+| `directory.delete.authorization.started` | Authorization check begins |
+| `directory.delete.authorization.succeeded` | User authorized to delete directory |
+| `directory.delete.validation.succeeded` | All validations passed |
+| `directory.delete.completion.succeeded` | Directory deleted successfully |
+
+### Workflow Events
+
+| Event Type | Description |
+|------------|-------------|
+| `workflow.transition.started` | File move between workflow states initiated |
+| `workflow.transition.succeeded` | State transition successful |
+| `workflow.transition.failed` | State transition blocked by gate policy |
+| `workflow.deletion.blocked` | Attempt to delete file in workflow directory |
+| `workflow.escape.blocked` | Attempt to move file outside workflow tree |
+| `workflow.create.blocked` | Attempt to create file directly in state directory |
+| `workflow.state_dir.protected` | Attempt to modify state directory structure |
+
+### Wildcard Patterns
+
+You can use wildcards to match multiple events:
+
+| Pattern | Matches | Example |
+|---------|---------|---------|
+| `file.create.*` | Single token | `file.create.authorization`, `file.create.validation` |
+| `file.create.>` | All remaining | `file.create.authorization.started`, `file.create.validation.schema.checking` |
+| `*.completion.succeeded` | Any operation | `file.create.completion.succeeded`, `file.update.completion.succeeded` |
+| `file.*.completion.*` | Multiple wildcards | All file completion events |
+| `workflow.>` | All workflow events | Any workflow event |
 
 ## Advanced Configurations
 

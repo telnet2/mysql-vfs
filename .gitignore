@@ -1,44 +1,37 @@
-# Binaries
-*.exe
-*.dll
-*.so
-*.dylib
-*.a
 *.o
-*.out
+*.a
+*.so
+_obj
+_test
+*.[568vq]
+[568vq].out
+*.cgo1.go
+*.cgo2.c
+_cgo_defun.c
+_cgo_gotypes.go
+_cgo_export.*
+_testmain.go
+*.exe
+*.exe~
 *.test
-
-# Go binaries
-cli/vfs-cli
-cli/vfs-cli-prompt
-bin/
-citest/*.test
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-*~
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Build artifacts
-dist/
-build/
+*.prof
+*.rar
+*.zip
+*.gz
+*.psd
+*.bmd
+*.cfg
+*.pptx
 *.log
-
-# Environment
-.env
-.env.local
-
-# Docker
-.dockerignore
-
-# Temporary files
-tmp/
-temp/
-
-/vfs-*
+*nohup.out
+*settings.pyc
+*.sublime-project
+*.sublime-workspace
+!.gitkeep
+.DS_Store
+/.idea
+/.vscode
+/output
+*.local.yml
+dumped_hertz_remote_config.json
+vfs-cli		  

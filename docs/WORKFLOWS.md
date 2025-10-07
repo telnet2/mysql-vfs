@@ -442,16 +442,38 @@ if targetDir != sourceDir {
 
 ### Event Types
 
-Two event types are emitted:
+The workflow system emits several event types:
 
 ```go
 const (
+    // State transition events
+    EventWorkflowTransitionStarted   = "workflow.transition.started"
     EventWorkflowTransitionSucceeded = "workflow.transition.succeeded"
     EventWorkflowTransitionFailed    = "workflow.transition.failed"
+
+    // Protection events (when workflows block operations)
+    EventWorkflowDeletionBlocked   = "workflow.deletion.blocked"
+    EventWorkflowEscapeBlocked     = "workflow.escape.blocked"
+    EventWorkflowStateDirProtected = "workflow.state_dir.protected"
+    EventWorkflowCreateBlocked     = "workflow.create.blocked"
 )
 ```
 
-### Event Payload
+**Event Descriptions:**
+
+| Event Type | When Emitted | Description |
+|------------|--------------|-------------|
+| `workflow.transition.started` | Move begins | File move operation between states initiated |
+| `workflow.transition.succeeded` | Move succeeds | File successfully transitioned to new state |
+| `workflow.transition.failed` | Move denied | Transition blocked by gate policy |
+| `workflow.deletion.blocked` | Delete attempt | Attempt to delete file in workflow-managed directory |
+| `workflow.escape.blocked` | Move out | Attempt to move file outside workflow directory tree |
+| `workflow.state_dir.protected` | Direct modify | Attempt to directly create/delete state directories |
+| `workflow.create.blocked` | Create in state | Attempt to create file directly in state directory |
+
+### Event Payloads
+
+**Transition Events** (`workflow.transition.*`):
 
 ```json
 {
@@ -466,6 +488,26 @@ const (
     "directory_path": "/projects/alpha",
     "allowed": true,
     "policy_result": "transition allowed by policy"
+  }
+}
+```
+
+**Protection Events** (`workflow.*.blocked`):
+
+```json
+{
+  "event_type": "workflow.deletion.blocked",
+  "timestamp": "2025-10-07T12:34:56Z",
+  "data": {
+    "file_path": "/projects/alpha/draft/document.txt",
+    "workflow_path": "/projects/alpha",
+    "operation": "delete",
+    "actor": {
+      "id": "alice",
+      "groups": ["users"]
+    },
+    "error_message": "cannot delete files in workflow-managed directories",
+    "metadata": {}
   }
 }
 ```
@@ -497,12 +539,37 @@ Register handlers in `.events` file:
 {
   "handlers": [
     {
-      "name": "workflow-notifications",
-      "events": ["workflow.transition.*"],
+      "name": "workflow-transitions",
+      "events": [
+        "workflow.transition.succeeded",
+        "workflow.transition.failed"
+      ],
       "type": "webhook",
       "config": {
-        "url": "https://notify.example.com/workflow",
+        "url": "https://notify.example.com/workflow/transitions",
         "method": "POST"
+      }
+    },
+    {
+      "name": "workflow-protection-alerts",
+      "events": [
+        "workflow.deletion.blocked",
+        "workflow.escape.blocked",
+        "workflow.create.blocked"
+      ],
+      "type": "webhook",
+      "config": {
+        "url": "https://notify.example.com/workflow/security",
+        "method": "POST"
+      }
+    },
+    {
+      "name": "all-workflow-events",
+      "events": ["workflow.>"],
+      "type": "log",
+      "config": {
+        "level": "info",
+        "message": "Workflow event: {{.event.type}}"
       }
     }
   ]
