@@ -7,8 +7,6 @@ import (
 	"github.com/telnet2/mysql-vfs/cli/commands"
 )
 
-var catVersion int64
-
 var catCmd = &cobra.Command{
 	Use:   "cat <path>",
 	Short: "Display file contents",
@@ -20,9 +18,15 @@ var catCmd = &cobra.Command{
 		}
 		catCommand := &commands.CatCommand{}
 
+		version, _ := cmd.Flags().GetInt64("version")
+		showInfo, _ := cmd.Flags().GetBool("info")
+
 		cmdArgs := []string{}
-		if catVersion > 0 {
-			cmdArgs = append(cmdArgs, "-v", fmt.Sprintf("%d", catVersion))
+		if version > 0 {
+			cmdArgs = append(cmdArgs, "-v", fmt.Sprintf("%d", version))
+		}
+		if showInfo {
+			cmdArgs = append(cmdArgs, "-i")
 		}
 		cmdArgs = append(cmdArgs, args[0])
 
@@ -31,5 +35,6 @@ var catCmd = &cobra.Command{
 }
 
 func init() {
-	catCmd.Flags().Int64VarP(&catVersion, "version", "v", 0, "Specific version to retrieve")
+	catCmd.Flags().Int64P("version", "v", 0, "Specific version to retrieve")
+	catCmd.Flags().BoolP("info", "i", false, "Show version information")
 }

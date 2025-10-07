@@ -6,13 +6,17 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
+	"github.com/nats-io/nats.go"
 	"github.com/telnet2/mysql-vfs/pkg/config"
 	"github.com/telnet2/mysql-vfs/pkg/domain"
 	"github.com/telnet2/mysql-vfs/pkg/events/handlers"
@@ -77,6 +81,33 @@ func main() {
 	}
 	log.Println("Storage initialized successfully")
 
+	// Initialize NATS connection (optional)
+	var natsConn *nats.Conn
+	natsURL := os.Getenv("NATS_URL")
+	if natsURL != "" {
+		log.Printf("Connecting to NATS at %s...", natsURL)
+		natsConn, err = nats.Connect(natsURL,
+			nats.MaxReconnects(-1),            // Unlimited reconnects
+			nats.ReconnectWait(2*time.Second), // Wait 2s between reconnects
+			nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
+				if err != nil {
+					log.Printf("NATS disconnected: %v", err)
+				}
+			}),
+			nats.ReconnectHandler(func(nc *nats.Conn) {
+				log.Printf("NATS reconnected to %s", nc.ConnectedUrl())
+			}),
+		)
+		if err != nil {
+			log.Printf("Warning: Failed to connect to NATS (events will not be published): %v", err)
+			natsConn = nil // Continue without NATS
+		} else {
+			log.Println("NATS connection established successfully")
+		}
+	} else {
+		log.Println("NATS_URL not set, event publishing to NATS disabled")
+	}
+
 	// Initialize repositories
 	fileRepo := mysql.NewGormFileRepository(database, storageService)
 	dirRepo := mysql.NewGormDirectoryRepository(database)
@@ -100,6 +131,7 @@ func main() {
 		handlerRegistry,
 		domain.EventTriggerConfig{
 			MaxConcurrentHandlers: 10,
+			NATSConn:              natsConn, // Pass NATS connection (nil if not available)
 		},
 	)
 
@@ -179,8 +211,45 @@ func main() {
 	log.Printf("Schema validation: ENABLED (.files special files)")
 	log.Printf("Lifecycle events: ENABLED (.events special files)")
 	log.Printf("Event handlers: webhook, log, metrics")
+	if natsConn != nil {
+		log.Printf("NATS event publishing: ENABLED (%s)", natsConn.ConnectedUrl())
+	} else {
+		log.Printf("NATS event publishing: DISABLED")
+	}
 	log.Printf("Cache TTL - Schema: %v, Policy: %v, Quota: %v", cfg.SchemaCacheTTL, cfg.PolicyCacheTTL, cfg.QuotaCacheTTL)
-	h.Spin()
+
+	// Start server in background
+	go h.Spin()
+
+	// Wait for shutdown signal
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	<-sigChan
+
+	log.Println("Shutting down VFS service...")
+
+	// Graceful shutdown
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Close NATS connection
+	if natsConn != nil {
+		log.Println("Closing NATS connection...")
+		natsConn.Drain() // Drain pending messages
+		natsConn.Close()
+		log.Println("NATS connection closed")
+	}
+
+	// Wait for event trigger to complete pending handlers
+	if eventTrigger != nil {
+		log.Println("Waiting for event handlers to complete...")
+		if err := eventTrigger.Shutdown(shutdownCtx); err != nil {
+			log.Printf("Event trigger shutdown error: %v", err)
+		}
+		log.Println("Event handlers completed")
+	}
+
+	log.Println("VFS service stopped")
 }
 
 // healthHandler returns service health status
@@ -508,6 +577,10 @@ func (s *VFSServer) getFile(ctx context.Context, c *app.RequestContext) {
 	c.Response.Header.Set("X-File-Version", fmt.Sprintf("%d", file.Version))
 	c.Response.Header.Set("X-Checksum-SHA256", file.ChecksumSHA256)
 	c.Response.Header.Set("X-File-Modified-At", file.UpdatedAt.Format(time.RFC3339))
+	// Prevent caching to ensure freshness
+	c.Response.Header.Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	c.Response.Header.Set("Pragma", "no-cache")
+	c.Response.Header.Set("Expires", "0")
 
 	// Stream content
 	c.Response.SetStatusCode(consts.StatusOK)

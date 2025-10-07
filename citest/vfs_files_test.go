@@ -278,6 +278,50 @@ var _ = Describe("VFS File Operations", Ordered, func() {
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("not found"))
 		})
+
+		It("should retrieve updated content correctly", func() {
+			// Create initial file
+			originalContent := `{"name": "ORIGINAL"}`
+			file, err := fileService.CreateFile(
+				ctx,
+				"/",
+				"update-retrieve-test.json",
+				"application/json",
+				int64(len(originalContent)),
+				io.NopCloser(strings.NewReader(originalContent)),
+			)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Update file
+			updatedContent := `{"name": "UPDATED"}`
+			_, err = fileService.UpdateFile(
+				ctx,
+				"/update-retrieve-test.json",
+				"application/json",
+				int64(len(updatedContent)),
+				io.NopCloser(strings.NewReader(updatedContent)),
+				file.Version,
+			)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Retrieve current version (should be updated content)
+			_, reader, err := fileService.GetFile(ctx, "/update-retrieve-test.json", 0)
+			Expect(err).NotTo(HaveOccurred())
+			defer reader.Close()
+
+			retrievedContent, err := io.ReadAll(reader)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(retrievedContent)).To(Equal(updatedContent))
+
+			// Also test retrieving specific version
+			_, reader2, err := fileService.GetFile(ctx, "/update-retrieve-test.json", 1)
+			Expect(err).NotTo(HaveOccurred())
+			defer reader2.Close()
+
+			originalRetrieved, err := io.ReadAll(reader2)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(originalRetrieved)).To(Equal(originalContent))
+		})
 	})
 
 	Context("when deleting files", func() {

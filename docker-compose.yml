@@ -39,6 +39,22 @@ services:
     networks:
       - cc-vfs-network
 
+  nats:
+    image: nats:2.10-alpine
+    container_name: cc-vfs-nats
+    ports:
+      - "4222:4222"  # Client connections
+      - "8222:8222"  # HTTP monitoring
+    command: ["-js", "-m", "8222"]  # Enable JetStream and monitoring
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    networks:
+      - cc-vfs-network
+
   vfs-service:
     build:
       context: .
@@ -49,6 +65,8 @@ services:
         condition: service_healthy
       localstack:
         condition: service_started
+      nats:
+        condition: service_healthy
     environment:
       DB_DSN: root:root@tcp(mysql:3306)/vfs?charset=utf8mb4&parseTime=True&loc=Local
       S3_ENDPOINT: http://localstack:4566
@@ -60,6 +78,7 @@ services:
       PORT: 8080
       LOG_LEVEL: debug
       SYSTEM_ADMIN_TOKEN: local-system-admin
+      NATS_URL: nats://nats:4222
     ports:
       - "18080:8080"
     healthcheck:
@@ -139,6 +158,33 @@ services:
     restart: unless-stopped
     deploy:
       replicas: 1
+
+  event-publisher:
+    build:
+      context: .
+      dockerfile: services/event-publisher/Dockerfile
+    container_name: cc-vfs-event-publisher
+    depends_on:
+      nats:
+        condition: service_healthy
+    environment:
+      NATS_URL: nats://nats:4222
+      EVENT_BUFFER_SIZE: 1000
+      SSE_MAX_CONNECTIONS: 100
+      PORT: 8083
+      JWT_SECRET: ${JWT_SECRET:-your-secret-key-change-in-production}
+      AUTH_ENABLED: ${AUTH_ENABLED:-false}  # Set to true in production
+    ports:
+      - "18083:8083"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8083/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - cc-vfs-network
+    restart: unless-stopped
 
   cli:
     build:

@@ -560,12 +560,13 @@ type CatCommand struct{}
 
 func (c *CatCommand) Execute(ctx *Context, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: cat [-v version] <path>")
+		return fmt.Errorf("usage: cat [-v version] [-i] <path> - Display file contents (shows version info with -v or -i)")
 	}
 
 	var version int64
 	var path string
 	hasVersion := false
+	showInfo := false
 
 	// Parse args
 	for i := 0; i < len(args); i++ {
@@ -576,13 +577,15 @@ func (c *CatCommand) Execute(ctx *Context, args []string) error {
 			}
 			hasVersion = true
 			i++
+		} else if args[i] == "-i" {
+			showInfo = true
 		} else {
 			path = args[i]
 		}
 	}
 
 	if path == "" {
-		return fmt.Errorf("usage: cat [-v version] <path>")
+		return fmt.Errorf("usage: cat [-v version] [-i] <path> - Display file contents (shows version info with -v or -i)")
 	}
 
 	path = ctx.Session.ResolvePath(path)
@@ -591,15 +594,17 @@ func (c *CatCommand) Execute(ctx *Context, args []string) error {
 		return fmt.Errorf("invalid path: %s", path)
 	}
 
-	var content []byte
 	var contentType string
 	var err error
 
 	if hasVersion {
-		content, contentType, err = ctx.Client.GetFileVersion(path, version)
+		content, contentType, actualVersion, err := ctx.Client.GetFileVersion(path, version)
 		if err != nil {
 			return err
 		}
+		// Display version information
+		fmt.Fprintf(ctx.Stdout, "version: %d\n", actualVersion)
+		fmt.Fprintf(ctx.Stdout, "payload:\n")
 		// Warn if binary
 		if !strings.HasPrefix(contentType, "text/") &&
 			!strings.HasPrefix(contentType, "application/json") {
@@ -614,11 +619,17 @@ func (c *CatCommand) Execute(ctx *Context, args []string) error {
 		return err
 	}
 
-	reader, contentType, err := ctx.Client.GetFileStream(path)
+	reader, contentType, actualVersion, err := ctx.Client.GetFileStream(path)
 	if err != nil {
 		return err
 	}
 	defer reader.Close()
+
+	// Display version information if requested
+	if showInfo {
+		fmt.Fprintf(ctx.Stdout, "version: %d\n", actualVersion)
+		fmt.Fprintf(ctx.Stdout, "payload:\n")
+	}
 
 	// Warn if binary
 	if !strings.HasPrefix(contentType, "text/") &&
@@ -637,7 +648,7 @@ func (c *CatCommand) Execute(ctx *Context, args []string) error {
 }
 
 func (c *CatCommand) Help() string {
-	return "cat [-v version] <path> - Display file contents"
+	return "cat [-v version] [-i] <path> - Display file contents (shows version info with -v or -i)"
 }
 
 // ImportCommand imports a local file to VFS

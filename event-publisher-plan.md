@@ -340,21 +340,25 @@ Query parameters for filtering events:
 
 ## Deployment Strategy
 
-### Phase 1: Basic SSE (Event Worker Integration)
-- Add SSE endpoint to existing event-worker
-- Skip NATS, use in-memory channel
-- Quick implementation for immediate SSE capability
+### Phase 1: NATS Integration ✅ **COMPLETED**
+- ✅ Add NATS dependency to go.mod
+- ✅ Extend LifecycleEventTrigger with NATS publishing
+- ✅ Update VFS service to initialize NATS connection
+- ✅ Add NATS service to docker-compose.yml
 
-### Phase 2: Distributed Publisher
-- Create separate event-publisher service
-- Add NATS for inter-service communication
-- Full distributed event collection
+### Phase 2: Event Publisher Service ✅ **COMPLETED**
+- ✅ Create separate event-publisher service
+- ✅ Add NATS subscriber for all VFS events
+- ✅ Implement SSE server with connection management
+- ✅ Add event filtering and buffering
+- ✅ Add event-publisher to docker-compose.yml
 
-### Phase 3: Production Hardening
-- Add authentication/authorization to SSE endpoint
-- Implement event persistence and replay
-- Add monitoring and metrics
-- Configure NATS clustering
+### Phase 3: Production Hardening ✅ **COMPLETED**
+- ✅ Add JWT authentication/authorization to SSE endpoint
+- ✅ Add Prometheus metrics for monitoring
+- ✅ Add connection and event throughput metrics
+- ⏸️ Implement event persistence and replay (future)
+- ⏸️ Configure NATS clustering (future)
 
 ## Benefits
 
@@ -366,9 +370,149 @@ Query parameters for filtering events:
 
 ## Migration Path
 
-1. Deploy NATS server alongside existing services
-2. Modify existing services to publish events to NATS (backward compatible)
-3. Deploy event-publisher service
+1. Deploy NATS server alongside existing services ✅
+2. Modify existing services to publish events to NATS (backward compatible) ✅
+3. Deploy event-publisher service ✅
 4. Update client applications to use SSE instead of polling
-5. Gradually phase out polling-based event consumption</content>
+5. Gradually phase out polling-based event consumption
+
+---
+
+## Usage Examples
+
+### Starting the Services
+
+```bash
+# Start all services including NATS and event-publisher
+docker compose up -d
+
+# Check service health
+curl http://localhost:18083/health
+```
+
+### Connecting to SSE Stream (No Auth)
+
+```bash
+# Get all events
+curl -N http://localhost:18083/api/v1/publish-events
+
+# Get file events only
+curl -N "http://localhost:18083/api/v1/publish-events?filter=file.*"
+
+# Get completion events only
+curl -N "http://localhost:18083/api/v1/publish-events?filter=*.completion.*"
+```
+
+### Connecting to SSE Stream (With JWT Auth)
+
+First, set `AUTH_ENABLED=true` and `JWT_SECRET=your-secret-key` in docker-compose.yml.
+
+```bash
+# Get JWT token from VFS service
+TOKEN=$(curl -s -X POST http://localhost:18080/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":"alice","password":"password"}' | jq -r '.token')
+
+# Connect to SSE with Bearer token
+curl -N http://localhost:18083/api/v1/publish-events \
+  -H "Authorization: Bearer $TOKEN"
+
+# Or use query parameter (for EventSource which can't set headers)
+curl -N "http://localhost:18083/api/v1/publish-events?token=$TOKEN&filter=file.*"
+```
+
+### JavaScript Client (Browser)
+
+```javascript
+// Without authentication
+const eventSource = new EventSource('http://localhost:18083/api/v1/publish-events?filter=file.*');
+
+eventSource.addEventListener('vfs-event', (event) => {
+    const data = JSON.parse(event.data);
+    console.log('Received event:', data);
+    console.log('Event type:', data._event_type);
+    console.log('Resource:', data.resource);
+});
+
+eventSource.addEventListener('connected', (event) => {
+    const data = JSON.parse(event.data);
+    console.log('Connected to SSE:', data.client_id);
+});
+
+// With authentication (using token query parameter)
+const token = 'your-jwt-token';
+const eventSource = new EventSource(`http://localhost:18083/api/v1/publish-events?token=${token}&filter=file.*`);
+```
+
+### Monitoring with Prometheus
+
+```bash
+# View Prometheus metrics
+curl http://localhost:18083/metrics
+
+# Key metrics:
+# - event_publisher_events_received_total: Events received from NATS
+# - event_publisher_events_published_total: Events sent to SSE clients
+# - event_publisher_events_dropped_total: Events dropped due to buffer overflow
+# - event_publisher_active_connections: Current SSE connections
+# - event_publisher_nats_connected: NATS connection status
+# - event_publisher_buffer_size: Current buffer utilization
+```
+
+### Production Configuration
+
+```yaml
+# docker-compose.yml
+event-publisher:
+  environment:
+    NATS_URL: nats://nats:4222
+    EVENT_BUFFER_SIZE: 5000        # Larger buffer for high throughput
+    SSE_MAX_CONNECTIONS: 1000      # Support more concurrent connections
+    PORT: 8083
+    JWT_SECRET: ${JWT_SECRET}      # Use secrets management in production
+    AUTH_ENABLED: "true"           # Enable authentication
+```
+
+### Testing Event Flow
+
+```bash
+# In Terminal 1: Start SSE client
+curl -N "http://localhost:18083/api/v1/publish-events?filter=file.create.*"
+
+# In Terminal 2: Create a file via VFS API
+curl -X POST http://localhost:18080/api/v1/files \
+  -H "Content-Type: application/json" \
+  -H "X-User-ID: alice" \
+  -d '{
+    "directory_path": "/data",
+    "name": "test.txt",
+    "content_type": "text/plain",
+    "content": "Hello World"
+  }'
+
+# Terminal 1 should receive events:
+# - file.create.authorization.started
+# - file.create.authorization.succeeded
+# - file.create.validation.succeeded
+# - file.create.completion.succeeded
+```
+
+### Troubleshooting
+
+```bash
+# Check NATS connection status
+curl http://localhost:18083/health | jq '.nats'
+
+# Check NATS monitoring UI
+open http://localhost:8222
+
+# Check active SSE connections
+curl http://localhost:18083/health | jq '.connections'
+
+# View event buffer utilization
+curl http://localhost:18083/health | jq '.buffer_size, .buffer_cap'
+
+# Check VFS service NATS logs
+docker logs cc-vfs-service | grep NATS
+```</content>
 </xai:function_call

@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -10,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/telnet2/mysql-vfs/pkg/events"
 	"github.com/telnet2/mysql-vfs/pkg/events/handlers"
 	"github.com/telnet2/mysql-vfs/pkg/persistence/db"
@@ -27,12 +29,14 @@ type LifecycleEventTrigger struct {
 	workerPool      chan struct{} // Semaphore for limiting concurrent handlers
 	wg              sync.WaitGroup
 	asyncTimeout    time.Duration
+	natsConn        *nats.Conn // Optional NATS connection for event publishing
 }
 
 // EventTriggerConfig configures the event trigger
 type EventTriggerConfig struct {
-	MaxConcurrentHandlers int // Maximum number of async handlers running concurrently
+	MaxConcurrentHandlers int           // Maximum number of async handlers running concurrently
 	AsyncHandlerTimeout   time.Duration
+	NATSConn              *nats.Conn    // Optional NATS connection for event publishing
 }
 
 // NewLifecycleEventTrigger creates a new lifecycle event trigger
@@ -51,22 +55,65 @@ func NewLifecycleEventTrigger(
 		asyncTimeout = 30 * time.Second
 	}
 
-	return &LifecycleEventTrigger{
+	trigger := &LifecycleEventTrigger{
 		eventsLoader:    eventsLoader,
 		handlerRegistry: handlerRegistry,
 		patternMatcher:  events.NewWildcardPatternMatcher(),
 		workerPool:      make(chan struct{}, maxConcurrent),
 		asyncTimeout:    asyncTimeout,
+		natsConn:        config.NATSConn,
 	}
+
+	// Log NATS status
+	if trigger.natsConn != nil {
+		log.Printf("LifecycleEventTrigger: NATS publishing enabled")
+	} else {
+		log.Printf("LifecycleEventTrigger: NATS publishing disabled (no connection)")
+	}
+
+	return trigger
+}
+
+// publishToNATS publishes an event to NATS if connection is available
+func (t *LifecycleEventTrigger) publishToNATS(eventType string, payload interface{}) {
+	if t.natsConn == nil {
+		return // NATS not configured, skip
+	}
+
+	// Marshal payload to JSON
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("failed to marshal event payload for NATS: %v", err)
+		return
+	}
+
+	// Publish to NATS subject: vfs.events.{eventType}
+	subject := fmt.Sprintf("vfs.events.%s", eventType)
+
+	// Publish asynchronously (fire-and-forget)
+	if err := t.natsConn.Publish(subject, payloadJSON); err != nil {
+		log.Printf("failed to publish event to NATS subject %s: %v", subject, err)
+		return
+	}
+
+	log.Printf("published event to NATS: %s", subject)
 }
 
 // Emit emits an event asynchronously (fire and forget)
 func (t *LifecycleEventTrigger) Emit(ctx context.Context, eventType string, payload interface{}) {
+	// Publish to NATS first (non-blocking)
+	t.publishToNATS(eventType, payload)
+
+	// Then handle local event handlers
 	t.EmitWithOperation(ctx, nil, eventType, payload)
 }
 
 // EmitSync emits an event synchronously and waits for handler responses
 func (t *LifecycleEventTrigger) EmitSync(ctx context.Context, eventType string, payload interface{}) error {
+	// Publish to NATS first (before handler execution)
+	t.publishToNATS(eventType, payload)
+
+	// Then execute synchronous handlers
 	return t.EmitSyncWithOperation(ctx, nil, eventType, payload)
 }
 

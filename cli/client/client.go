@@ -412,20 +412,29 @@ func (c *Client) GetFile(path string) ([]byte, string, int64, time.Time, error) 
 }
 
 // GetFileStream retrieves a file's content as a stream
-func (c *Client) GetFileStream(path string) (io.ReadCloser, string, error) {
+func (c *Client) GetFileStream(path string) (io.ReadCloser, string, int64, error) {
 	resp, err := c.request("GET", "/api/v1/files"+path, nil, "")
 	if err != nil {
-		return nil, "", err
+		return nil, "", 0, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, "", fmt.Errorf("failed to get file: %s (status: %d)", string(body), resp.StatusCode)
+		return nil, "", 0, fmt.Errorf("failed to get file: %s (status: %d)", string(body), resp.StatusCode)
 	}
 
 	contentType := resp.Header.Get("Content-Type")
-	return resp.Body, contentType, nil
+	versionStr := resp.Header.Get("X-File-Version")
+
+	var version int64 = 1 // Default to 1
+	if versionStr != "" {
+		if parsed, err := strconv.ParseInt(versionStr, 10, 64); err == nil {
+			version = parsed
+		}
+	}
+
+	return resp.Body, contentType, version, nil
 }
 
 // DeleteFile deletes a file
@@ -601,29 +610,38 @@ func (c *Client) GetFileMetadata(path string, version int64) (map[string]interfa
 }
 
 // GetFileVersion retrieves a specific version of a file
-func (c *Client) GetFileVersion(path string, version int64) ([]byte, string, error) {
+func (c *Client) GetFileVersion(path string, version int64) ([]byte, string, int64, error) {
 	params := url.Values{}
 	params.Set("version", fmt.Sprintf("%d", version))
 	queryString := "?" + params.Encode()
 
 	resp, err := c.request("GET", "/api/v1/files"+path+queryString, nil, "")
 	if err != nil {
-		return nil, "", err
+		return nil, "", 0, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, "", fmt.Errorf("failed to get file: %s (status: %d)", string(body), resp.StatusCode)
+		return nil, "", 0, fmt.Errorf("failed to get file: %s (status: %d)", string(body), resp.StatusCode)
 	}
 
 	contentType := resp.Header.Get("Content-Type")
-	content, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, "", fmt.Errorf("failed to read file content: %w", err)
+	versionStr := resp.Header.Get("X-File-Version")
+
+	var actualVersion int64 = version // Default to requested version
+	if versionStr != "" {
+		if parsed, err := strconv.ParseInt(versionStr, 10, 64); err == nil {
+			actualVersion = parsed
+		}
 	}
 
-	return content, contentType, nil
+	content, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", 0, fmt.Errorf("failed to read file content: %w", err)
+	}
+
+	return content, contentType, actualVersion, nil
 }
 
 // Note: User/group management is handled via .user files and super user tokens.

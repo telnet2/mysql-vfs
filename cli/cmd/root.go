@@ -193,6 +193,7 @@ func runInteractiveMode() {
 
 	state := &interactiveState{}
 	lastInterruptTime := new(int64)
+	exitChan := make(chan bool, 1)
 
 	executor := func(input string) {
 		input = strings.TrimSpace(input)
@@ -229,7 +230,11 @@ func runInteractiveMode() {
 		// Handle exit
 		if input == "exit" || input == "quit" {
 			fmt.Println("Goodbye!")
-			os.Exit(0)
+			select {
+			case exitChan <- true:
+			default:
+			}
+			return
 		}
 
 		// Add to history for history command reuse
@@ -297,7 +302,10 @@ func runInteractiveMode() {
 				if now-*lastInterruptTime < 2 {
 					// Second CTRL+C within 2 seconds - exit
 					fmt.Println("\nGoodbye!")
-					os.Exit(0)
+					select {
+					case exitChan <- true:
+					default:
+					}
 				} else {
 					// First CTRL+C - show message
 					fmt.Println("\n(Press CTRL+C again to exit)")
@@ -308,6 +316,9 @@ func runInteractiveMode() {
 	)
 
 	promptInstance.Run()
+
+	// Wait for exit signal
+	<-exitChan
 }
 
 func (s *interactiveState) prompt() string {

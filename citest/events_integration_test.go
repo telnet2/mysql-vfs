@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cloudwego/hertz/pkg/app"
+	"github.com/cloudwego/hertz/pkg/app/server"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/telnet2/mysql-vfs/citest/fixtures"
@@ -21,7 +23,33 @@ import (
 	"github.com/telnet2/mysql-vfs/pkg/events/handlers"
 	"github.com/telnet2/mysql-vfs/pkg/models"
 	"github.com/telnet2/mysql-vfs/pkg/persistence/db"
+	"github.com/telnet2/mysql-vfs/pkg/sse"
 )
+
+// ============================================================================
+// Mock Auth and Metrics for SSE Tests
+// ============================================================================
+
+type mockAuthMiddleware struct{}
+
+func (m *mockAuthMiddleware) ValidateToken(c *app.RequestContext) (interface{}, error) {
+	return map[string]interface{}{"user_id": "test"}, nil
+}
+
+func (m *mockAuthMiddleware) CheckPermission(claims interface{}, filter string) bool {
+	return true
+}
+
+type mockMetrics struct{}
+
+func (m *mockMetrics) RecordFailedAuth()                    {}
+func (m *mockMetrics) RecordConnectionOpened()              {}
+func (m *mockMetrics) RecordConnectionClosed()              {}
+func (m *mockMetrics) RecordEventPublished()                {}
+func (m *mockMetrics) RecordEventReceived(eventType string) {}
+func (m *mockMetrics) RecordEventDropped()                  {}
+func (m *mockMetrics) UpdateBufferSize(size int)            {}
+func (m *mockMetrics) SetNATSConnected(connected bool)      {}
 
 // ============================================================================
 // Stub Repositories for Event Trigger Tests
@@ -910,5 +938,43 @@ var _ = Describe("Event Trigger Async Behavior", func() {
 		}, 5*time.Second, 100*time.Millisecond).Should(BeTrue())
 
 		Expect(trigger.Shutdown(context.Background())).To(Succeed())
+	})
+})
+
+// ============================================================================
+// SSE Server Library Tests
+// ============================================================================
+
+var _ = Describe("SSE Server Library", func() {
+	It("should broadcast events to connected clients", func() {
+		// Create SSE server with mocks
+		auth := &mockAuthMiddleware{}
+		metrics := &mockMetrics{}
+		sseServer := sse.NewSSEServer(10, auth, metrics)
+
+		// Create test server
+		h := server.Default()
+		h.GET("/sse", sseServer.HandleSSE)
+
+		// Start server in background
+		go h.Spin()
+		defer h.Shutdown(context.Background())
+
+		// Wait for server to start
+		time.Sleep(100 * time.Millisecond)
+
+		// Create test event
+		eventData := map[string]interface{}{
+			"_event_type": "file.create.completion.succeeded",
+			"file_path":   "/test.txt",
+		}
+		eventJSON, err := json.Marshal(eventData)
+		Expect(err).NotTo(HaveOccurred())
+
+		// Broadcast event
+		sseServer.Broadcast(eventJSON)
+
+		// Check connection count (should be 0 since no clients connected)
+		Expect(sseServer.GetConnectionCount()).To(Equal(0))
 	})
 })
