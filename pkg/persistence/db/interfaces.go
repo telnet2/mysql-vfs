@@ -110,6 +110,11 @@ type EventRepository interface {
 	MarkProcessed(ctx context.Context, eventID string) error
 }
 
+// WorkflowAuditRepository defines interface for workflow audit persistence
+type WorkflowAuditRepository interface {
+	Create(ctx context.Context, audit *models.WorkflowAudit) error
+}
+
 // Transaction represents a database transaction
 type Transaction interface {
 	// Commit commits the transaction

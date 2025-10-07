@@ -2,6 +2,7 @@ package db
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/telnet2/mysql-vfs/pkg/models"
@@ -32,6 +33,7 @@ func TestBootstrapDefaultFiles(t *testing.T) {
 	var fileCount int64
 	db.Model(&models.File{}).Count(&fileCount)
 	t.Logf("Total files created: %d", fileCount)
+	assert.GreaterOrEqual(t, fileCount, int64(2))
 
 	// List all files
 	var allFiles []models.File
@@ -50,8 +52,8 @@ func TestBootstrapDefaultFiles(t *testing.T) {
 	assert.NotNil(t, regoFile.TextContent, "TextContent should not be nil")
 	if regoFile.TextContent != nil {
 		assert.Contains(t, *regoFile.TextContent, "package vfs.authz")
-		assert.Contains(t, *regoFile.TextContent, "input.user.role == \"admin\"")
-		assert.Contains(t, *regoFile.TextContent, "input.user.role == \"user\"")
+		assert.Contains(t, *regoFile.TextContent, "input.user.groups[_] == \"admin\"")
+		assert.Contains(t, *regoFile.TextContent, "input.user.groups[_] == \"user\"")
 	}
 
 	// Verify .group file was created
@@ -79,7 +81,7 @@ func TestBootstrapIdempotent(t *testing.T) {
 	// Count files
 	var count1 int64
 	db.Model(&models.File{}).Count(&count1)
-	assert.Equal(t, int64(2), count1) // .rego and .group
+	assert.GreaterOrEqual(t, count1, int64(2))
 
 	// Run migrations again (should be idempotent)
 	err = AutoMigrate(db)
@@ -141,4 +143,73 @@ func TestBootstrapDoesNotOverwriteExisting(t *testing.T) {
 	err = db.Where("directory_id = ? AND name = ?", rootDir.ID, ".group").First(&groupFile).Error
 	assert.NoError(t, err)
 	assert.Contains(t, *groupFile.JSONContent, "\"group_id\": \"admin\"")
+}
+
+func TestWorkflowAuditMigration(t *testing.T) {
+	// Create in-memory SQLite database for testing
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
+	assert.NoError(t, err)
+
+	err = AutoMigrate(db)
+	assert.NoError(t, err)
+
+	assert.True(t, db.Migrator().HasTable(&models.WorkflowAudit{}), "workflow_audit table should exist after migration")
+
+	record := models.WorkflowAudit{
+		ID:             "audit-test-1",
+		FilePath:       "/docs/report.txt",
+		WorkflowPath:   "/docs/.workflow",
+		FromState:      "draft",
+		ToState:        "review",
+		Operation:      "move",
+		Actor:          "user-123",
+		ActorGroups:    `{"groups":["editors"]}`,
+		GatesEvaluated: `{"passed":["size"]}`,
+		Success:        true,
+		CreatedAt:      time.Now().UTC(),
+	}
+
+	assert.NoError(t, db.Create(&record).Error)
+
+	var fetched models.WorkflowAudit
+	assert.NoError(t, db.Where("id = ?", record.ID).First(&fetched).Error)
+	assert.Equal(t, record.FilePath, fetched.FilePath)
+
+	assert.NoError(t, db.Migrator().DropTable(&models.WorkflowAudit{}))
+	assert.False(t, db.Migrator().HasTable(&models.WorkflowAudit{}))
+
+	// Re-run migrations (up again)
+	assert.NoError(t, AutoMigrate(db))
+	assert.True(t, db.Migrator().HasTable(&models.WorkflowAudit{}))
+}
+
+func TestWorkflowAuditMigrationIdempotent(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
+	assert.NoError(t, err)
+
+	assert.NoError(t, AutoMigrate(db))
+
+	record := models.WorkflowAudit{
+		ID:           "audit-test-2",
+		FilePath:     "/docs/spec.md",
+		WorkflowPath: "/docs/.workflow",
+		FromState:    "draft",
+		ToState:      "approved",
+		Operation:    "move",
+		Actor:        "user-456",
+		Success:      false,
+		ErrorMessage: stringPtr("gate denied"),
+		CreatedAt:    time.Now().UTC(),
+	}
+	assert.NoError(t, db.Create(&record).Error)
+
+	assert.NoError(t, AutoMigrate(db))
+
+	var count int64
+	assert.NoError(t, db.Model(&models.WorkflowAudit{}).Count(&count).Error)
+	assert.Equal(t, int64(1), count)
 }

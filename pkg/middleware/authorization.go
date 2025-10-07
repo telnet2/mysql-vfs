@@ -20,10 +20,19 @@ type UserContext struct {
 	Groups   []string // User's group memberships (e.g., ["admin"], ["user"], ["system-admin"])
 }
 
+// WorkflowContext represents workflow state information for a resource
+type WorkflowContext struct {
+	Active       bool     `json:"active"`        // Whether a workflow is active for this resource
+	CurrentState string   `json:"current_state"` // Current workflow state (e.g., "draft", "review")
+	TargetState  string   `json:"target_state"`  // Target state for move operations
+	ValidStates  []string `json:"valid_states"`  // All valid states in the workflow
+}
+
 // AuthorizationMiddleware checks access permissions using .rego policies
 type AuthorizationMiddleware struct {
 	policyLoader   *domain.PolicyLoader
 	ownerLoader    *domain.OwnerLoader
+	workflowLoader *domain.WorkflowLoader
 	dirRepo        db.DirectoryRepository
 	timeout        time.Duration
 	skipRoutes     map[string]bool // Routes that don't require authorization
@@ -34,6 +43,7 @@ type AuthorizationMiddleware struct {
 type AuthorizationConfig struct {
 	PolicyLoader   *domain.PolicyLoader
 	OwnerLoader    *domain.OwnerLoader
+	WorkflowLoader *domain.WorkflowLoader
 	DirRepo        db.DirectoryRepository
 	Timeout        time.Duration
 	SkipRoutes     []string
@@ -58,6 +68,7 @@ func NewAuthorizationMiddleware(config AuthorizationConfig) *AuthorizationMiddle
 	return &AuthorizationMiddleware{
 		policyLoader:   config.PolicyLoader,
 		ownerLoader:    config.OwnerLoader,
+		workflowLoader: config.WorkflowLoader,
 		dirRepo:        config.DirRepo,
 		timeout:        config.Timeout,
 		skipRoutes:     skipRoutes,
@@ -147,6 +158,9 @@ func (m *AuthorizationMiddleware) Handler() app.HandlerFunc {
 			}
 		}
 
+		// Extract workflow context for the resource
+		workflowCtx := m.extractWorkflowContext(authCtx, resourcePath, userCtx)
+
 		// Build input for OPA evaluation
 		input := map[string]interface{}{
 			"user": map[string]interface{}{
@@ -160,6 +174,16 @@ func (m *AuthorizationMiddleware) Handler() app.HandlerFunc {
 				"owners": ownerGroups,
 			},
 			"action": action,
+		}
+
+		// Add workflow context if active
+		if workflowCtx.Active {
+			input["workflow"] = map[string]interface{}{
+				"active":        workflowCtx.Active,
+				"current_state": workflowCtx.CurrentState,
+				"target_state":  workflowCtx.TargetState,
+				"valid_states":  workflowCtx.ValidStates,
+			}
 		}
 
 		// TODO: Implement actual REGO evaluation using OPA engine
@@ -357,4 +381,53 @@ func evaluateRegoPolicy(regoPolicy string, input map[string]interface{}) bool {
 
 	// Default deny if no clear allow decision
 	return false
+}
+
+// extractWorkflowContext extracts workflow information for a resource path
+func (m *AuthorizationMiddleware) extractWorkflowContext(ctx context.Context, resourcePath string, userCtx *UserContext) WorkflowContext {
+	// Default: no workflow
+	workflowCtx := WorkflowContext{
+		Active:       false,
+		CurrentState: "",
+		TargetState:  "",
+		ValidStates:  []string{},
+	}
+
+	// If no workflow loader configured, return inactive
+	if m.workflowLoader == nil {
+		return workflowCtx
+	}
+
+	// Try to load workflow for this resource path
+	workflowDef, err := m.workflowLoader.LoadForPath(ctx, resourcePath)
+	if err != nil {
+		// No workflow found or error loading - return inactive
+		return workflowCtx
+	}
+
+	if workflowDef == nil {
+		return workflowCtx
+	}
+
+	// Workflow is active
+	workflowCtx.Active = true
+
+	// Extract current state from the resource path
+	currentState, err := workflowDef.GetCurrentState(resourcePath)
+	if err == nil {
+		workflowCtx.CurrentState = currentState
+	}
+
+	// Get all valid states from the workflow
+	validStates := make([]string, 0, len(workflowDef.States))
+	for stateName := range workflowDef.States {
+		validStates = append(validStates, stateName)
+	}
+	workflowCtx.ValidStates = validStates
+
+	// Note: TargetState would be populated during move operations
+	// For authorization checks, it's typically extracted from the request
+	// This could be enhanced to parse from the destination path in move operations
+
+	return workflowCtx
 }

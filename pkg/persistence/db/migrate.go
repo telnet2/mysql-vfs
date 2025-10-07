@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/telnet2/mysql-vfs/pkg/defaults"
 	"github.com/telnet2/mysql-vfs/pkg/etc"
 	"github.com/telnet2/mysql-vfs/pkg/models"
 	"gorm.io/driver/mysql"
@@ -48,6 +49,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&models.CronExecution{},
 		&models.IdempotencyRecord{},
 		&models.AuditLog{},
+		&models.WorkflowAudit{},
 		&models.DeadLetterQueue{},
 	}
 
@@ -137,6 +139,33 @@ func addCustomConstraints(db *gorm.DB) error {
 	`).Error; err != nil {
 		// For MySQL, use a different approach since it doesn't support WHERE in unique indexes
 		// We'll rely on GORM's soft delete handling instead
+	}
+
+	if err := addWorkflowAuditIndexes(db); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func addWorkflowAuditIndexes(db *gorm.DB) error {
+	indexes := []struct {
+		Name  string
+		Field string
+	}{
+		{"idx_file_path", "file_path"},
+		{"idx_workflow_path", "workflow_path"},
+		{"idx_actor", "actor"},
+		{"idx_created_at", "created_at"},
+	}
+
+	for _, idx := range indexes {
+		query := fmt.Sprintf("CREATE INDEX %s ON workflow_audit(%s)", idx.Name, idx.Field)
+		if err := db.Exec(query).Error; err != nil {
+			if !isConstraintExistsError(err) {
+				return fmt.Errorf("failed to create workflow_audit index %s: %w", idx.Name, err)
+			}
+		}
 	}
 
 	return nil
@@ -249,55 +278,8 @@ func createDefaultRegoFile(db *gorm.DB, rootDirID string) error {
 		return fmt.Errorf("failed to query .rego file: %w", err)
 	}
 
-	// Default policy: admin group has full access, user group has read-only
-	// Includes support for on-behalf-of (impersonation) delegation
-	defaultPolicy := `package vfs.authz
-
-# Simple default policy for flexible authorization
-# Customize this policy to match your security requirements
-
-# ========== IMPERSONATION AUTHORIZATION ==========
-
-# Define who can impersonate (act on behalf of others)
-can_impersonate {
-    input.user.groups[_] == "service-accounts"
-}
-
-can_impersonate {
-    input.user.groups[_] == "system-admin"
-}
-
-# ========== OPERATION AUTHORIZATION ==========
-
-# Admin group: full access to all operations
-allow {
-    input.user.groups[_] == "admin"
-}
-
-# System admin group: full access to all operations
-allow {
-    input.user.groups[_] == "system-admin"
-}
-
-# Service accounts: full access (for automation)
-allow {
-    input.user.groups[_] == "service-accounts"
-}
-
-# User group: read-only access
-allow {
-    input.user.groups[_] == "user"
-    input.action == "read"
-}
-
-# For delegated operations: check if actor can impersonate
-# Note: Middleware enforces this, policy provides defense-in-depth
-allow {
-    input.principal
-    input.principal != input.user.user_id
-    can_impersonate
-}
-`
+	// Load default policy from embedded file
+	defaultPolicy := string(defaults.DefaultRego())
 
 	// Calculate checksum
 	checksum := fmt.Sprintf("%x", sha256.Sum256([]byte(defaultPolicy)))
@@ -337,19 +319,8 @@ func createDefaultGroupFile(db *gorm.DB, rootDirID string) error {
 		return fmt.Errorf("failed to query .group file: %w", err)
 	}
 
-	// Default groups: admin and user (empty members)
-	defaultGroups := `{
-	"groups": [
-		{
-			"group_id": "admin",
-			"members": []
-		},
-		{
-			"group_id": "user",
-			"members": []
-		}
-	]
-}`
+	// Load default groups from embedded file
+	defaultGroups := string(defaults.DefaultGroup())
 
 	// Calculate checksum
 	checksum := fmt.Sprintf("%x", sha256.Sum256([]byte(defaultGroups)))

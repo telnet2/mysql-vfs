@@ -1,0 +1,12 @@
+{
+	"groups": [
+		{
+			"group_id": "admin",
+			"members": []
+		},
+		{
+			"group_id": "user",
+			"members": []
+		}
+	]
+}

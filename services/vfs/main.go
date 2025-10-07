@@ -118,6 +118,10 @@ func main() {
 	eventsLoader := domain.NewEventsLoader(fileRepo, dirRepo, cfg.SchemaCacheTTL) // Reuse schema TTL for events
 	userLoader := domain.NewUserLoader(fileRepo, dirRepo, cfg.Auth.UserCacheTTL)
 	groupLoader := domain.NewGroupLoader(fileRepo, dirRepo, cfg.SchemaCacheTTL)
+	workflowLoader := domain.NewWorkflowLoader(fileRepo, dirRepo, cfg.SchemaCacheTTL)
+	workflowGateEvaluator := domain.NewWorkflowGateEvaluator(fileRepo, cfg.PolicyCacheTTL)
+	workflowAuditRepo := mysql.NewGormWorkflowAuditRepository(database)
+	workflowEngine := domain.NewWorkflowEngine(workflowLoader, workflowGateEvaluator, fileRepo, dirRepo, workflowAuditRepo)
 
 	// Initialize event handler registry
 	handlerRegistry := handlers.NewRegistry()
@@ -138,7 +142,12 @@ func main() {
 	// Initialize services
 	dirService := domain.NewDirectoryServiceWithLifecycle(database, eventTrigger)
 	fileService := domain.NewFileServiceWithLifecycle(database, storageService, filesLoader, eventTrigger)
+
+	// Register move_file handler after fileService is initialized
+	handlerRegistry.Register(handlers.NewMoveFileHandler(fileService, workflowLoader))
 	idempotencyService := idempotency.NewServiceWithTTL(database, cfg.IdempotencyTTL)
+	dirService.SetWorkflowEngine(workflowEngine)
+	fileService.SetWorkflowEngine(workflowEngine)
 
 	// Start idempotency cleanup worker
 	go idempotencyService.StartCleanupWorker(ctx, 1*time.Hour)
@@ -205,12 +214,19 @@ func main() {
 	v1.POST("/files/move", vfsServer.moveFile)
 	v1.GET("/files-version/*path", vfsServer.listVersions)
 
+	// Workflow routes
+	workflowHandler := vfshandlers.NewWorkflowHandler(workflowLoader, workflowEngine, fileService)
+	v1.GET("/workflows/*filepath/info", workflowHandler.GetWorkflowInfo)
+	v1.GET("/workflows/*filepath/transitions", workflowHandler.GetValidTransitions)
+	v1.POST("/workflows/*filepath/next", workflowHandler.TransitionToState)
+
 	log.Printf("VFS Service starting on port %s", cfg.ServerPort)
 	log.Printf("Authentication: %s", cfg.Auth.Provider)
 	log.Printf("Authorization: ENABLED (OPA policies via .rego files)")
 	log.Printf("Schema validation: ENABLED (.files special files)")
 	log.Printf("Lifecycle events: ENABLED (.events special files)")
-	log.Printf("Event handlers: webhook, log, metrics")
+	log.Printf("Workflow system: ENABLED (directory-as-state with Rego gates)")
+	log.Printf("Event handlers: webhook, log, metrics, move_file")
 	if natsConn != nil {
 		log.Printf("NATS event publishing: ENABLED (%s)", natsConn.ConnectedUrl())
 	} else {

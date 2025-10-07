@@ -16,12 +16,13 @@ import (
 type SpecialFileType string
 
 const (
-	SpecialFileTypeFiles  SpecialFileType = ".files" // File pattern rules with schemas
-	SpecialFileTypePolicy SpecialFileType = ".rego"
-	SpecialFileTypeEvents SpecialFileType = ".events"
-	SpecialFileTypeUser   SpecialFileType = ".user"
-	SpecialFileTypeGroup  SpecialFileType = ".group"
-	SpecialFileTypeOwner  SpecialFileType = ".owner" // Directory ownership
+	SpecialFileTypeFiles    SpecialFileType = ".files" // File pattern rules with schemas
+	SpecialFileTypePolicy   SpecialFileType = ".rego"
+	SpecialFileTypeEvents   SpecialFileType = ".events"
+	SpecialFileTypeUser     SpecialFileType = ".user"
+	SpecialFileTypeGroup    SpecialFileType = ".group"
+	SpecialFileTypeOwner    SpecialFileType = ".owner" // Directory ownership
+	SpecialFileTypeWorkflow SpecialFileType = ".workflow"
 )
 
 // SpecialFileDefinition defines metadata for a special file type
@@ -121,6 +122,14 @@ var SpecialFileRegistry = map[SpecialFileType]*SpecialFileDefinition{
 		AdminOnly:         false, // Users can set ownership on their own directories
 		ValidateFunc:      ValidateOwnerConfig,
 		InheritFromParent: true, // Ownership inherits to child directories
+	},
+	SpecialFileTypeWorkflow: {
+		Name:              SpecialFileTypeWorkflow,
+		Description:       "Workflow definition - state machine for files",
+		ContentType:       "application/x-yaml",
+		AdminOnly:         false,
+		ValidateFunc:      validateWorkflowConfig,
+		InheritFromParent: false,
 	},
 }
 

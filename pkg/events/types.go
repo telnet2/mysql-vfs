@@ -94,9 +94,10 @@ type MoveEventPayload struct {
 type HandlerType string
 
 const (
-	HandlerTypeWebhook HandlerType = "webhook"
-	HandlerTypeLog     HandlerType = "log"
-	HandlerTypeMetrics HandlerType = "metrics"
+	HandlerTypeWebhook  HandlerType = "webhook"
+	HandlerTypeLog      HandlerType = "log"
+	HandlerTypeMetrics  HandlerType = "metrics"
+	HandlerTypeMoveFile HandlerType = "move_file"
 )
 
 // PatternType represents the type of pattern matching
@@ -126,30 +127,30 @@ const (
 
 // RetryConfig represents retry configuration
 type RetryConfig struct {
-	MaxAttempts     int         `json:"max_attempts"`
-	InitialDelayMs  int         `json:"initial_delay_ms"`
-	MaxDelayMs      int         `json:"max_delay_ms,omitempty"`
-	Backoff         BackoffType `json:"backoff"` // "exponential" or "linear"
+	MaxAttempts    int         `json:"max_attempts"`
+	InitialDelayMs int         `json:"initial_delay_ms"`
+	MaxDelayMs     int         `json:"max_delay_ms,omitempty"`
+	Backoff        BackoffType `json:"backoff"` // "exponential" or "linear"
 }
 
 // CircuitBreakerConfig represents circuit breaker configuration
 type CircuitBreakerConfig struct {
-	Enabled            bool `json:"enabled"`
-	FailureThreshold   int  `json:"failure_threshold"`
-	RecoveryTimeoutMs  int  `json:"recovery_timeout_ms"`
+	Enabled           bool `json:"enabled"`
+	FailureThreshold  int  `json:"failure_threshold"`
+	RecoveryTimeoutMs int  `json:"recovery_timeout_ms"`
 }
 
 // WebhookConfig represents webhook handler configuration
 type WebhookConfig struct {
-	URL            string                  `json:"url"`
-	Method         string                  `json:"method,omitempty"` // Default: POST
-	Headers        map[string]string       `json:"headers,omitempty"`
-	Secret         string                  `json:"secret,omitempty"` // For HMAC signature
-	TimeoutMs      int                     `json:"timeout_ms,omitempty"`
-	Retry          *RetryConfig            `json:"retry,omitempty"`
-	CircuitBreaker *CircuitBreakerConfig   `json:"circuit_breaker,omitempty"`
-	OnTimeout      string                  `json:"on_timeout,omitempty"`      // "abort" or "allow" (default: allow)
-	OnError        string                  `json:"on_error,omitempty"`        // "abort" or "allow" (default: allow)
+	URL            string                `json:"url"`
+	Method         string                `json:"method,omitempty"` // Default: POST
+	Headers        map[string]string     `json:"headers,omitempty"`
+	Secret         string                `json:"secret,omitempty"` // For HMAC signature
+	TimeoutMs      int                   `json:"timeout_ms,omitempty"`
+	Retry          *RetryConfig          `json:"retry,omitempty"`
+	CircuitBreaker *CircuitBreakerConfig `json:"circuit_breaker,omitempty"`
+	OnTimeout      string                `json:"on_timeout,omitempty"` // "abort" or "allow" (default: allow)
+	OnError        string                `json:"on_error,omitempty"`   // "abort" or "allow" (default: allow)
 }
 
 // LogLevel represents log severity level
@@ -171,20 +172,35 @@ type LogConfig struct {
 // MetricsConfig represents metrics handler configuration
 type MetricsConfig struct {
 	MetricName string            `json:"metric_name"`
-	Tags       map[string]string `json:"tags,omitempty"`       // Template tags with {{variable}} placeholders
+	Tags       map[string]string `json:"tags,omitempty"`        // Template tags with {{variable}} placeholders
 	ValueField string            `json:"value_field,omitempty"` // Field to use as metric value (e.g., "resource.size_bytes")
+}
+
+// MoveFileConfig represents move_file action handler configuration
+type MoveFileConfig struct {
+	TargetState       string `json:"target_state"`                 // Target workflow state to move file to
+	PreserveStructure *bool  `json:"preserve_structure,omitempty"` // nil = true, preserve subdirectory structure
+	Condition         string `json:"condition,omitempty"`          // Optional Rego condition (e.g., "input.file.size < 1000000")
+}
+
+// ShouldPreserveStructure returns whether subdirectory structure should be preserved (default: true)
+func (c *MoveFileConfig) ShouldPreserveStructure() bool {
+	if c.PreserveStructure == nil {
+		return true
+	}
+	return *c.PreserveStructure
 }
 
 // EventHandler represents a single event handler configuration
 type EventHandler struct {
-	Name         string        `json:"name"`
-	Events       []EventType   `json:"events"` // Can include wildcards: "file.*.authorization.*"
-	Type         HandlerType   `json:"type"`
-	Enabled      *bool         `json:"enabled,omitempty"`       // nil = true, explicit true/false
-	Synchronous  *bool         `json:"synchronous,omitempty"`   // nil = false, if true handler blocks operation
-	VetoEnabled  *bool         `json:"veto_enabled,omitempty"`  // nil = false, if true handler can abort operation
-	Filter       *EventFilter  `json:"filter,omitempty"`
-	Config       interface{}   `json:"config"` // Will be WebhookConfig, LogConfig, or MetricsConfig
+	Name        string       `json:"name"`
+	Events      []EventType  `json:"events"` // Can include wildcards: "file.*.authorization.*"
+	Type        HandlerType  `json:"type"`
+	Enabled     *bool        `json:"enabled,omitempty"`      // nil = true, explicit true/false
+	Synchronous *bool        `json:"synchronous,omitempty"`  // nil = false, if true handler blocks operation
+	VetoEnabled *bool        `json:"veto_enabled,omitempty"` // nil = false, if true handler can abort operation
+	Filter      *EventFilter `json:"filter,omitempty"`
+	Config      interface{}  `json:"config"` // Will be WebhookConfig, LogConfig, or MetricsConfig
 }
 
 // IsEnabled returns whether the handler is enabled (default: true)

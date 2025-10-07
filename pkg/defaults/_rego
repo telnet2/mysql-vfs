@@ -1,0 +1,46 @@
+package vfs.authz
+
+# Simple default policy for flexible authorization
+# Customize this policy to match your security requirements
+
+# ========== IMPERSONATION AUTHORIZATION ==========
+
+# Define who can impersonate (act on behalf of others)
+can_impersonate {
+    input.user.groups[_] == "service-accounts"
+}
+
+can_impersonate {
+    input.user.groups[_] == "system-admin"
+}
+
+# ========== OPERATION AUTHORIZATION ==========
+
+# Admin group: full access to all operations
+allow {
+    input.user.groups[_] == "admin"
+}
+
+# System admin group: full access to all operations
+allow {
+    input.user.groups[_] == "system-admin"
+}
+
+# Service accounts: full access (for automation)
+allow {
+    input.user.groups[_] == "service-accounts"
+}
+
+# User group: read-only access
+allow {
+    input.user.groups[_] == "user"
+    input.action == "read"
+}
+
+# For delegated operations: check if actor can impersonate
+# Note: Middleware enforces this, policy provides defense-in-depth
+allow {
+    input.principal
+    input.principal != input.user.user_id
+    can_impersonate
+}

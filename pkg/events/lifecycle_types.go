@@ -12,18 +12,20 @@ type EventCategory string
 const (
 	CategoryFile      EventCategory = "file"
 	CategoryDirectory EventCategory = "directory"
+	CategoryWorkflow  EventCategory = "workflow"
 )
 
 // Operation represents the operation being performed
 type Operation string
 
 const (
-	OperationCreate Operation = "create"
-	OperationRead   Operation = "read"
-	OperationUpdate Operation = "update"
-	OperationDelete Operation = "delete"
-	OperationMove   Operation = "move"
-	OperationList   Operation = "list"
+	OperationCreate     Operation = "create"
+	OperationRead       Operation = "read"
+	OperationUpdate     Operation = "update"
+	OperationDelete     Operation = "delete"
+	OperationMove       Operation = "move"
+	OperationList       Operation = "list"
+	OperationTransition Operation = "transition"
 )
 
 // EventStage represents the lifecycle stage of an operation
@@ -61,14 +63,14 @@ const (
 type Action string
 
 const (
-	ActionStarted   Action = "started"
-	ActionChecking  Action = "checking"
-	ActionChecked   Action = "checked"
-	ActionAcquiring Action = "acquiring"
-	ActionAcquired  Action = "acquired"
-	ActionWriting   Action = "writing"
-	ActionWritten   Action = "written"
-	ActionCommitted Action = "committed"
+	ActionStarted    Action = "started"
+	ActionChecking   Action = "checking"
+	ActionChecked    Action = "checked"
+	ActionAcquiring  Action = "acquiring"
+	ActionAcquired   Action = "acquired"
+	ActionWriting    Action = "writing"
+	ActionWritten    Action = "written"
+	ActionCommitted  Action = "committed"
 	ActionRolledBack Action = "rolled_back"
 )
 
@@ -143,15 +145,15 @@ func ParseLifecycleEventType(eventType string) (*LifecycleEventType, error) {
 
 // OperationContext tracks the entire operation lifecycle
 type OperationContext struct {
-	OperationID   string        `json:"operation_id"`
-	Category      EventCategory `json:"category"`
-	Operation     Operation     `json:"operation"`
-	ResourcePath  string        `json:"resource_path"`
-	UserID        string        `json:"user_id"`
-	StartedAt     time.Time     `json:"started_at"`
-	CompletedAt   *time.Time    `json:"completed_at,omitempty"`
-	CurrentStage  EventStage    `json:"current_stage"`
-	Status        string        `json:"status"` // "in_progress", "succeeded", "failed", "aborted"
+	OperationID  string        `json:"operation_id"`
+	Category     EventCategory `json:"category"`
+	Operation    Operation     `json:"operation"`
+	ResourcePath string        `json:"resource_path"`
+	UserID       string        `json:"user_id"`
+	StartedAt    time.Time     `json:"started_at"`
+	CompletedAt  *time.Time    `json:"completed_at,omitempty"`
+	CurrentStage EventStage    `json:"current_stage"`
+	Status       string        `json:"status"` // "in_progress", "succeeded", "failed", "aborted"
 
 	// Stage tracking
 	AuthorizationStartedAt *time.Time `json:"authorization_started_at,omitempty"`
@@ -168,26 +170,26 @@ type OperationContext struct {
 
 // StageInfo represents information about a specific stage
 type StageInfo struct {
-	Stage       string    `json:"stage"`
-	Substage    string    `json:"substage,omitempty"`
-	Action      string    `json:"action,omitempty"`
-	DurationMs  int64     `json:"duration_ms,omitempty"`
-	StartedAt   time.Time `json:"started_at"`
+	Stage       string     `json:"stage"`
+	Substage    string     `json:"substage,omitempty"`
+	Action      string     `json:"action,omitempty"`
+	DurationMs  int64      `json:"duration_ms,omitempty"`
+	StartedAt   time.Time  `json:"started_at"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
 }
 
 // LifecycleEvent represents the enhanced event structure for lifecycle events
 type LifecycleEvent struct {
-	ID          string              `json:"id"`
-	Category    EventCategory       `json:"category"`
-	Operation   Operation           `json:"operation"`
-	Stage       EventStage          `json:"stage"`
-	Substage    Substage            `json:"substage,omitempty"`
-	Action      Action              `json:"action,omitempty"`
-	Outcome     Outcome             `json:"outcome,omitempty"`
-	Timestamp   time.Time           `json:"timestamp"`
-	OperationID string              `json:"operation_id"`
-	StageInfo   *StageInfo          `json:"stage_info,omitempty"`
+	ID          string        `json:"id"`
+	Category    EventCategory `json:"category"`
+	Operation   Operation     `json:"operation"`
+	Stage       EventStage    `json:"stage"`
+	Substage    Substage      `json:"substage,omitempty"`
+	Action      Action        `json:"action,omitempty"`
+	Outcome     Outcome       `json:"outcome,omitempty"`
+	Timestamp   time.Time     `json:"timestamp"`
+	OperationID string        `json:"operation_id"`
+	StageInfo   *StageInfo    `json:"stage_info,omitempty"`
 }
 
 // GetEventType returns the full event type string
@@ -205,10 +207,10 @@ func (e *LifecycleEvent) GetEventType() string {
 
 // AuthorizationEventPayload represents the payload for authorization events
 type AuthorizationEventPayload struct {
-	Event           LifecycleEvent `json:"event"`
-	Resource        interface{}    `json:"resource"` // FileResource or DirectoryResource
-	User            UserContext    `json:"user"`
-	Metadata        EventMetadata  `json:"metadata"`
+	Event    LifecycleEvent `json:"event"`
+	Resource interface{}    `json:"resource"` // FileResource or DirectoryResource
+	User     UserContext    `json:"user"`
+	Metadata EventMetadata  `json:"metadata"`
 
 	// Authorization-specific fields
 	PolicyName          string   `json:"policy_name,omitempty"`
@@ -221,10 +223,10 @@ type AuthorizationEventPayload struct {
 
 // ValidationEventPayload represents the payload for validation events
 type ValidationEventPayload struct {
-	Event      LifecycleEvent `json:"event"`
-	Resource   interface{}    `json:"resource"` // FileResource or DirectoryResource
-	User       UserContext    `json:"user"`
-	Metadata   EventMetadata  `json:"metadata"`
+	Event    LifecycleEvent `json:"event"`
+	Resource interface{}    `json:"resource"` // FileResource or DirectoryResource
+	User     UserContext    `json:"user"`
+	Metadata EventMetadata  `json:"metadata"`
 
 	// Validation-specific fields
 	ValidationType string      `json:"validation_type"` // "schema", "quota", "content", "size"
@@ -258,17 +260,17 @@ type QuotaLimit struct {
 
 // ExecutionEventPayload represents the payload for execution events
 type ExecutionEventPayload struct {
-	Event        LifecycleEvent `json:"event"`
-	Resource     FileResource   `json:"resource"`
-	User         UserContext    `json:"user"`
-	Metadata     EventMetadata  `json:"metadata"`
+	Event    LifecycleEvent `json:"event"`
+	Resource FileResource   `json:"resource"`
+	User     UserContext    `json:"user"`
+	Metadata EventMetadata  `json:"metadata"`
 
 	// Execution-specific fields
-	TransactionID string         `json:"transaction_id,omitempty"`
-	LockID        string         `json:"lock_id,omitempty"`
-	AffectedRows  int            `json:"affected_rows,omitempty"`
-	BytesWritten  int64          `json:"bytes_written,omitempty"`
-	StoragePath   string         `json:"storage_path,omitempty"`
+	TransactionID string `json:"transaction_id,omitempty"`
+	LockID        string `json:"lock_id,omitempty"`
+	AffectedRows  int    `json:"affected_rows,omitempty"`
+	BytesWritten  int64  `json:"bytes_written,omitempty"`
+	StoragePath   string `json:"storage_path,omitempty"`
 }
 
 // CompletionEventPayload represents the payload for completion events
@@ -285,4 +287,35 @@ type CompletionEventPayload struct {
 	ErrorMessage      string `json:"error_message,omitempty"`
 	FailedStage       string `json:"failed_stage,omitempty"`
 	RollbackPerformed bool   `json:"rollback_performed,omitempty"`
+}
+
+// Workflow event type constants
+const (
+	EventWorkflowTransitionStarted   = "workflow.transition.started"
+	EventWorkflowTransitionSucceeded = "workflow.transition.succeeded"
+	EventWorkflowTransitionFailed    = "workflow.transition.failed"
+	EventWorkflowDeletionBlocked     = "workflow.deletion.blocked"
+	EventWorkflowEscapeBlocked       = "workflow.escape.blocked"
+	EventWorkflowStateDirProtected   = "workflow.state_dir.protected"
+	EventWorkflowCreateBlocked       = "workflow.create.blocked"
+)
+
+// WorkflowEventPayload represents the payload for workflow events
+type WorkflowEventPayload struct {
+	FilePath       string                 `json:"file_path"`
+	WorkflowPath   string                 `json:"workflow_path"`
+	FromState      string                 `json:"from_state,omitempty"`
+	ToState        string                 `json:"to_state,omitempty"`
+	Operation      string                 `json:"operation"`
+	Actor          WorkflowActorContext   `json:"actor"`
+	GatesEvaluated []string               `json:"gates_evaluated,omitempty"`
+	ErrorMessage   string                 `json:"error_message,omitempty"`
+	Metadata       map[string]interface{} `json:"metadata,omitempty"`
+	Timestamp      time.Time              `json:"timestamp"`
+}
+
+// WorkflowActorContext represents the actor context for workflow events
+type WorkflowActorContext struct {
+	ID     string   `json:"id"`
+	Groups []string `json:"groups"`
 }

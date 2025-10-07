@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
 	"path"
@@ -28,8 +29,9 @@ const (
 
 // DirectoryService handles directory operations
 type DirectoryService struct {
-	db           *gorm.DB
-	eventTrigger EventTrigger // For lifecycle events
+	db             *gorm.DB
+	eventTrigger   EventTrigger // For lifecycle events
+	workflowEngine WorkflowValidator
 }
 
 // NewDirectoryService creates a new directory service
@@ -44,6 +46,11 @@ func NewDirectoryServiceWithLifecycle(db *gorm.DB, eventTrigger EventTrigger) *D
 		db:           db,
 		eventTrigger: eventTrigger,
 	}
+}
+
+// SetWorkflowEngine attaches a workflow engine to the directory service
+func (s *DirectoryService) SetWorkflowEngine(engine WorkflowValidator) {
+	s.workflowEngine = engine
 }
 
 // calculateBackoff calculates exponential backoff with jitter
@@ -419,6 +426,18 @@ func (s *DirectoryService) DeleteDirectory(ctx context.Context, dirPath string, 
 	user := s.getUserContext(ctx)
 	requestID := s.getRequestID(ctx)
 
+	// Workflow validation (if configured)
+	if s.workflowEngine != nil {
+		actor := WorkflowActor{
+			ID:     user.UserID,
+			Groups: user.Groups,
+		}
+		if err := s.workflowEngine.ValidateDirectoryOperation(ctx, dirPath, "delete", actor); err != nil {
+			s.emitWorkflowBlockedEvent(ctx, "workflow.state_dir.delete.blocked", dirPath, actor, err)
+			return fmt.Errorf("workflow validation failed: %w", err)
+		}
+	}
+
 	// Create operation context
 	opCtx := &events.OperationContext{
 		OperationID:  uuid.New().String(),
@@ -689,6 +708,26 @@ func (s *DirectoryService) getUserContext(ctx context.Context) events.UserContex
 		UserID: authCtx.UserID,
 		Groups: authCtx.Groups,
 	}
+}
+
+func (s *DirectoryService) emitWorkflowBlockedEvent(ctx context.Context, eventType, dirPath string, actor WorkflowActor, err error) {
+	if s.eventTrigger == nil {
+		return
+	}
+	payload := map[string]interface{}{
+		"path":   dirPath,
+		"actor":  actor.ID,
+		"groups": actor.Groups,
+		"error":  err.Error(),
+	}
+	var verr *WorkflowValidationError
+	if errors.As(err, &verr) {
+		payload["error_code"] = verr.Code
+		if verr.Details != nil {
+			payload["details"] = verr.Details
+		}
+	}
+	s.eventTrigger.Emit(ctx, eventType, payload)
 }
 
 // getAuthContext extracts AuthContext from request context

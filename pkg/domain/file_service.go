@@ -6,8 +6,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"path"
 	"strings"
 	"time"
 
@@ -26,11 +28,12 @@ const (
 
 // FileService handles file operations
 type FileService struct {
-	db           *gorm.DB
-	storage      storage.Storage
-	filesLoader  *FilesLoader
-	groupLoader  *GroupLoader // For .owner validation
-	eventTrigger EventTrigger // For lifecycle events
+	db             *gorm.DB
+	storage        storage.Storage
+	filesLoader    *FilesLoader
+	groupLoader    *GroupLoader // For .owner validation
+	eventTrigger   EventTrigger // For lifecycle events
+	workflowEngine WorkflowValidator
 }
 
 // NewFileService creates a new file service
@@ -68,6 +71,11 @@ func NewFileServiceWithGroupValidation(db *gorm.DB, storage storage.Storage, fil
 		filesLoader: filesLoader,
 		groupLoader: groupLoader,
 	}
+}
+
+// SetWorkflowEngine attaches a workflow engine to the file service
+func (s *FileService) SetWorkflowEngine(engine WorkflowValidator) {
+	s.workflowEngine = engine
 }
 
 // emitEvent creates an event in the same transaction
@@ -187,6 +195,20 @@ func (s *FileService) CreateFile(ctx context.Context, directoryPath, name, conte
 	user := s.getUserContext(ctx)
 	requestID := s.getRequestID(ctx)
 
+	normalizedName, normalizeErr := ValidateAndNormalizeName(name)
+	actor := WorkflowActor{ID: user.UserID, Groups: user.Groups}
+	workflowPath := path.Join(directoryPath, name)
+	if normalizeErr == nil {
+		workflowPath = path.Join(directoryPath, normalizedName)
+	}
+
+	if s.workflowEngine != nil && normalizeErr == nil {
+		if err := s.workflowEngine.ValidateCreateOperation(ctx, workflowPath, actor); err != nil {
+			s.emitWorkflowBlockedEvent(ctx, "workflow.create.blocked", workflowPath, actor, err)
+			return nil, fmt.Errorf("workflow validation failed: %w", err)
+		}
+	}
+
 	// Create operation context
 	opCtx := &events.OperationContext{
 		OperationID:  uuid.New().String(),
@@ -255,9 +277,8 @@ func (s *FileService) CreateFile(ctx context.Context, directoryPath, name, conte
 	}
 
 	// Validate and normalize name
-	var normalizedName string
-	normalizedName, err = ValidateAndNormalizeName(name)
-	if err != nil {
+	if normalizeErr != nil {
+		err = normalizeErr
 		if s.eventTrigger != nil {
 			valPayload := s.buildValidationPayload(opCtx, user, requestID, name, contentType, size, checksum, events.ActionChecked, events.OutcomeFailed)
 			valPayload.ValidationType = "name"
@@ -1046,6 +1067,22 @@ func (s *FileService) DeleteFile(ctx context.Context, filePath string) error {
 	// Get user context
 	user := s.getUserContext(ctx)
 	requestID := s.getRequestID(ctx)
+	actor := WorkflowActor{ID: user.UserID, Groups: user.Groups}
+	workflowPath := path.Join(dirPath, fileName)
+	if s.workflowEngine != nil {
+		var workflowMetadata map[string]interface{}
+		if metadataPtr, metaErr := s.getWorkflowMetadata(ctx, workflowPath); metaErr != nil {
+			if !errors.Is(metaErr, gorm.ErrRecordNotFound) {
+				return fmt.Errorf("failed to load workflow metadata: %w", metaErr)
+			}
+		} else {
+			workflowMetadata = workflowMetadataMap(metadataPtr)
+		}
+		if err := s.workflowEngine.ValidateDeleteOperation(ctx, workflowPath, actor, workflowMetadata); err != nil {
+			s.emitWorkflowBlockedEvent(ctx, "workflow.deletion.blocked", workflowPath, actor, err)
+			return fmt.Errorf("workflow validation failed: %w", err)
+		}
+	}
 
 	// Create operation context
 	opCtx := &events.OperationContext{
@@ -1209,6 +1246,23 @@ func (s *FileService) MoveFile(ctx context.Context, sourcePath, destPath string)
 		return nil, nameErr
 	}
 	dstName = normalizedDstName
+	actor := WorkflowActor{ID: user.UserID, Groups: user.Groups}
+	sourceWorkflowPath := path.Join(srcDir, srcName)
+	destWorkflowPath := path.Join(dstDir, normalizedDstName)
+	if s.workflowEngine != nil {
+		var workflowMetadata map[string]interface{}
+		if metadataPtr, metaErr := s.getWorkflowMetadata(ctx, sourceWorkflowPath); metaErr != nil {
+			if !errors.Is(metaErr, gorm.ErrRecordNotFound) {
+				return nil, metaErr
+			}
+		} else {
+			workflowMetadata = workflowMetadataMap(metadataPtr)
+		}
+		if err := s.workflowEngine.ValidateMoveOperation(ctx, sourceWorkflowPath, destWorkflowPath, actor, workflowMetadata); err != nil {
+			s.emitWorkflowBlockedEvent(ctx, "workflow.transition.failed", sourceWorkflowPath, actor, err)
+			return nil, fmt.Errorf("workflow validation failed: %w", err)
+		}
+	}
 
 	// Create operation context
 	opCtx := &events.OperationContext{
@@ -1406,6 +1460,18 @@ func (s *FileService) MoveFile(ctx context.Context, sourcePath, destPath string)
 		s.eventTrigger.Emit(ctx, "file.moved", completionPayload)
 	}
 
+	if s.workflowEngine != nil {
+		extra := map[string]interface{}{
+			"source_path":      sourceWorkflowPath,
+			"destination_path": destWorkflowPath,
+			"request_id":       requestID,
+		}
+		if file != nil {
+			extra["file_id"] = file.ID
+		}
+		s.emitWorkflowSuccessEvent(ctx, "workflow.transition.succeeded", destWorkflowPath, actor, extra)
+	}
+
 	return file, nil
 }
 
@@ -1457,6 +1523,73 @@ func (s *FileService) parsePath(filePath string) (string, string) {
 		return "/", filePath[1:]
 	}
 	return filePath[:lastSlash], filePath[lastSlash+1:]
+}
+
+func (s *FileService) getWorkflowMetadata(ctx context.Context, filePath string) (*string, error) {
+	dirPath, fileName := s.parsePath(filePath)
+	var file models.File
+	err := s.db.WithContext(ctx).
+		Select("files.metadata").
+		Joins("JOIN directories ON directories.id = files.directory_id").
+		Where("directories.path = ? AND files.name = ? AND files.deleted_at IS NULL", dirPath, fileName).
+		First(&file).Error
+	if err != nil {
+		return nil, err
+	}
+	return file.Metadata, nil
+}
+
+func workflowMetadataMap(metadata *string) map[string]interface{} {
+	if metadata == nil {
+		return nil
+	}
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(*metadata), &result); err != nil {
+		return nil
+	}
+	return result
+}
+
+func (s *FileService) emitWorkflowEvent(ctx context.Context, eventType string, payload map[string]interface{}) {
+	if s.eventTrigger == nil {
+		return
+	}
+	s.eventTrigger.Emit(ctx, eventType, payload)
+}
+
+func (s *FileService) emitWorkflowBlockedEvent(ctx context.Context, eventType, resourcePath string, actor WorkflowActor, err error) {
+	if s.eventTrigger == nil {
+		return
+	}
+	payload := map[string]interface{}{
+		"path":   resourcePath,
+		"actor":  actor.ID,
+		"groups": actor.Groups,
+		"error":  err.Error(),
+	}
+	var verr *WorkflowValidationError
+	if errors.As(err, &verr) {
+		payload["error_code"] = verr.Code
+		if verr.Details != nil {
+			payload["details"] = verr.Details
+		}
+	}
+	s.eventTrigger.Emit(ctx, eventType, payload)
+}
+
+func (s *FileService) emitWorkflowSuccessEvent(ctx context.Context, eventType, resourcePath string, actor WorkflowActor, extras map[string]interface{}) {
+	if s.eventTrigger == nil {
+		return
+	}
+	payload := map[string]interface{}{
+		"path":   resourcePath,
+		"actor":  actor.ID,
+		"groups": actor.Groups,
+	}
+	for k, v := range extras {
+		payload[k] = v
+	}
+	s.eventTrigger.Emit(ctx, eventType, payload)
 }
 
 // buildAuthPayloadForOp builds an authorization event payload for any operation

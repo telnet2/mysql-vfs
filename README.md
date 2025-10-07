@@ -13,6 +13,7 @@ A distributed virtual file system (VFS) backed by MySQL with strong consistency 
 ✅ Lifecycle event system with veto support
 ✅ Pattern-based file validation
 ✅ Resource protection system
+✅ **Workflow system with directory-as-state architecture**
 
 See [Implementation Status](docs/21_IMPLEMENTATION_STATUS.md) for detailed progress.
 
@@ -86,6 +87,7 @@ make down
 3. **Repository Pattern** - Data access abstraction
 4. **Event-Driven** - Lifecycle events for observability and veto
 5. **File-Based Auth** - Self-contained, no external user DB
+6. **Workflow-Driven State** - Directory-as-state with Rego gates
 
 ### Package Structure
 
@@ -378,6 +380,67 @@ Reliable webhook delivery with retries and circuit breaker.
 
 **Implementation**: `pkg/events/handlers/webhook.go`
 **Documentation**: [Webhooks](docs/17_WEBHOOKS.md)
+
+### 8. Workflow System
+
+**Directory-as-state architecture** where file location determines workflow state.
+
+**Workflow Configuration** (`.workflow`):
+```yaml
+state_directories:
+  draft: "draft"
+  review: "review"
+  published: "published"
+initial_state: draft
+states:
+  draft:
+    transitions:
+      - to: review
+        gates:
+          - policy: |
+              package vfs.workflow.gates
+              default allow = input.user.groups[_] == "editors"
+  review:
+    transitions:
+      - to: published
+      - to: draft
+  published:
+    transitions: []
+```
+
+**Features:**
+- **State as Directory**: File state is implicit in its directory location
+- **Rego-Based Gates**: Policy-driven transition validation
+- **System Admin Bypass**: `system-admin` group bypasses all workflow gates
+- **Audit Trail**: All transitions logged in `workflow_audit` table
+- **Event-Driven**: Supports `move_file` action handler for automatic transitions
+- **Authorization Integration**: Workflow context available in OPA policies
+- **REST API**: Query workflow info and trigger transitions via API
+
+**API Endpoints:**
+```bash
+# Get workflow information
+GET /api/v1/workflows/{filepath}/info
+
+# Get valid transitions
+GET /api/v1/workflows/{filepath}/transitions
+
+# Transition to new state
+POST /api/v1/workflows/{filepath}/next
+{
+  "target_state": "review",
+  "preserve_structure": true
+}
+```
+
+**Implementation**: 
+- Core: `pkg/domain/workflow_*.go`
+- API: `services/vfs/handlers/workflow.go`
+- Authorization: `pkg/middleware/authorization.go`
+
+**Documentation**: 
+- [Workflow API](docs/WORKFLOW_API.md)
+- [Workflow Authorization](docs/WORKFLOW_AUTHORIZATION.md)
 
 ## Development
 

@@ -4,68 +4,19 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/telnet2/mysql-vfs/pkg/defaults"
 	"github.com/telnet2/mysql-vfs/pkg/persistence/db"
 )
 
-// DefaultRegoPolicy is the default authorization policy
-const DefaultRegoPolicy = `package vfs.authz
-
-# Default policy: admin group has full access, user group has read-only access, owners have write access
-# This policy can be customized by editing the /.rego file
-
-# Admin group: full access to all actions
-allow {
-    input.user.groups[_] == "admin"
+// GetDefaultRego returns the embedded default .rego policy.
+func GetDefaultRego() ([]byte, error) {
+	return defaults.DefaultRego(), nil
 }
 
-# System admin group: full access to all actions
-allow {
-    input.user.groups[_] == "system-admin"
+// GetDefaultGroup returns the embedded default .group configuration.
+func GetDefaultGroup() ([]byte, error) {
+	return defaults.DefaultGroup(), nil
 }
-
-# User group: read-only access
-allow {
-    input.user.groups[_] == "user"
-    input.action == "read"
-}
-
-# Owners: Users in owner groups can write
-allow {
-    input.user.groups[_] == "user"
-    input.action == "write"
-    is_owner
-}
-
-# Owners: Users in owner groups can delete
-allow {
-    input.user.groups[_] == "user"
-    input.action == "delete"
-    is_owner
-}
-
-# Helper rule: Check if user is in any owner group
-is_owner {
-    # Get user's groups
-    user_group := input.user.groups[_]
-    # Check if any owner group matches
-    owner_group := input.resource.owners[_]
-    user_group == owner_group
-}
-`
-
-// DefaultGroupConfig is the default group configuration
-const DefaultGroupConfig = `{
-	"groups": [
-		{
-			"group_id": "admin",
-			"members": []
-		},
-		{
-			"group_id": "user",
-			"members": []
-		}
-	]
-}`
 
 // Bootstrapper handles initial setup of the VFS
 type Bootstrapper struct {
