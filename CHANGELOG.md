@@ -1,13 +1,33 @@
 # MUST READ
 The format of this doc follows:
 ```
-# YYYY-MM-DD
+# YYYY-MM-DD  // the latest change first
 - [added]  ... one line description ...
 - [removed] ... one line description ...
 - [fixed] ... one line description ...
 - [enhanced] ... one line description ...
 - [chore] ... one line description ...
 ```
+
+# 2025-10-07
+- [added] Complete workflow engine with directory-as-state file lifecycle management
+- [added] Workflow validation gates using Rego (OPA) policies for state transitions
+- [added] Automatic audit trail for all workflow transitions with database logging
+- [added] Event publishing service for real-time workflow notifications via NATS
+- [added] SSE (Server-Sent Events) endpoint for streaming workflow events to clients
+- [added] REST API endpoints for workflow management and transition queries
+- [added] Special file validation framework with JSON schema and Rego policy support
+- [added] Cross-validation system for validating file content against schemas
+- [added] Search command with JSONPath and JQ expression support for file content/metadata
+- [added] Event publisher microservice with authentication, metrics, and NATS integration
+- [enhanced] File service with workflow-aware operations and state transition validation
+- [enhanced] Directory service with workflow inheritance and cascading validations
+- [enhanced] CLI with new search capabilities and improved command structure
+- [enhanced] Event system with comprehensive lifecycle event handling
+- [fixed] SSE implementation using hertz-contrib/sse package for better reliability
+- [added] Comprehensive workflow documentation including API reference and examples
+- [added] Workflow integration tests covering end-to-end scenarios
+- [added] Event publisher integration tests with NATS and authentication
 
 # 2025-10-06
 - [added] metadata JSON field to directories, files, and file_versions tables for ownership and audit tracking
